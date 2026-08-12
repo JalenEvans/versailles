@@ -1,0 +1,124 @@
+# Contract: deterministic-generation
+# Owner: general-manager
+# Gate: contract_gate — no implementation starts without a registered contract
+# Validated by: scripts/validate-contracts.sh
+# Canonical source: ~/.opencode/skills/contract-builder/references/contract.template.yaml
+
+schema_version: 1
+context: deterministic-generation
+
+owns:
+  - "The framework-agnostic test-case IR and case planning (build-spec §9.1–§9.2): boundary values, equivalence partitions, precondition-violation, postcondition-satisfaction, per-component invariant tests, expected-rejection cases"
+  - "The rejection idiom application from config.json (default throws) on both the §9.1 violation surface and the §9.2 expected-rejection surface (ADR-0007)"
+  - "Traceability: per-test traceability comments and generated/coverage.json clause-to-test mapping (build-spec §9.3)"
+  - "The emitter plugin seam selected by config.testFramework, vitest first (ADR-0008, ADR-0009)"
+  - "Full-file idempotent regeneration of the tool-owned generated/ directory (build-spec §9.4)"
+
+purpose: |
+  deterministic-generation is the core value proposition of Versailles: a pure, deterministic
+  compiler from approved contracts to test files. Given the same validated context it produces a
+  byte-identical test suite every run — no randomness, no timestamps, no LLM (ADR-0002,
+  ADR-0010). It plans a framework-agnostic test-case IR covering boundary values, equivalence
+  partitions, precondition-violation cases, postcondition-satisfaction cases, per-component
+  invariant tests, and expected-rejection cases for the postcondition/invariant interaction bug
+  class. Rejection assertions on both the violation and expected-rejection surfaces use the
+  rejection idiom configured in config.json (default throws, ADR-0007). Every generated test
+  carries a traceability comment and generated/coverage.json maps clause IDs to test IDs so
+  zero-coverage clauses are detectable. Output is rendered by per-framework emitter plugins
+  (vitest first) into the fully tool-owned generated/ directory via idempotent, full-file
+  regeneration.
+
+invariants:
+  - "Generation runs only against a context where isValid is true; invalid contexts never produce test files."
+  - "The generator is a pure function of the context: same context in, byte-identical output out — no randomness, no timestamps, no LLM (ADR-0002)."
+  - "Every generated test carries a traceability comment; generated/coverage.json maps every contract clause ID to its generated test IDs, leaving zero-coverage clauses detectable."
+  - "The tool never invokes an LLM at generation time or anywhere in the tool (ADR-0010)."
+  - "No framework-specific rendering logic lives in the core — all rendering is behind the emitter plugin seam (ADR-0008)."
+
+operations:
+  plan_cases:
+    requires:
+      - "context is a loaded VersaillesContext with isValid true"
+      - "operation and component ASTs are parsed and validated"
+    ensures:
+      - "Boundary cases exist for every numeric precondition comparison at the boundary, boundary - 1, and boundary + 1"
+      - "Equivalence partitions exist for every in clause or enum-typed field: one case per partition member plus one case outside the set"
+      - "For each precondition clause there is a violation case whose input satisfies all other clauses but falsifies this one"
+      - "Postcondition-satisfaction cases assert every postcondition, resolving old(field) against captured pre-call state"
+      - "Invariant tests construct a valid pre-state, call with valid inputs, and assert every invariant post-call"
+      - "Expected-rejection cases exist for inputs satisfying postconditions but violating a component invariant (build-spec §9.2)"
+    examples:
+      - input: "plan_cases(context, component OrderService, operation placeOrder with precondition 'x >= 0')"
+        output: "cases at x = 0, x = -1, x = 1 plus a violation case for x < 0 asserting rejection"
+  emit_case:
+    requires:
+      - "test_case is a planned IR case (input values, expected outcome, assertion list, traceability comment)"
+      - "rejection_idiom is read from config.json, defaulting to throws"
+    ensures:
+      - "For violation and expected-rejection cases, the emitted assertions use the configured rejection idiom — never a hardcoded throws"
+      - "The output is rendered exclusively by the emitter plugin selected by config.testFramework (vitest first, *.test.ts)"
+    examples:
+      - input: "emit_case(preconditionViolationCase, rejection_idiom: 'throws')"
+        output: "a vitest test that calls the operation and asserts the rejection idiom"
+  generate:
+    requires:
+      - "context.isValid is true"
+    ensures:
+      - "The generated/ directory is rewritten full-file from contracts.json — tool-owned state, never an input"
+      - "Two runs on the same context produce byte-identical output"
+      - "generated/coverage.json maps every clause ID to its generated test IDs, leaving zero-coverage clauses detectable"
+      - "No test files are written when the context is invalid; the structured errors are surfaced instead"
+    examples:
+      - input: "generate(contextIsValidTrue)"
+        output: "generated/ populated with per-component/operation test files plus coverage.json"
+      - input: "generate(contextIsValidFalse)"
+        output: "rejected; no test files written; structured errors surfaced"
+
+must:
+  - "Plan boundary cases for every numeric comparison in preconditions: at the boundary, boundary - 1, and boundary + 1 (build-spec §9.1)."
+  - "Plan equivalence partitions for every in clause or enum-typed field: one case per partition member plus one case outside the set (build-spec §9.1)."
+  - "Plan precondition-violation cases: for each precondition clause individually, an input satisfying all other clauses but falsifying this one; assert rejection (build-spec §9.1)."
+  - "Plan postcondition-satisfaction cases: valid inputs asserted against every postcondition, with old(field) resolved against captured pre-call state (build-spec §9.1)."
+  - "Plan per-component invariant tests: valid pre-state satisfying all invariants, call with valid inputs, assert every invariant still holds post-call (build-spec §9.2)."
+  - "Plan expected-rejection cases for the postcondition/invariant interaction bug class: inputs satisfying the operation's postconditions but violating a component invariant, flagged so the operation should refuse to complete (build-spec §9.2)."
+  - "Apply the rejection idiom configured in config.json (default throws) to both the §9.1 precondition-violation surface and the §9.2 expected-rejection surface (ADR-0007)."
+  - "Emit a traceability comment on every generated test with the contract clause ID(s) it covers, marking the case kind (for example, a precondition-violation case) (build-spec §9.3)."
+  - "Maintain generated/coverage.json mapping clause IDs to generated test IDs so a clause with zero generated tests is detectable (build-spec §9.3)."
+  - "Render all output through the emitter plugin selected by config.testFramework — vitest first, producing *.test.ts (ADR-0008, ADR-0009)."
+  - "Regenerate the generated/ directory full-file and idempotently from contracts.json; never preserve hand-edited content (build-spec §9.4)."
+  - "Block generation and write no test files when context.isValid is false, surfacing the structured errors (build-spec §9)."
+
+must_not:
+  - "Must not run generation against a context where isValid is false — invalid contracts block generation (build-spec §9)."
+  - "Must not invoke an LLM at generation time or anywhere in the tool — no LLM client, no prompting logic, no retry loop (ADR-0010, ADR-0002)."
+  - "Must not hardcode 'throws' in rejection assertions — rejection assertions must read the configured idiom from config.json and apply it to both the §9.1 violation and §9.2 expected-rejection surfaces (ADR-0007)."
+  - "Must not place framework-specific rendering logic in the core — all rendering lives behind the emitter plugin seam (ADR-0008)."
+  - "Must not treat hand-edited generated/ content as source or preserve it — the directory is fully tool-owned and full-file regenerated (build-spec §9.4)."
+  - "Must not emit a coverage manifest that hides gaps — every clause maps to its generated test IDs, and zero-coverage clauses remain detectable (build-spec §9.3)."
+  - "Must not be nondeterministic — same context in, byte-identical suite out; no randomness, no timestamps, no LLM (ADR-0002)."
+
+can:
+  - "May support additional config-validated rejection idiom values (for example error-return or Result-style) beyond the default throws, as long as emitters consume the configured value."
+  - "May add non-required heuristic cases beyond the mandated case classes when they aid coverage, provided determinism holds."
+  - "May record case-planning metadata (test names, covered clause IDs) in coverage.json beyond the minimal mapping."
+
+limits:
+  - "No SMT-backed precise input synthesis or witness generation (v2 stretch, build-spec §9.5)."
+  - "No running or executing of generated tests — generation writes files only."
+  - "No xUnit or pytest emitters within the first milestone — the seam exists for all three; vitest is sequenced first (ADR-0009)."
+  - "No semantic validation of contracts (contract-language) and no manifest derivation (manifest-extraction) — both are consumed via the context only."
+  - "No hand-editing of generated/ as a supported workflow (build-spec §9.4) and no LLM involvement of any kind inside the tool (ADR-0010)."
+
+asserts:
+  - "assert: two generate runs on the same context produce byte-identical output under generated/."
+  - "assert: generate against a context with isValid false writes zero test files and surfaces structured errors."
+  - "assert: every clause ID present in contracts.json is mapped in coverage.json to at least one test ID or is explicitly listed as zero-coverage."
+  - "assert: rejection assertions in generated tests use the configured rejection idiom from config.json (default throws), for both violation and expected-rejection cases."
+  - "assert: every generated test file contains a traceability comment referencing at least one contract clause ID."
+
+---
+## Changelog
+
+| Date | Author | Change |
+|------|--------|--------|
+| 2026-08-11 | general-manager | Initial contract from docs/specs/deterministic-generation.md; build-spec §9; ADR-0002/0007/0008/0009/0010 |

@@ -1,0 +1,124 @@
+# Contract: contract-language
+# Owner: general-manager
+# Gate: contract_gate — no implementation starts without a registered contract
+# Validated by: scripts/validate-contracts.sh
+# Canonical source: ~/.opencode/skills/contract-builder/references/contract.template.yaml
+
+schema_version: 1
+context: contract-language
+
+owns:
+  - "The boolean-valued expression grammar (build-spec §4.1) and its structural constraints (build-spec §4.2)"
+  - "The parser: clause expr strings → the frozen AST node set (build-spec §4.3)"
+  - "The semantic validator checks (build-spec §5.1): field resolution, type compatibility, in-operand shape, predicate existence/arity/arg-types, verifiedPure gate"
+  - "The structured error contract: parse errors (build-spec §4.4) and validation results (build-spec §5.2)"
+  - "Predicate registry integration: predicate calls resolve only to predicates.json entries with verifiedPure: true (ADR-0006)"
+
+purpose: |
+  contract-language is the validation kernel of Versailles. It owns the boolean-valued expression
+  grammar that turns clause expr strings into the frozen AST node set (or | and | not | compare |
+  arithmetic | old | predicateCall | fieldRef | literal), enforcing structural constraints at parse
+  time — old(field) is valid only inside postconditions[] entries and the grammar never produces
+  assignments, loops, or statements. The semantic validator then checks every parsed expression
+  against the full workspace context: field and nested field resolution, type compatibility,
+  in-operand shape, and predicate calls resolving only to registered predicates with
+  verifiedPure: true. Both parser and validator return typed, structured error objects — never
+  unstructured throws — so external agents, the review UI, and CI can consume and re-inject them
+  programmatically. The context is language-agnostic (ADR-0008) and never invokes an LLM
+  (ADR-0010).
+
+invariants:
+  - "Only expressions that have passed parse and semantic validation are consumed downstream; nothing downstream sees an unparsed or invalid expression."
+  - "The AST node set is exactly the frozen build-spec §4.3 set (or | and | not | compare | arithmetic | old | predicateCall | fieldRef | literal); it never drifts without a build-spec change."
+  - "old(...) appears only inside postconditions[] entries — enforced as a parse error and re-asserted by the validator as defense-in-depth."
+  - "Every predicate call in a validated contract resolves to a predicates.json entry with verifiedPure === true (ADR-0006)."
+  - "Parser and validator never raise unstructured exceptions on malformed input; all failure surfaces are structured error objects."
+
+operations:
+  parse:
+    requires:
+      - "exprString is a clause expr string of the contracts.json shape"
+      - "clauseKind is one of: preconditions[] | postconditions[] | invariants[]"
+    ensures:
+      - "A well-formed boolean expression returns an AST built only from build-spec §4.3 node types"
+      - "old(...) parsed while clauseKind is preconditions[] or invariants[] returns a structured parse error of the build-spec §4.4 shape and is rejected before semantic validation"
+      - "Any out-of-grammar token (assignment, loop, statement) returns a structured parse error listing expected alternatives; no non-boolean-valued expression is ever produced"
+      - "The call never throws an unstructured exception"
+    examples:
+      - input: "parse('balance >= 0', 'preconditions[0]')"
+        output: "AST compare node (op '>=', left fieldRef balance, right literal 0), no parse errors"
+      - input: "parse('old(balance) > 0', 'preconditions[0]')"
+        output: "structured parse error { contractId, field: 'preconditions[0]', position, found, expected, message }"
+  semantic_validate:
+    requires:
+      - "ast is the parse result of a clause with no parse errors"
+      - "context is a fully-loaded workspace context (contracts + manifests + predicates)"
+    ensures:
+      - "Returns a validator result of the build-spec §5.2 shape { valid, errors: [{ contractId, code, field, detail }], warnings: [] }"
+      - "Root and transitive nested field refs resolve against manifest fields and operation params, else a hard error"
+      - "A predicate call resolving to a predicates.json entry with verifiedPure missing or false is a hard error (ADR-0006)"
+      - "Inferred/low-confidence field refs emit a non-blocking warning in warnings[] and never flip valid to false (ADR-0004)"
+      - "valid === true iff there are no hard errors"
+    examples:
+      - input: "semantic_validate(astOrderService, contextWithManifestsAndPredicates)"
+        output: "{ valid: true, errors: [], warnings: [{ code: 'LOW_CONFIDENCE_FIELD', field: 'OrderService.items', detail: '...' }] }"
+  resolve_predicate:
+    requires:
+      - "predicateName is an identifier appearing in a parsed predicateCall node"
+      - "registry is the predicates.json map loaded as part of the workspace context"
+    ensures:
+      - "Returns the registered predicate entry when registry[predicateName].verifiedPure === true"
+      - "Returns a hard validation error when the entry is missing, or verifiedPure is false, or verifiedPure is absent"
+    examples:
+      - input: "resolve_predicate('isAvailable', { isAvailable: { verifiedPure: true, params: [], paramTypes: [], returnType: 'boolean' } })"
+        output: "the isAvailable entry"
+      - input: "resolve_predicate('isAvailable', { isAvailable: { verifiedPure: false } })"
+        output: "hard error — the contract cannot reference an unverified predicate"
+
+must:
+  - "Parse any grammar-conforming clause expr string into an AST built only from the build-spec §4.3 node set: or | and | not | compare | arithmetic | old | predicateCall | fieldRef | literal."
+  - "Enforce structural constraints at parse time: old(field) is accepted only when parsing a postconditions[] entry, and is rejected as a structured parse error when parsing preconditions[] or invariants[] entries."
+  - "Reject any assignment, loop, statement, or token outside the grammar as a structured parse error that lists the expected alternatives (for example, a single '=' token is reported with expected alternatives such as '==')."
+  - "Return every parse failure as a structured error of the build-spec §4.4 shape { contractId, field, position, found, expected, message }."
+  - "After a successful parse, run the semantic validations of build-spec §5.1 against the full workspace context: root and transitive nested field resolution, type compatibility, in-operand shape, predicate existence, predicate arity, predicate argument types, and predicate purity."
+  - "Return validation results of the build-spec §5.2 shape { valid, errors: [{ contractId, code, field, detail }], warnings: [] }."
+  - "Hard-error every predicate call that resolves to a predicates.json entry whose verifiedPure is missing or false; such a contract cannot pass validation (ADR-0006)."
+  - "Emit low-confidence or inferred-field notices as non-blocking warnings in warnings[], leaving valid true when no hard error exists (ADR-0004)."
+  - "Block contracts with hard errors from proceeding to human review in the authoring flow and from passing CI in the lint flow (build-spec §5.2)."
+
+must_not:
+  - "Must not produce assignments, loops, statements, or any side-effecting construct — the grammar is boolean-valued expressions only (build-spec §4.2)."
+  - "Must not accept old(...) in preconditions[] or invariants[] — the rejection is a parse-time error, never deferred to semantic validation (build-spec §4.2)."
+  - "Must not resolve predicate calls at parse time — only the call-shape is checked; resolution happens in semantic validation (build-spec §4.2)."
+  - "Must not allow a contract to reference a predicate unless predicates.json[name].verifiedPure === true (ADR-0006)."
+  - "Must not throw unstructured exceptions on malformed input — parser and validator always return structured error results (build-spec §4.4, §5.2)."
+  - "Must not fork per target language — the grammar, parser, and validator stay language-agnostic (ADR-0008)."
+  - "Must not invoke an LLM anywhere in this context — no LLM client, no prompting logic, no retry loop (ADR-0010)."
+  - "Must not add AST node types beyond the frozen build-spec §4.3 set without a build-spec change."
+
+can:
+  - "May include human-friendly 'did you mean' suggestions inside parse error messages (build-spec §4.4 example)."
+  - "May emit additional non-blocking warning codes for low-confidence or inferred fields (build-spec §5.1 extension point)."
+  - "May surface parsed-contract metadata (clause IDs, affected fields) alongside structured results for downstream tooling."
+
+limits:
+  - "No SMT-LIB translation of the AST or witness synthesis (v2 stretch, build-spec §9.5)."
+  - "No test emission, test execution, or any other consumer of validated ASTs — this context only produces parse and validation results."
+  - "No loading of the .versailles/ file set — workspace-context owns joint loading; this context consumes the full context."
+  - "No source-side manifest derivation — manifest-extraction owns that."
+  - "No automated purity or termination analysis — verifiedPure is a manual registration-time gate (ADR-0006)."
+  - "No per-language grammar variants (ADR-0008) and no LLM-assisted authoring inside the tool (ADR-0010)."
+
+asserts:
+  - "assert: every node in a parse result has a type that is a member of the build-spec §4.3 node set."
+  - "assert: parsing a preconditions[] or invariants[] clause containing old(...) yields a structured parse error before semantic validation."
+  - "assert: semantic_validate returns valid: false whenever any predicate call resolves to an entry with verifiedPure missing or false."
+  - "assert: feeding malformed input (assignment, loop, statement, stray token) to the parser never throws a raw exception; it always produces a structured error result."
+  - "assert: valid is false if and only if errors is non-empty."
+
+---
+## Changelog
+
+| Date | Author | Change |
+|------|--------|--------|
+| 2026-08-11 | general-manager | Initial contract from docs/specs/contract-language.md; build-spec §4–§5; ADR-0004/0006/0008/0010 |

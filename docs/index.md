@@ -20,7 +20,7 @@ versailles
 │   │                    workspace-context, deterministic-generation, review)
 │   ├── architecture/ ← context map + pluggable-edge seams (ADR-0008/0009)
 │   ├── features/     ← user-visible capabilities (CLI surface)
-│   ├── contracts/    ← DbC contracts (empty registry — contract authoring is a later step)
+│   ├── contracts/    ← DbC contracts (one machine-checkable contract per bounded context)
 │   ├── specs/        ← behavioral specs, one per bounded context
 │   ├── decisions/    ← architecture decision records (ADRs)
 │   └── glossary.md   ← ubiquitous language (single vocabulary for all docs)
@@ -34,11 +34,11 @@ Planned module boundaries per the build spec (§13 milestones). Contracts/specs 
 
 | Module | Path (planned) | Owns | Spec | Contract |
 |--------|----------------|------|------|----------|
-| Contract language (grammar + parser + validator) | `src/parser`, `src/validator` | expression grammar, AST, semantic checks, structured error contract | [docs/specs/versailles.md](specs/versailles.md) | pending |
-| Loader / context | `src/loader` | unified versioned context, version gates, scoped extraction helper | [docs/specs/versailles.md](specs/versailles.md) | pending |
-| Manifest extractor | `src/extractor` | source → `manifests.json`, structural `sourceHash` | [docs/specs/versailles.md](specs/versailles.md) | pending |
-| Deterministic generator | `src/generator` | test-case IR → test files, `generated/coverage.json` | [docs/specs/versailles.md](specs/versailles.md) | pending |
-| CLI | `src/cli` | command surface (`init`, `extract-manifests`, `validate`, `check`, `generate`, `review`), machine-readable structured output + exit codes for external agents | [docs/specs/versailles.md](specs/versailles.md) | pending |
+| Contract language (grammar + parser + validator) | `src/parser`, `src/validator` | expression grammar, AST, semantic checks, structured error contract | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/contract-language.contract.yaml) |
+| Loader / context | `src/loader` | unified versioned context, version gates, scoped extraction helper | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/workspace-context.contract.yaml) |
+| Manifest extractor | `src/extractor` | source → `manifests.json`, structural `sourceHash` | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/manifest-extraction.contract.yaml) |
+| Deterministic generator | `src/generator` | test-case IR → test files, `generated/coverage.json` | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/deterministic-generation.contract.yaml) |
+| CLI | `src/cli` | command surface (`init`, `extract-manifests`, `validate`, `check`, `generate`, `review`), machine-readable structured output + exit codes for external agents | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/index.md) |
 
 Each module maps to a [bounded context](domains/index.md); the shared vocabulary is the [ubiquitous language](glossary.md).
 

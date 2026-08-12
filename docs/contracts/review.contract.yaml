@@ -1,0 +1,109 @@
+# Contract: review
+# Owner: general-manager
+# Gate: contract_gate — no implementation starts without a registered contract
+# Validated by: scripts/validate-contracts.sh
+# Canonical source: ~/.opencode/skills/contract-builder/references/contract.template.yaml
+
+schema_version: 1
+context: review
+
+owns:
+  - "The scoped review view: one component/operation sub-object via workspace-context's scoped extraction, never the whole file (build-spec §11)"
+  - "The parser-sanity presentation: raw expr strings alongside pretty-printed AST and non-blocking validator warnings (build-spec §11)"
+  - "Approval: single-object read-modify-write merge into contracts.json as a distinct reviewable commit (build-spec §11, ADR-0003)"
+  - "Rejection: write nothing to contracts.json; no merge commit (glossary: contractDeclined)"
+  - "The git audit trail: contracts.json schema carries no approval metadata; git history and git state distinguish staged vs. merged (ADR-0003)"
+  - "Consumption of external-agent-authored staged contract objects, with no in-tool LLM (ADR-0010)"
+
+purpose: |
+  review is the human-in-the-loop approval gate between staged contract objects and approved
+  contracts. A reviewer sees a scoped diff of one component/operation sub-object — produced by
+  workspace-context's scoped extraction, never the whole file — with raw expr strings alongside
+  their pretty-printed AST as a parser-sanity check and any non-blocking validator warnings. On
+  approval, the single contract object is merged into contracts.json via read-modify-write of
+  just that key, recorded as a distinct reviewable commit; on rejection, nothing is written and
+  no merge commit is created. The schema contains no approval metadata — git history is the
+  audit trail, and the merge commit is the approval (ADR-0003). Staged objects arrive from the
+  external-agent flow; the tool itself never invokes an LLM (ADR-0010).
+
+invariants:
+  - "The review view always shows a scoped component/operation sub-object — never the whole contracts.json file (build-spec §11)."
+  - "Every approval merges exactly one contract object via read-modify-write of that key — never a full-file rewrite (ADR-0003)."
+  - "Rejection always writes nothing to contracts.json and creates no merge commit; the staged object never enters the audit trail (glossary: contractDeclined)."
+  - "The contracts.json schema contains no approval metadata fields (approvedBy, approvedAt, or equivalents); git history is the audit trail (ADR-0003)."
+  - "The tool never invokes an LLM anywhere in the review flow (ADR-0010)."
+
+operations:
+  show_review_view:
+    requires:
+      - "a staged contract object exists for the requested component/operation"
+      - "workspace-context scoped extraction is available"
+    ensures:
+      - "The reviewer sees only the scoped component/operation sub-object plus its errors and warnings — never the whole file"
+      - "Each raw expr string is shown alongside its pretty-printed AST and any validator warnings"
+    examples:
+      - input: "show_review_view(staged OrderService.placeOrder)"
+        output: "the OrderService.placeOrder sub-object with raw expr + AST pairs and warnings"
+  approve:
+    requires:
+      - "the staged contract object has passed validation (no hard errors)"
+      - "the reviewer has approved the scoped view"
+    ensures:
+      - "contracts.json is updated by read-modify-write of exactly that key — a single-object merge"
+      - "The merge is recorded as a distinct, reviewable commit; no approval metadata is written (ADR-0003)"
+    examples:
+      - input: "approve(stagedOrderServicePlaceOrder, contractsJson)"
+        output: "contracts.json containing the merged OrderService.placeOrder object; git history records one per-object merge commit"
+  reject:
+    requires:
+      - "a staged contract object exists for the requested component/operation"
+      - "the reviewer has declined the scoped view"
+    ensures:
+      - "Nothing is written to contracts.json and no merge commit is created"
+      - "The staged object never enters the audit trail (glossary: contractDeclined)"
+    examples:
+      - input: "reject(stagedOrderServicePlaceOrder, contractsJson)"
+        output: "contracts.json unchanged; no new commit; the object remains declined/unmerged"
+
+must:
+  - "Show only the scoped component/operation sub-object in the review view, obtained through workspace-context's scoped extraction — never the whole contracts.json file (build-spec §11)."
+  - "Present each raw expr string alongside its pretty-printed parsed AST and any non-blocking validator warnings, so the reviewer can sanity-check what the parser understood (build-spec §11)."
+  - "On approval, merge the single contract object into contracts.json via read-modify-write of just that key — a single-object merge recorded as a distinct, reviewable commit (build-spec §11, ADR-0003)."
+  - "On rejection, write nothing to contracts.json and create no merge commit; the staged object never enters the audit trail (glossary: contractDeclined)."
+  - "Distinguish staged vs. merged state via git state (commit history / git blame), not in-band metadata (ADR-0003)."
+  - "Consume external-agent-authored staged contract objects as-is on approval, without re-authoring them in the tool (ADR-0010)."
+
+must_not:
+  - "Must not show the whole contracts.json file in review — the view is always the scoped component/operation sub-object (build-spec §11)."
+  - "Must not rewrite the whole file on approval — read-modify-write of one key only (build-spec §11, ADR-0003)."
+  - "Must not write anything to contracts.json on rejection (glossary: contractDeclined)."
+  - "Must not add approval metadata (approvedBy, approvedAt, or equivalents) to the schema — git history is the audit trail (ADR-0003)."
+  - "Must not invoke an LLM anywhere in the review flow — staged objects come from an external agent, and the tool never prompts, calls, or retries an LLM (ADR-0010)."
+  - "Each approval must not touch more than one object — review merges are single-object commits for a clean audit trail (ADR-0003)."
+
+can:
+  - "May present the review view as a CLI diff view or a simple web UI — the form factor is open (build-spec §11)."
+  - "May surface non-blocking validator warnings to the reviewer for awareness."
+  - "May offer navigation between staged component/operation scopes, provided each view remains scoped."
+
+limits:
+  - "No decision on the review UI form factor (CLI diff vs. web UI) — left open by build-spec §11."
+  - "No in-tool contract authoring, prompting, or LLM retry loop (ADR-0010); staged objects come from the external-agent flow."
+  - "No validation internals — hard-error gating lives in contract-language."
+  - "No batch or multi-object approval — each approval is a single-object merge."
+  - "No retention or cleanup policy for declined staged contracts — an open question to be decided with the review UI."
+  - "No approval metadata of any kind in the schema (ADR-0003)."
+
+asserts:
+  - "assert: an approve operation changes exactly one key of contracts.json — the diff on the merge commit touches only that object."
+  - "assert: after a reject operation, contracts.json content is byte-identical to its prior state."
+  - "assert: a schema lint of contracts.json finds no approvedBy, approvedAt, or equivalent approval metadata fields."
+  - "assert: the review view object never contains the full contracts.json contents."
+  - "assert: no code path in the review flow invokes an LLM (no LLM call sites in the tool)."
+
+---
+## Changelog
+
+| Date | Author | Change |
+|------|--------|--------|
+| 2026-08-11 | general-manager | Initial contract from docs/specs/review.md; build-spec §11; ADR-0003/0010 |

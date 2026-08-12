@@ -1,0 +1,115 @@
+# Contract: manifest-extraction
+# Owner: general-manager
+# Gate: contract_gate — no implementation starts without a registered contract
+# Validated by: scripts/validate-contracts.sh
+# Canonical source: ~/.opencode/skills/contract-builder/references/contract.template.yaml
+
+schema_version: 1
+context: manifest-extraction
+
+owns:
+  - "The per-language extractor plugin seam selected by config.language, with no language-specific code in the core (ADR-0008)"
+  - "The TypeScript extractor built on the TypeScript compiler API (ts.createProgram + type checker) — the first target (ADR-0005, ADR-0009)"
+  - "typeRef grammar application (build-spec §3.3): string | number | boolean | <ComponentName> | list<typeRef> | optional<typeRef> | enum<v1,v2,...>, generics to list<T>, literal unions to enum<...>, nested/related types added transitively to the flat map"
+  - "Structural sourceHash computation over sorted field name+type pairs only (build-spec §7, ADR-0005)"
+  - "The permissive typing policy: low-confidence/inferred fields warn and never block (ADR-0004)"
+  - "The versailles extract-manifests command behavior: update covered entries, preserve uncovered entries, remove only via explicit --prune (build-spec §7)"
+
+purpose: |
+  manifest-extraction derives the grounding layer of the pipeline — manifests.json — from real
+  source code. It resolves declared field types to the typeRef grammar through per-language
+  extractor plugins (TypeScript first, via ts.createProgram and the type checker), adding nested
+  and related types transitively to the flat manifest map so references like order.items[].sku
+  resolve. It computes structural sourceHash values from sorted field name+type pairs only, so
+  body-only edits never trigger false staleness while structural edits are detectable.
+  Extraction is static-analysis-first and permissive: inferred fields are flagged low-confidence
+  and warn rather than block (ADR-0004). Manifests are derived artifacts — an external agent may
+  author or update them via the CLI, but the tool itself never invokes an LLM (ADR-0005,
+  ADR-0010).
+
+invariants:
+  - "Every manifest field maps to a value of the typeRef grammar (build-spec §3.3); no free-form type strings enter manifests.json."
+  - "sourceHash is a pure function of the structural shape (sorted field name+type pairs); body-only edits never change it, structural edits always do."
+  - "Every manifest entry traces to real source under config.sourceRoots — nothing is invented (ADR-0005)."
+  - "No language-specific extraction code exists outside the extractor plugin seam (ADR-0008)."
+  - "The tool never invokes an LLM anywhere in extraction; any externally-authored manifest content is mechanically verified against source before writing (ADR-0005, ADR-0010)."
+
+operations:
+  extract:
+    requires:
+      - "config.language is one of the ADR-0009 matrix: typescript | csharp | python"
+      - "config.sourceRoots covers the files to scan"
+    ensures:
+      - "manifests.json gains or updates an entry for every covered component, with fields mapped to typeRef values"
+      - "TS generics become list<T>, literal-only unions become enum<...>, and nested/related types are added to the flat manifest map transitively"
+      - "Only files under config.sourceRoots are scanned"
+    examples:
+      - input: "extract({ language: 'typescript', sourceRoots: ['src/**/*.ts'] }) over an OrderService class with items: OrderItem[]"
+        output: "manifests.json entry for OrderService with fields { items: 'list<OrderItem>' } plus a transitive OrderItem entry"
+  compute_source_hash:
+    requires:
+      - "fields is the component's field set: an ordered collection of (fieldName, typeRef) pairs"
+    ensures:
+      - "Returns the digest of the sorted (fieldName, typeRef) pairs only — never the full source file"
+      - "Two field sets that differ only by method-body changes hash identically; adding, removing, or retyping a field changes the hash"
+    examples:
+      - input: "compute_source_hash([{ name: 'sku', type: 'string' }, { name: 'price', type: 'number' }])"
+        output: "a stable digest; unchanged when a method body changes, different when a field is added or retyped"
+  extract_manifests_command:
+    requires:
+      - "config and the current manifests.json content"
+      - "options carries the explicit prune flag state"
+    ensures:
+      - "Entries for components covered by the scan are updated to reflect current source"
+      - "Entries for components not covered are preserved when prune is false and removed only when prune is true — never implicitly"
+    examples:
+      - input: "extract_manifests_command(config, manifests, { prune: false }) with an uncovered stale component X"
+        output: "X's entry remains in manifests.json"
+      - input: "extract_manifests_command(config, manifests, { prune: true }) with the same uncovered stale component X"
+        output: "X's entry is removed"
+
+must:
+  - "Select and dispatch the extractor plugin purely by config.language; the core contains no per-language logic (ADR-0008)."
+  - "For TypeScript, walk class and interface declarations with ts.createProgram and the type checker, resolving field types to the typeRef grammar (ADR-0005, ADR-0009)."
+  - "Map TypeScript generics to list<T> and literal-only unions to enum<...>."
+  - "Add nested and related types to the flat manifest map transitively so paths like order.items[].sku resolve via a sibling entry in the same map."
+  - "Compute sourceHash from sorted field name+type pairs only — never the full source file (build-spec §7, ADR-0005)."
+  - "Flag inferred/low-confidence fields and surface them as non-blocking warnings; never hard-error purely on inference uncertainty (ADR-0004)."
+  - "Preserve manifest entries for components not covered by the current scan, and remove them only when the caller passes the explicit prune flag (build-spec §7)."
+  - "Scan only files under config.sourceRoots."
+  - "Mechanically verify any externally-authored or externally-updated manifest content against actual source before writing manifests.json (ADR-0005)."
+
+must_not:
+  - "Must not treat manifests.json as a hand-authored source of truth — it is a derived artifact produced by static analysis (build-spec §3.3, ADR-0005)."
+  - "Must not compute sourceHash over the full source file — only the sorted field name+type pairs, so unrelated body edits do not trigger false staleness."
+  - "Must not prune manifest entries implicitly; removal occurs only via the explicit prune flag (build-spec §7)."
+  - "Must not scan outside config.sourceRoots."
+  - "Must not invoke an LLM anywhere in extraction — no LLM client, no prompting logic, no retry loop; the only LLM-assisted path is an external agent whose output passes a mechanical verification gate before writing (ADR-0010, ADR-0005)."
+  - "Must not let a low-confidence or inferred field cause a hard type-compatibility error — that tier warns but never blocks (ADR-0004)."
+  - "Must not place language-specific extraction code in the core — all extraction lives behind the ExtractorPlugin seam (ADR-0008)."
+
+can:
+  - "May surface per-field confidence metadata alongside manifest entries as an extension point (build-spec §5.1, ADR-0004)."
+  - "May add extractor plugins for csharp (Roslyn) and python (ast + typing introspection) as they are sequenced (ADR-0009) — the seam is shared."
+  - "May recompute and rewrite sourceHash values in place when field sets change, as part of the extract command."
+
+limits:
+  - "No C# (Roslyn) or Python (ast) extractor implementations within the first milestone — TypeScript + vitest is sequenced first; the seam exists for all three (ADR-0009)."
+  - "No semantic validation of contracts that consume manifests — that is contract-language."
+  - "No staleness check orchestration or exit-code semantics — workspace-context runs versailles check; this context only computes hashes."
+  - "No predicate registry tooling, even where it reuses static-analysis seams."
+  - "No LLM client, prompt templates, or in-tool LLM extraction — any LLM assistance is external and verification-gated."
+
+asserts:
+  - "assert: compute_source_hash over a component whose method bodies changed but whose field set and types are unchanged equals the stored hash."
+  - "assert: compute_source_hash changes when a field is added, removed, or retyped."
+  - "assert: extraction of a TypeScript component under config.sourceRoots yields manifest fields whose typeRefs match the type-checker-resolved types."
+  - "assert: an uncovered component's entry persists across extract_manifests_command runs without prune and is removed with prune."
+  - "assert: no code path in the extractor invokes an LLM (no LLM call sites in the tool)."
+
+---
+## Changelog
+
+| Date | Author | Change |
+|------|--------|--------|
+| 2026-08-11 | general-manager | Initial contract from docs/specs/manifest-extraction.md; build-spec §3.3, §7; ADR-0004/0005/0008/0009/0010 |

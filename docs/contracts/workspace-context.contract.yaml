@@ -1,0 +1,129 @@
+# Contract: workspace-context
+# Owner: general-manager
+# Gate: contract_gate — no implementation starts without a registered contract
+# Validated by: scripts/validate-contracts.sh
+# Canonical source: ~/.opencode/skills/contract-builder/references/contract.template.yaml
+
+schema_version: 1
+context: workspace-context
+
+owns:
+  - "Joint loading and JSON-parsing of the four top-level .versailles/ files — config.json, contracts.json, manifests.json, predicates.json — as a single unit (build-spec §2, §6)"
+  - "The version gates on config.grammarVersion and config.schemaVersion with hard-error + upgrade-path behavior (build-spec §3.1)"
+  - "config.schema.json machine-checkable validation against the ADR-0009 enum matrix"
+  - "The VersaillesContext object (build-spec §6.5): config, contracts, manifests, predicates, parsedContracts, parseErrors, validationErrors, validationWarnings, isValid"
+  - "The scoped extraction helper (build-spec §6.6): component/operation sub-object plus its errors/warnings"
+  - "Staleness orchestration via versailles check with exit codes 0/1/2 (build-spec §8)"
+  - "The shared-loader guarantee: every consuming component loads through this module (build-spec §6)"
+
+purpose: |
+  workspace-context owns the .versailles/ workspace as a versioned, jointly-loaded unit. The
+  four top-level files are never valid to interpret in isolation — contracts reference manifests
+  and predicates by name — so the loader reads them together, applies version gates on
+  grammarVersion and schemaVersion (a mismatch is a hard error with an upgrade-path message,
+  never a silent best-effort parse), parses and validates every expr against the full context,
+  and returns one VersaillesContext with an aggregated isValid. It validates config against the
+  ADR-0009 matrix, exposes the scoped extraction helper used by human review, and orchestrates
+  the CI staleness check with distinct exit codes 0, 1, and 2. A single shared loader serves
+  every component — no component re-implements loading — and the tool never invokes an LLM
+  (ADR-0010).
+
+invariants:
+  - "The four top-level .versailles/ files are always loaded together; no file is interpreted in isolation (build-spec §2)."
+  - "Any load path that hits a grammarVersion or schemaVersion mismatch produces a hard error with an explicit upgrade-path message — never a silent best-effort parse (build-spec §3.1)."
+  - "isValid is the aggregation of all hard errors: isValid === (parseErrors is empty and validationErrors is empty)."
+  - "Every consuming component reaches the workspace through the single shared loader; no component re-implements loading (build-spec §6)."
+  - "config.language and config.testFramework always validate against the ADR-0009 enum matrix."
+
+operations:
+  load_workspace:
+    requires:
+      - "the directory contains all four versioned files: config.json, contracts.json, manifests.json, predicates.json"
+    ensures:
+      - "Returns a single VersaillesContext with config, contracts, manifests, predicates, parsedContracts (contract ID → AST), parseErrors, validationErrors, validationWarnings, and isValid"
+      - "Version gates are checked before any processing; a mismatch returns a hard error with an upgrade-path message"
+      - "No file is interpreted on its own"
+    examples:
+      - input: "load_workspace('.versailles') on a complete, version-matching workspace"
+        output: "one VersaillesContext with parsedContracts populated and isValid reflecting parse + validation results"
+      - input: "load_workspace('.versailles') with config.grammarVersion out of date"
+        output: "hard error containing an explicit upgrade path; no context is returned"
+  validate_config:
+    requires:
+      - "config is the parsed config.json content"
+    ensures:
+      - "language is accepted only when one of typescript | csharp | python"
+      - "testFramework is accepted only when one of vitest | xunit | pytest"
+      - "jest and any value outside the matrix is rejected as invalid configuration (ADR-0009)"
+    examples:
+      - input: "validate_config({ language: 'typescript', testFramework: 'vitest' })"
+        output: "valid"
+      - input: "validate_config({ language: 'typescript', testFramework: 'jest' })"
+        output: "invalid — jest is outside the ADR-0009 matrix"
+  extract_scoped:
+    requires:
+      - "context is a loaded VersaillesContext"
+      - "component names a component in contracts.json; operation optionally names one of its operations"
+    ensures:
+      - "Returns just that component/operation sub-object plus its errors and warnings"
+      - "Never returns the whole contracts.json contents"
+    examples:
+      - input: "extract_scoped(context, 'OrderService', 'placeOrder')"
+        output: "the OrderService.placeOrder sub-object with its parse/validation errors and warnings only"
+  check_staleness:
+    requires:
+      - "context is a loaded VersaillesContext"
+      - "config.staleness.blockOnStale is a boolean"
+    ensures:
+      - "Non-empty parseErrors or validationErrors yields exit code 1"
+      - "Stale stored sourceHash values yield exit code 2 when blockOnStale is true, and a warning report with exit code 0 when it is false"
+      - "A clean workspace yields exit code 0"
+    examples:
+      - input: "check_staleness(contextWithStaleHashes, blockOnStale: false)"
+        output: "warning report, exit 0"
+      - input: "check_staleness(contextWithStaleHashes, blockOnStale: true)"
+        output: "hard failure listing stale IDs, exit 2"
+
+must:
+  - "Read and JSON-parse all four top-level files together as one unit; never interpret any file on its own (build-spec §2)."
+  - "Check config.grammarVersion and config.schemaVersion against the tool's supported versions before any processing; on mismatch return a hard error with an explicit upgrade-path message (build-spec §3.1)."
+  - "Validate config against the ADR-0009 enum matrix: language accepts typescript | csharp | python and testFramework accepts vitest | xunit | pytest; reject jest and any value outside the matrix (ADR-0009)."
+  - "Parse every expr string in contracts.json into an AST, collect structured parse errors, run the semantic validator against the full context, and aggregate everything into one VersaillesContext with an isValid flag (build-spec §6)."
+  - "Expose the scoped extraction helper that returns a single component/operation sub-object plus its errors and warnings (build-spec §6.6)."
+  - "Orchestrate versailles check: fail on non-empty parseErrors/validationErrors; recompute every stored sourceHash and compare; honor config.staleness.blockOnStale; exit 0 clean, 1 on parse/validation error, 2 on blocking staleness, and warn-with-0 when staleness is non-blocking (build-spec §8)."
+  - "Be the single shared loader: every consuming component (CLI commands, review UI, CI lint, generator) loads the workspace through this module, never re-implementing loading (build-spec §6)."
+
+must_not:
+  - "Must not interpret any of the four top-level files in isolation — they are versioned together and loaded as one unit (build-spec §2)."
+  - "Must not silently best-effort parse on a grammarVersion or schemaVersion mismatch — it is a hard error with an upgrade-path message (build-spec §3.1)."
+  - "Must not accept language or testFramework values outside the ADR-0009 enum matrix — jest is rejected, vitest is accepted (ADR-0009)."
+  - "Must not let consumers re-implement loading — the shared loader is the only path into the context (build-spec §6)."
+  - "Must not return a whole file from scoped extraction — always the single sub-object plus its errors (build-spec §6.6)."
+  - "Must not fail versailles check on staleness when config.staleness.blockOnStale is false — it warns and exits 0 (build-spec §8)."
+  - "Must not invoke an LLM anywhere in loading or checking (ADR-0010)."
+
+can:
+  - "May surface non-blocking validationWarnings to consumers (for example reviewer-awareness surfaces)."
+  - "May emit a warning report (such as a CI annotation) when staleness is detected but blockOnStale is false."
+  - "May cache or memoize loaded contexts within a single process as an optimization, provided the shared loader remains the only entry point."
+
+limits:
+  - "No implementation of the grammar, parser, or validator rules themselves — contract-language owns those; this context aggregates results."
+  - "No manifest derivation from source — manifest-extraction owns that."
+  - "No test-case planning or test emission — deterministic-generation owns that."
+  - "No review merge or approval write-back to contracts.json — review owns that; this context supplies the scoped view only."
+  - "No LLM client, prompt templates, or in-tool LLM invocation (ADR-0010)."
+
+asserts:
+  - "assert: load_workspace returns isValid === (parseErrors is empty and validationErrors is empty)."
+  - "assert: validate_config accepts vitest and typescript and rejects jest and any value outside the matrix."
+  - "assert: every loader path that encounters a version mismatch returns a hard error containing an upgrade-path message."
+  - "assert: extract_scoped returns at most the requested sub-object and never the whole contracts.json content."
+  - "assert: check_staleness exits 0 on clean, 1 on parse/validation errors, 2 on blocking staleness, and 0 with a warning when staleness is non-blocking."
+
+---
+## Changelog
+
+| Date | Author | Change |
+|------|--------|--------|
+| 2026-08-11 | general-manager | Initial contract from docs/specs/workspace-context.md; build-spec §2, §3.1, §6, §8; ADR-0009/0010 |
