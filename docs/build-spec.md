@@ -1,0 +1,484 @@
+# Versailles — Build Specification
+
+Deterministic test generation from Design-by-Contract specifications, with LLM-assisted
+contract authoring and human-in-the-loop approval.
+
+**Naming:** package name `versailles-dbc` (or scoped `@<org>/versailles`) on npm — the bare
+name `versailles` is already registered (unmaintained placeholder). CLI command name is
+`versailles`, decoupled from the package name via the `bin` field in `package.json`:
+
+```json
+{
+  "name": "versailles-dbc",
+  "bin": { "versailles": "./dist/cli.js" }
+}
+```
+
+---
+
+## 1. Goals and non-goals
+
+**Goals**
+- Contracts (invariants, preconditions, postconditions) are the single source of truth for
+  test generation.
+- Test *generation* from an approved contract is 100% deterministic — same contract in,
+  same test suite out, no LLM involved at generation time.
+- LLM involvement is confined to *authoring* contracts from source code, and every LLM
+  output is mechanically validated (parse + semantic checks) before a human ever sees it.
+- Contracts are auditable: every contract clause traces back to a specific source hash,
+  and every generated test traces back to a specific contract clause.
+
+**Non-goals (v1)**
+- No support for arbitrary executable code inside contract expressions (no function calls
+  beyond registered named predicates, no loops, no side effects).
+- No SMT-based precise input synthesis in v1 (design for it, defer implementation).
+- No multi-language grammar variants — the contract expression grammar is language-agnostic;
+  only the manifest extractor is per-language.
+
+---
+
+## 2. Directory layout
+
+```
+.versailles/
+├── config.json          # tool config: grammar version, source globs, generator target
+├── contracts.json        # component contracts (invariants + operations), keyed by component name
+├── manifests.json        # field manifests per component/type, derived from source
+├── predicates.json       # named predicate registry
+└── generated/             # deterministic generator output (test files)
+    └── <component>/<operation>.test.<ext>
+```
+
+All four top-level files are versioned together and must be loaded as a single unit — no
+file is valid to interpret in isolation because contracts reference manifests and
+predicates by name.
+
+---
+
+## 3. File schemas
+
+### 3.1 `config.json`
+
+```json
+{
+  "grammarVersion": "1.0",
+  "schemaVersion": "1.0",
+  "sourceRoots": ["src/**/*.ts"],
+  "language": "typescript",
+  "testFramework": "jest",
+  "generatedDir": ".versailles/generated",
+  "staleness": {
+    "blockOnStale": true
+  }
+}
+```
+
+- `grammarVersion` / `schemaVersion`: checked by every tool (parser, validator, generator)
+  before processing; mismatch is a hard error with an upgrade-path message, not a silent
+  best-effort parse.
+- `sourceRoots`: glob patterns the manifest extractor scans.
+- `language`: selects the manifest extractor plugin (see §7).
+- `testFramework`: selects the generator's output emitter (see §9).
+- `staleness.blockOnStale`: whether CI fails on detected drift (see §8) or only warns.
+
+### 3.2 `contracts.json`
+
+```json
+{
+  "version": "1.0",
+  "contracts": {
+    "<ComponentName>": {
+      "invariants": [
+        { "id": "<ComponentName>.inv<N>", "expr": "<expression string>" }
+      ],
+      "operations": {
+        "<operationName>": {
+          "id": "<ComponentName>.<operationName>",
+          "params": [
+            { "name": "<paramName>", "type": "<typeRef>" }
+          ],
+          "preconditions": [
+            { "id": "<ComponentName>.<operationName>.pre<N>", "expr": "<expression string>" }
+          ],
+          "postconditions": [
+            { "id": "<ComponentName>.<operationName>.post<N>", "expr": "<expression string>" }
+          ],
+          "effects": [
+            { "field": "<fieldRef>", "kind": "mutate|create|delete" }
+          ],
+          "sourceHash": "<hash of function signature + docstring at generation time>"
+        }
+      }
+    }
+  }
+}
+```
+
+Rules:
+- One `invariants` list per component (Meyer/DbC scoping: invariant is per-component, not
+  per-operation).
+- One `preconditions`/`postconditions` pair per operation.
+- `operations.params` is required and used by the validator to resolve unqualified
+  identifiers scoped to that operation (in addition to component fields from the manifest).
+- `effects` is used by the generator to know which fields a postcondition-satisfaction test
+  should assert against, and to scope invariant-preservation checks.
+- Every operation contract carries its own `sourceHash`; the component's invariant block
+  carries an implicit hash via the component's entry in `manifests.json` (see §3.3).
+
+### 3.3 `manifests.json`
+
+```json
+{
+  "version": "1.0",
+  "manifests": {
+    "<ComponentName>": {
+      "sourceHash": "<hash of field set + types>",
+      "fields": {
+        "<fieldName>": "<typeRef>"
+      }
+    }
+  }
+}
+```
+
+- Flat map, including value/nested types referenced by other components (so
+  `order.items[].sku` resolves by looking up `OrderItem` in the same map).
+- `<typeRef>` grammar: `string | number | boolean | <ComponentName> | list<typeRef> |
+  optional<typeRef> | enum<v1,v2,...>`.
+- Generated by static analysis (§7), never hand-authored, never LLM-authored blind — if an
+  LLM assists, its output must be verified against actual source before being written here.
+
+### 3.4 `predicates.json`
+
+```json
+{
+  "version": "1.0",
+  "predicates": {
+    "<predicateName>": {
+      "params": ["<paramName>"],
+      "paramTypes": ["<typeRef>"],
+      "returnType": "boolean",
+      "sourceRef": "<Module.functionName>",
+      "sourceHash": "<hash of function implementation>",
+      "verifiedPure": true
+    }
+  }
+}
+```
+
+- `verifiedPure` is a manually-set flag (checked once at registration via lint/manual
+  review) asserting the referenced function has no side effects and always terminates.
+  The validator treats `verifiedPure: false` or missing as a hard error — unverified
+  predicates cannot be referenced in contracts.
+
+---
+
+## 4. Contract expression grammar
+
+### 4.1 Grammar (EBNF)
+
+```
+expr        := or_expr
+or_expr     := and_expr ( "or" and_expr )*
+and_expr    := not_expr ( "and" not_expr )*
+not_expr    := "not"? comparison
+comparison  := term ( comp_op term )?
+comp_op     := "==" | "!=" | ">" | ">=" | "<" | "<=" | "in"
+term        := literal | old_ref | predicate_call | field_ref | arithmetic
+arithmetic  := term ( ("+" | "-" | "*" | "/") term )?
+old_ref     := "old(" field_ref ")"
+predicate_call := IDENT "(" ( term ( "," term )* )? ")"
+field_ref   := IDENT ( "." IDENT | "[" NUMBER "]" | "[]" )*
+literal     := NUMBER | STRING | "true" | "false" | "null" | list_literal
+list_literal:= "[" ( literal ( "," literal )* )? "]"
+```
+
+### 4.2 Structural (grammar-level) constraints, enforced by the parser itself, not the
+    semantic validator
+
+- `old_ref` is syntactically valid **only** when parsing a `postconditions[]` entry.
+  Encountering `old(...)` while parsing `preconditions[]` or `invariants[]` is a parse
+  error, not a semantic one — reject before semantic validation runs.
+- `predicate_call` identifiers are not resolved at parse time (that's semantic validation);
+  the parser only checks the call-shape is well-formed (balanced parens, valid arg
+  expressions).
+- No assignment, no loops, no statements — the grammar only produces boolean-valued
+  expression trees. Anything outside this grammar is a parse error.
+
+### 4.3 AST node types (parser output contract)
+
+```
+Node =
+  | { type: "or", left: Node, right: Node }
+  | { type: "and", left: Node, right: Node }
+  | { type: "not", operand: Node }
+  | { type: "compare", op: CompOp, left: Node, right: Node }
+  | { type: "arithmetic", op: ArithOp, left: Node, right: Node }
+  | { type: "old", ref: FieldRefNode }
+  | { type: "predicateCall", name: string, args: Node[] }
+  | { type: "fieldRef", path: (string | number | "[]")[] }
+  | { type: "literal", value: string | number | boolean | null | LiteralList }
+```
+
+### 4.4 Parser error contract
+
+Every parse error must include:
+
+```json
+{
+  "contractId": "OrderService.placeOrder.post0",
+  "field": "postconditions[0]",
+  "position": 20,
+  "found": "=",
+  "expected": ["=="],
+  "message": "Unexpected token '=' at position 20 — did you mean '=='?"
+}
+```
+
+- Errors are structured objects, not strings, so downstream consumers (LLM-feedback loop,
+  review UI, CI) can render or re-inject them programmatically.
+- Parser must never throw an unstructured exception on malformed input — always return a
+  structured error result.
+
+---
+
+## 5. Semantic validator
+
+Runs after successful parse. Requires the full `.versailles/` context (contracts +
+manifests + predicates) loaded together.
+
+### 5.1 Checks performed
+
+| Check | Rule | Severity |
+|---|---|---|
+| Field ref resolves | Root identifier of a `field_ref` must exist in the component's manifest fields, or in the current operation's `params` (for pre/postconditions) | Hard |
+| Nested field ref resolves | Each `.` segment must resolve through the referenced type's manifest entry, transitively | Hard |
+| Type compatibility | Both sides of a `comparison` must have compatible declared types (per manifest/param types) | Hard |
+| `in` operand shape | Right-hand side of `in` must be a `list_literal` or a field of `list<T>`/`enum<...>` type matching left-hand type `T` | Hard |
+| `old()` scope | Already enforced at parse time; validator re-asserts as defense-in-depth | Hard |
+| Predicate exists | Called name exists in `predicates.json` | Hard |
+| Predicate arity | Number of args matches `predicates.json[name].params.length` | Hard |
+| Predicate arg types | Each arg's resolved type matches `predicates.json[name].paramTypes[i]` | Hard |
+| Predicate verified pure | `predicates.json[name].verifiedPure === true` | Hard |
+| Field exists but manifest confidence low | Field resolves but manifest entry is flagged as inferred/low-confidence (extension point, not required in v1) | Warning |
+
+### 5.2 Validator output contract
+
+```json
+{
+  "valid": false,
+  "errors": [
+    { "contractId": "...", "code": "UNKNOWN_FIELD", "field": "postconditions[0]", "detail": "..." }
+  ],
+  "warnings": [ ... ]
+}
+```
+
+- Hard errors block the contract from reaching human review (in the LLM-authoring flow) or
+  block CI (in the lint flow).
+- Warnings are surfaced but non-blocking.
+
+---
+
+## 6. `.versailles/` loader / context object
+
+A single shared module used by every other component (LLM-feedback loop, review UI, CI
+lint, generator) — no component re-implements loading or cross-referencing independently.
+
+**Responsibilities:**
+1. Read and JSON-parse all four files.
+2. Check `config.grammarVersion` / `schemaVersion` against the tool's supported versions;
+   hard-fail with an explicit upgrade message on mismatch.
+3. Parse every `expr` string in `contracts.json` into an AST, collecting structured parse
+   errors.
+4. Run the semantic validator against the full context, collecting structured semantic
+   errors/warnings.
+5. Return a single `VersaillesContext` object:
+   ```
+   {
+     config, contracts, manifests, predicates,
+     parsedContracts: { [contractId]: AST },
+     parseErrors: [...],
+     validationErrors: [...],
+     validationWarnings: [...],
+     isValid: boolean
+   }
+   ```
+6. Expose a scoped-extraction helper: given a component/operation name, return just that
+   sub-object plus its errors — used by the human review UI so reviewers see a scoped diff,
+   not the whole file.
+
+---
+
+## 7. Manifest extractor (source → `manifests.json`)
+
+- Pluggable per `config.language`. v1 target: one language (pick based on your primary
+  repo — TypeScript or Python).
+- **TypeScript approach:** use the TypeScript compiler API (`ts.createProgram`, type
+  checker) to walk class/interface declarations, resolve field types to the `typeRef`
+  grammar in §3.3, including generics (`list<T>`), unions mapped to `enum<...>` where all
+  members are literal types, and nested/related types added to the flat manifest map
+  transitively.
+- **Python approach:** use `ast` module + type hints (`typing` module introspection) or a
+  static type-checker's internal representation (e.g. mypy's AST) for accuracy; dynamic
+  typing means some fields may only be inferable, not declared — those should be marked
+  low-confidence per §5.1's warning tier rather than silently trusted.
+- `sourceHash` computation: hash of the **structural shape only** (sorted field
+  name+type pairs), not the full source file — so unrelated changes to method bodies don't
+  trigger false staleness.
+- Extractor is a CLI subcommand: `versailles extract-manifests` — reads `config.sourceRoots`,
+  writes/updates `manifests.json`, preserving entries for components not covered by the
+  current scan (with a `--prune` flag to remove stale entries explicitly, never implicitly).
+
+---
+
+## 8. Staleness / CI lint
+
+CLI subcommand: `versailles check` — intended for CI.
+
+1. Load context via §6 loader.
+2. Fail if `parseErrors` or `validationErrors` non-empty.
+3. Recompute `sourceHash` for every manifest entry, predicate, and contract operation from
+   current source; compare against stored hash.
+4. On mismatch:
+   - If `config.staleness.blockOnStale === true`: hard fail with a list of stale IDs.
+   - Else: emit a warning report (e.g. as a CI annotation) but exit 0.
+5. Exit codes: `0` clean, `1` parse/validation error, `2` staleness violation (when
+   blocking) — distinct codes so CI pipelines can branch behavior if desired.
+
+---
+
+## 9. Deterministic test generator
+
+CLI subcommand: `versailles generate` — only runs against a context where `isValid: true`.
+
+### 9.1 Per-operation test cases (from preconditions/postconditions)
+
+For each operation:
+- **Boundary values**: for every numeric comparison in preconditions (`x >= 0`, `x < 100`),
+  generate cases at the boundary, boundary−1, boundary+1.
+- **Equivalence partitions**: for every `in` clause or enum-typed field, generate one case
+  per partition member plus one case outside the set.
+- **Precondition-violation cases**: for each precondition clause individually, generate an
+  input that satisfies all *other* clauses but falsifies this one; assert the operation
+  rejects (throws / returns error / whatever the language's rejection idiom is — configurable
+  in `config.json`, defaulting to "throws").
+- **Postcondition-satisfaction cases**: for valid inputs (satisfying all preconditions),
+  generate a case and assert every postcondition clause holds on the result, resolving
+  `old(field)` against captured pre-call state.
+
+### 9.2 Per-component invariant tests
+
+- For each operation on a component with invariants:
+  - Construct a pre-state satisfying all component invariants (using a component-level
+    valid-state builder derived from the manifest + invariant clauses).
+  - Call the operation with valid inputs.
+  - Assert every invariant clause still holds post-call.
+- **Postcondition/invariant interaction cases**: generate cases where inputs satisfy the
+  operation's postcondition but the resulting state would violate a component invariant —
+  flag these as expected-rejection cases (the operation should refuse to complete) since
+  this is the specific bug class DbC is designed to catch.
+
+### 9.3 Traceability
+
+- Every generated test includes a comment/annotation with the source contract ID(s) it
+  covers, e.g. `// versailles: OrderService.placeOrder.pre0 (violation case)`.
+- Generator maintains a coverage manifest (`generated/coverage.json`) mapping contract
+  clause IDs → generated test IDs, so gaps (a clause with zero generated tests — shouldn't
+  happen, but worth asserting) are detectable.
+
+### 9.4 Output emitters
+
+- Pluggable per `config.testFramework` (pytest, jest, etc. — v1 target: one framework).
+- Emitter responsibility: take the generator's framework-agnostic test-case IR (input
+  values, expected outcome, assertion list, traceability comment) and render it to actual
+  test-file syntax.
+- Regeneration is idempotent and full-file (the `generated/` directory is fully
+  tool-owned — never hand-edited, always regenerated from `contracts.json`).
+
+### 9.5 v2 stretch: SMT-backed generation
+
+- Translate the AST (§4.3) to SMT-LIB, use Z3 to synthesize precise satisfying/violating
+  witnesses instead of heuristic boundary values, particularly valuable for compound
+  boolean preconditions where heuristic partition generation misses interaction cases.
+- Design the AST and grammar now to keep this translation mechanical later (already true
+  given the grammar's restricted, side-effect-free shape).
+
+---
+
+## 10. LLM contract-authoring loop
+
+CLI subcommand: `versailles author <component> [operation]`.
+
+1. Load current manifest entry for the component (and predicate registry) as LLM context.
+2. Prompt LLM to emit a single contract object (one component or one operation, not a full
+   file rewrite) conforming to the `contracts.json` schema, using only fields/predicates
+   present in the provided context.
+3. Run parser (§4) + semantic validator (§5) against the LLM's output.
+4. On failure: feed the structured error(s) back to the LLM as a correction prompt, retry
+   (cap retry count, e.g. 3, then surface to human as a failed-generation case rather than
+   looping indefinitely).
+5. On success: stage the validated contract object for human review — do not merge into
+   `contracts.json` automatically.
+
+---
+
+## 11. Human review
+
+- Review UI (could be a CLI diff view or a simple web UI) shows:
+  - The scoped sub-object (component or operation) via the §6 loader's extraction helper —
+    never the whole file.
+  - Raw `expr` strings alongside their parsed/normalized AST (pretty-printed) as a
+    parser-sanity check.
+  - Any validator warnings (non-blocking) for reviewer awareness.
+- On approval: merge the single contract object into `contracts.json` programmatically
+  (read-modify-write of just that key), never a full-file LLM rewrite.
+- No `approvedBy`/`approvedAt` fields in the schema — git blame/commit history is the audit
+  trail (per earlier decision).
+
+---
+
+## 12. CLI command surface (summary)
+
+| Command | Purpose |
+|---|---|
+| `versailles init` | Scaffold `.versailles/` with empty/default files |
+| `versailles extract-manifests` | Run manifest extractor, update `manifests.json` |
+| `versailles author <component> [operation]` | Run LLM authoring loop for one component/operation |
+| `versailles validate` | Run parser + semantic validator across all of `contracts.json`, print structured report |
+| `versailles check` | CI-mode: validate + staleness check, proper exit codes |
+| `versailles generate` | Run deterministic test generator, write to `generated/` |
+| `versailles review <component> [operation]` | Launch scoped review flow for a staged/pending contract |
+
+---
+
+## 13. Build milestones (recommended order)
+
+1. **Grammar + parser** — standalone, unit-testable against hand-written `contracts.json`
+   fixtures. No dependency on anything else.
+2. **Loader/context object + semantic validator** — still against hand-written fixtures for
+   `manifests.json`/`predicates.json`. Proves the cross-referencing logic.
+3. **Deterministic generator (§9.1–9.2)** against hand-authored contracts, targeting one
+   test framework. This is the core value proposition — prove it before adding LLM
+   complexity.
+4. **Manifest extractor** for one language — replaces hand-written `manifests.json`.
+5. **CI staleness check (`versailles check`)** — cheap to add once hashing is in place.
+6. **LLM authoring loop + validation retry** — now has real manifests/predicates to ground
+   against.
+7. **Human review flow** (scoped diff view, merge-on-approve).
+8. **Predicate registry tooling** — registration CLI, purity-check reminder workflow.
+9. **SMT-backed generation (v2 stretch)** — only after v1 pipeline is proven end-to-end.
+
+---
+
+## 14. Open decisions to pin down during implementation
+
+| Decision | Recommended default |
+|---|---|
+| Type strictness in manifests for dynamically-typed languages | Permissive; low-confidence fields warn, don't block |
+| Manifest extraction method | Static analysis first; LLM-assisted only as fallback, always verified against source |
+| Predicate purity enforcement | Manual lint/review at registration time only |
+| Test framework target for v1 | Single framework, config-driven, chosen up front |
+| Rejection idiom for precondition-violation tests | Configurable in `config.json`, default "throws" |
+| Multi-language support | Manifest extractor pluggable per-language; grammar/validator/generator stay language-agnostic |
+| Package/CLI naming | Package `versailles-dbc` (or scoped), CLI binary `versailles` via `bin` field |
