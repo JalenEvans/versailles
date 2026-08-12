@@ -1,0 +1,7 @@
+#!/usr/bin/env node
+// versailles — placeholder CLI entry (real CLI lands in Phase 6).
+// Prints a usage line and exits 0 so the package bin wiring is exercisable.
+process.stdout.write(
+  "versailles: deterministic test generation from Design-by-Contract specifications (CLI arrives in Phase 6)\n",
+);
+process.exit(0);
