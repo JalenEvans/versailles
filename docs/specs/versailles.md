@@ -4,8 +4,7 @@
 **Lifecycle:** draft
 **Owner:** associate-head-coach
 **Threshold:** public-api (the CLI surface, `.versailles/` file formats, generated test files), data (contracts/manifests/predicates are the tool's data layer)
-**Linked contract:** `docs/contracts/versailles.contract.yaml` *(pending — contract-builder)*
-**Canonical source:** `~/.opencode/skills/spec-builder/references/spec.template.md`
+**Linked contract:** `docs/contracts/versailles.contract.yaml` *(pending)*
 
 ---
 
@@ -88,10 +87,6 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - Grammar variants per programming language.
 - In-band approval metadata in the schema.
 
-## Linked Plans
-
-- *(to be filled when the execution plan is created in llama_plans via plan-builder)*
-
 ---
 
 ## Changelog
@@ -100,3 +95,5 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial draft from build spec |
 | 2026-08-11 | associate-head-coach | v1 scope pinned by ADR-0009: TS/C#/Python + vitest/xUnit/pytest, TS+vitest first |
+| 2026-08-11 | associate-head-coach | Linked Plans section added pointing to the v1 pipeline implementation plan |
+| 2026-08-11 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
