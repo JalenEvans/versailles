@@ -4,7 +4,7 @@
 **Date:** 2026-08-11
 **Status:** accepted
 **Owner:** associate-head-coach
-**Canonical source:** `~/.opencode/skills/adr-builder/references/adr.template.md`
+**Template:** MADR-derived decision record
 
 ---
 

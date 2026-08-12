@@ -10,9 +10,9 @@
 #
 # Empty-registry behavior: when no *.contract.yaml files exist, this script
 # PASSES (exit 0) — a repo with no contracts registered is a valid bootstrap
-# state. Contracts appear only when contract-builder registers the first one,
-# and each one then requires its spec file (spec-builder convention:
-# docs/specs/<ctx>.md).
+# state. Contracts appear only when the contract authoring process registers
+# the first one, and each one then requires its spec file (behavioral spec
+# convention: docs/specs/<ctx>.md).
 #
 # Usage: scripts/validate-contracts.sh   (run from anywhere in the repo)
 

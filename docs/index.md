@@ -20,7 +20,7 @@ versailles
 │   │                    workspace-context, deterministic-generation, authoring-loop, review)
 │   ├── architecture/ ← context map + pluggable-edge seams (ADR-0008/0009)
 │   ├── features/     ← user-visible capabilities (CLI surface)
-│   ├── contracts/    ← DbC contracts (empty registry — contract-builder is a later step)
+│   ├── contracts/    ← DbC contracts (empty registry — contract authoring is a later step)
 │   ├── specs/        ← behavioral specs, one per bounded context
 │   ├── decisions/    ← architecture decision records (ADRs)
 │   └── glossary.md   ← ubiquitous language (single vocabulary for all docs)
@@ -34,7 +34,7 @@ Planned module boundaries per the build spec (§13 milestones). Contracts/specs 
 
 | Module | Path (planned) | Owns | Spec | Contract |
 |--------|----------------|------|------|----------|
-| Contract language (grammar + parser + validator) | `src/parser`, `src/validator` | expression grammar, AST, semantic checks, structured error contract | [docs/specs/versailles.md](specs/versailles.md) | pending (contract-builder) |
+| Contract language (grammar + parser + validator) | `src/parser`, `src/validator` | expression grammar, AST, semantic checks, structured error contract | [docs/specs/versailles.md](specs/versailles.md) | pending |
 | Loader / context | `src/loader` | unified versioned context, version gates, scoped extraction helper | [docs/specs/versailles.md](specs/versailles.md) | pending |
 | Manifest extractor | `src/extractor` | source → `manifests.json`, structural `sourceHash` | [docs/specs/versailles.md](specs/versailles.md) | pending |
 | Deterministic generator | `src/generator` | test-case IR → test files, `generated/coverage.json` | [docs/specs/versailles.md](specs/versailles.md) | pending |
@@ -56,7 +56,7 @@ Each module maps to a [bounded context](domains/index.md); the shared vocabulary
 Tool not yet implemented — scaffold stage. Placeholders until `src/` exists (build-spec §13 defines the build order).
 
 ```bash
-# docs + contract validation (installed by repo-bootstrap)
+# docs + contract validation
 scripts/validate-docs.sh
 scripts/validate-contracts.sh
 ```

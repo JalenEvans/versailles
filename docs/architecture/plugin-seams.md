@@ -15,7 +15,7 @@ How Versailles stays language-agnostic at its core while shipping three language
 
 - A single, restricted, language-agnostic grammar keeps the AST canonical — which is what makes future AST → SMT-LIB translation mechanical (build-spec §9.5, v2).
 - The seams exist from day one even though v1 could have shipped one pair; adding language #2 is a new plugin, not a forklift refactor.
-- Consequence: the **plugin interfaces are public seams** — they must be defined early and treated as contracts (registered via contract-builder), not internal details.
+- Consequence: the **plugin interfaces are public seams** — they must be defined early and treated as contracts (registered via the contract pipeline), not internal details.
 
 ## v1 matrix (ADR-0009)
 
