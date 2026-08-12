@@ -44,7 +44,7 @@ A canonical **semantic error** shape (build-spec §5.2):
 
 ## User story
 
-> As a CI pipeline or LLM feedback loop, I want every failure to arrive as a machine-readable structured result with a distinct exit code, so I can render it, re-inject it, or branch on it programmatically.
+> As a CI pipeline or an external LLM/agent, I want every failure to arrive as a machine-readable structured result with a distinct exit code, so I can render it, re-inject it, or branch on it programmatically.
 
 ## Flow
 
@@ -65,7 +65,7 @@ A canonical **semantic error** shape (build-spec §5.2):
 ## Edge cases
 
 - **Warnings present, errors absent** → not a rejection; warnings are non-blocking and surfaced (e.g. low-confidence fields, build-spec §5.1).
-- **Multiple errors in one run** → all structured errors returned (the report is a list), so the LLM correction prompt and CI get the full picture in one pass.
+- **Multiple errors in one run** → all structured errors returned (the report is a list), so the external agent and CI get the full picture in one pass.
 
 ## Source of authority
 

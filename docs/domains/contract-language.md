@@ -51,7 +51,7 @@ Uses from [glossary](../glossary.md): *contract, clause, invariant, precondition
 |---|---|---|
 | Downstream of | workspace-context | Semantic validation requires the full context (contracts + manifests + predicates) loaded together; the loader orchestrates parse + validation. |
 | Downstream of | manifest-extraction | Field references resolve against manifest entries and param types. |
-| Upstream of | authoring-loop | Its validation result is the gate between LLM output and staging (failed output → correction prompt). |
+| Upstream of | external agent (via CLI) | Its structured validation result is the gate between agent-authored contracts and staging; failed output returns structured errors for the agent to fix. |
 | Upstream of | review | Review displays warnings and pretty-printed AST as a parser-sanity check. |
 | Upstream of | deterministic-generation | Generation only runs on `isValid: true`; the validated AST is the future SMT input (v2). |
 | Upstream of | (CLI) | `versailles validate` / `versailles check` surface its structured report. |

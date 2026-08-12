@@ -48,7 +48,7 @@ Uses from [glossary](../glossary.md): *`.versailles/` workspace, VersaillesConte
 |---|---|---|
 | Upstream of | contract-language | Provides the full context the semantic validator needs; also consumes its parser/validator to build `parsedContracts` and validation results. |
 | Upstream of | deterministic-generation | Generation runs only against a context where `isValid: true`. |
-| Upstream of | authoring-loop | Supplies the manifest entry + predicate registry the LLM is grounded on. |
+| Upstream of | external agent (via CLI) | Supplies the manifest entry + predicate registry an external agent is grounded on through command output. |
 | Upstream of | review | Scoped extraction gives the reviewer a scoped diff, never the whole file. |
 | Downstream of | review | The reviewer's single-object merge writes back into `contracts.json` inside the workspace. |
 | Downstream of | manifest-extraction | `manifestUpdated` writes `manifests.json` into the workspace. |

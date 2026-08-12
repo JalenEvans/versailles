@@ -20,14 +20,16 @@ The Versailles domain decomposed into bounded contexts (Domain-Driven Design). E
       parses &  │          │          scoped     │ contract
       validates │          │        extraction   │ objects
                  │          │            │        │
-      ┌─────────┴───┐  ┌────┴────────┐  ┌─────────┴──────┐
-      │ contract-   │  │deterministic│  │ authoring-loop  │──staged──▶ review
-      │ language    │  │generation   │  │                 │
-      └─────────┬───┘  └────┬────────┘  └─────────────────┘
+      ┌─────────┴───┐  ┌────┴────────┐
+      │ contract-   │  │deterministic│
+      │ language    │  │generation   │
+      └─────────┬───┘  └────┬────────┘
                 │           │
        structured      generated/
        errors          tests + coverage.json
 ```
+
+Contract objects enter via an **external agent** that drives the CLI (`validate` / `check`) — the agent is not a bounded context of the tool (ADR-0010); validated objects proceed to [review](review.md), whose single-object merge writes back into the workspace.
 
 ## The bounded contexts
 
@@ -37,15 +39,14 @@ The Versailles domain decomposed into bounded contexts (Domain-Driven Design). E
 | 2 | [manifest-extraction](manifest-extraction.md) | Source → `manifests.json`: field manifests, `typeRef` resolution, structural `sourceHash`, per-language extractor plugins, low-confidence typing policy | source code, config (`config.language`) | [specs/versailles.md](../specs/versailles.md) | pending |
 | 3 | [workspace-context](workspace-context.md) | The `.versailles/` workspace as a versioned, jointly-loaded unit: version gates, `VersaillesContext` object, scoped extraction helper, staleness check orchestration | all four `.versailles/` files | [specs/versailles.md](../specs/versailles.md) | pending |
 | 4 | [deterministic-generation](deterministic-generation.md) | Deterministic test generation: test-case IR, boundary/partition/violation/satisfaction cases, invariant tests, traceability, `generated/coverage.json`, per-framework emitter plugins | workspace-context (`isValid` context), contract-language (validated AST) | [specs/versailles.md](../specs/versailles.md) | pending |
-| 5 | [authoring-loop](authoring-loop.md) | LLM contract authoring: prompt with manifest+predicate context, mechanical validation, capped structured-error retry, staging for review | workspace-context, contract-language | [specs/versailles.md](../specs/versailles.md) | pending |
-| 6 | [review](review.md) | Human review and approval: scoped diff of staged contracts, single-object merge into `contracts.json`, git history as the audit trail | authoring-loop (staged contracts), workspace-context (scoped extraction) | [specs/versailles.md](../specs/versailles.md) | pending |
+| 5 | [review](review.md) | Human review and approval: scoped diff of staged contracts, single-object merge into `contracts.json`, git history as the audit trail | external agent flow (staged contracts), workspace-context (scoped extraction) | [specs/versailles.md](../specs/versailles.md) | pending |
 
 ## Relationship notes
 
 - **workspace-context is the shared kernel.** Every other context reads from / writes into the `.versailles/` workspace; no context interprets a file in isolation (build-spec §2, §6).
-- **contract-language is the validation gate.** It is *upstream* of anything that must not see invalid contracts: the authoring loop (validation before staging), review (warnings + pretty-printed AST), generation (only runs on `isValid: true`), and CI (`validate` / `check`).
+- **contract-language is the validation gate.** It is *upstream* of anything that must not see invalid contracts: the external agent flow (validation before staging), review (warnings + pretty-printed AST), generation (only runs on `isValid: true`), and CI (`validate` / `check`).
 - **manifest-extraction grounds everything downstream.** Hallucinated fields would silently poison validation, generation, and authoring — hence static-analysis-first (ADR-0005) and permissive-but-visible typing (ADR-0004).
-- **authoring-loop and review are the human-in-the-loop edge.** The LLM never touches generated tests (ADR-0002) and never merges into `contracts.json`; the reviewer's single-object merge is the only write to contracts (ADR-0003).
+- **review is the human-in-the-loop approval gate.** Contract authoring is external: an agent drives the CLI and never touches generated tests (ADR-0002) or merges into `contracts.json`; the reviewer's single-object merge is the only write to contracts (ADR-0003). The tool itself never drives an LLM (ADR-0010).
 - **ADRs 0008/0009 shape the edges.** Only manifest-extraction (per language) and deterministic-generation's emitters (per framework) vary; the core stays language-agnostic.
 
 ## Feature coverage

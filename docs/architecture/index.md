@@ -15,19 +15,19 @@ How the [bounded contexts](../domains/index.md) interact. The vocabulary is the 
                         │
         ┌───────────────┼──────────────────────────────┐
         ▼               ▼                              ▼
- contract-language  deterministic-generation      authoring-loop
- (parse + validate)  (requires isValid: true)      (LLM + validation gate)
-        │               │                              │
- structured errors   generated/ tests +            staged contracts
-   block the          coverage.json                 (never auto-merged)
-   pipeline           (tool-owned, idempotent)           │
+ contract-language  deterministic-generation   external agent (LLM): authors
+ (parse + validate)  (requires isValid: true)   contract objects, drives the
+        │               │                       CLI (validate / check) — the
+ structured errors   generated/ tests +         tool never drives an LLM
+   block the          coverage.json             (no in-tool loop — ADR-0010)
+   pipeline           (tool-owned, idempotent)         │
+                                                       ▼
+                                               review (human) ◄── validated
+                                                          │      contract objects
+                                              single-object merge
                                                           ▼
-                                                   review (human)
-                                                         │
-                                             single-object merge
-                                                         ▼
-                                              contracts.json (approved —
-                                              git history is the audit trail)
+                                               contracts.json (approved —
+                                               git history is the audit trail)
 ```
 
 ## Context interaction model
@@ -38,29 +38,29 @@ How the [bounded contexts](../domains/index.md) interact. The vocabulary is the 
 | contract-language | Validation gate; structured error producer | Invalid contracts never reach review or generation |
 | manifest-extraction | Grounding edge; source → `manifests.json` | Manifests are derived by static analysis, never hallucinated |
 | deterministic-generation | The compiler; contracts → tests | Generation is a pure function; `generated/` is tool-owned |
-| authoring-loop | The only LLM path | No LLM output reaches a human unvalidated; nothing auto-merges |
 | review | The approval gate | Approval = single-object merge; git is the audit trail |
+
+The external LLM/agent that authors contracts and drives the CLI is **not** a bounded context — it sits outside the tool (ADR-0010).
 
 The shared kernel pattern is deliberate: **workspace-context is upstream of every other context** (each reads the joint context) and **downstream of review** (the merge writes `contracts.json` back). manifest-extraction writes `manifests.json` into the kernel; deterministic-generation writes `generated/` into it.
 
 ## Dependency direction (what depends on what)
 
 ```
-authoring-loop ──► contract-language ◄── manifest-extraction
-      │                   ▲                    │
-      ▼                   │                    │
-    review ◄──────────────┼────────────────────┘
-      │                   │
-      ▼                   │
- workspace-context ◄──────┘       (writes into the kernel)
-      │
-      ├──► contract-language      (loader uses parser+validator to build context)
-      ├──► deterministic-generation   (needs isValid: true)
-      ├──► authoring-loop             (grounding context)
-      └──► review                     (scoped extraction)
+ contract-language ◄── manifest-extraction
+        ▲                    │
+        │                    │
+      review ◄───────────────┘
+        │
+        ▼
+  workspace-context               (writes into the kernel)
+        │
+        ├──► contract-language      (loader uses parser+validator to build context)
+        ├──► deterministic-generation   (needs isValid: true)
+        └──► review                     (scoped extraction)
 ```
 
-No context depends on the LLM path; generation never depends on authoring; authoring never depends on generation. ADR-0002 keeps the two halves (authoring vs. generation) fully decoupled.
+No bounded context depends on an LLM — the tool never drives one (ADR-0010). Generation never depends on authoring, and external authoring never depends on generation: ADR-0002 keeps generation a pure function of approved contracts, decoupled from any LLM involvement.
 
 ## The CLI as the application layer
 
@@ -70,7 +70,6 @@ The command surface binds contexts without owning domain logic (build-spec §12)
 |---|---|---|
 | `versailles init` | workspace-context | Scaffolds the workspace |
 | `versailles extract-manifests` | manifest-extraction | Updates `manifests.json`; `--prune` only explicit |
-| `versailles author <component> [operation]` | authoring-loop → contract-language | Stages, never merges |
 | `versailles validate` | workspace-context → contract-language | Structured report; rejection = exit `1` |
 | `versailles check` | workspace-context + contract-language + manifest-extraction | CI-mode; exit `2` = staleness (blocking) |
 | `versailles generate` | deterministic-generation | Requires `isValid: true`; exit `1` if invalid |

@@ -26,7 +26,7 @@ Grounds the whole pipeline: `extract-manifests` scans `config.sourceRoots` with 
 
 ## Business rules
 
-- Static analysis first; LLM assistance allowed only as a verified fallback whose output is mechanically checked against real source before writing (ADR-0005).
+- Static analysis first; an external agent may update manifests via the CLI, but its output is mechanically checked against real source before writing — the tool never invokes an LLM (ADR-0005, ADR-0010).
 - Inferred (low-confidence) fields are flagged, warn, and never silently trusted (ADR-0004).
 - No implicit pruning: preserving entries for unscanned components is the default; `--prune` is explicit (build-spec §7).
 - The extractor is a plugin: the core never contains per-language extraction code (ADR-0008).

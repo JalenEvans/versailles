@@ -2,7 +2,7 @@
 
 **ID:** ADR-0002
 **Date:** 2026-08-11
-**Status:** accepted
+**Status:** superseded
 **Owner:** associate-head-coach
 **Template:** MADR-derived decision record
 
@@ -53,3 +53,4 @@ Chosen option: **contracts as the single source of truth, with a deterministic c
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial proposal |
 | 2026-08-11 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-11 | associate-head-coach | Superseded by ADR-0010 (authoring-loop aspect only); deterministic-generation core remains in force |

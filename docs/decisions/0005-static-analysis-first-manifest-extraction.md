@@ -38,6 +38,8 @@ Chosen option: **static analysis first**, **because** it is the only option that
 - `versailles extract-manifests` uses the language's static analysis APIs, not an LLM.
 - Any LLM-assisted path includes a mechanical verification gate before writing `manifests.json`.
 
+> **Clarification (2026-08-11, ADR-0010):** "LLM assistance" in this ADR refers to an *external* agent that may author/update manifests via the CLI — the tool itself never invokes an LLM. The static-analysis-first decision is unchanged.
+
 ## More Information / Links
 
 - [Build spec §7 Manifest extractor](../build-spec.md#7-manifest-extractor-source--manifestsjson), [§14 row: Manifest extraction method](../build-spec.md#14-open-decisions-to-pin-down-during-implementation)
@@ -50,3 +52,4 @@ Chosen option: **static analysis first**, **because** it is the only option that
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial proposal |
 | 2026-08-11 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-11 | general-manager | Added ADR-0010 clarification note (external-agent framing); decision body unchanged |

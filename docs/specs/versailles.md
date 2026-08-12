@@ -10,7 +10,7 @@
 
 ## Behavioral Intent
 
-Versailles turns Design-by-Contract specifications (invariants, preconditions, postconditions) written in a small expression language into deterministic test suites. Contracts are the single source of truth: a validated contract always produces the same tests — no LLM at generation time. LLMs may help *author* contracts from source code, but every LLM output is mechanically validated (parse + semantic) before a human approves it. The `.versailles/` directory is versioned and loaded as a single unit, and every contract clause and generated test traces back to a source hash.
+Versailles turns Design-by-Contract specifications (invariants, preconditions, postconditions) written in a small expression language into deterministic test suites. Contracts are the single source of truth: a validated contract always produces the same tests. LLMs (as external agents) may drive the CLI to author contracts from source, but the CLI never drives an LLM — no LLM is invoked by the tool at any point. The CLI exposes a deterministic, machine-readable surface (structured errors, stable JSON output, stable exit codes) that an external LLM/agent can consume and iterate against. The `.versailles/` directory is versioned and loaded as a single unit, and every contract clause and generated test traces back to a source hash.
 
 ## Scope
 
@@ -18,7 +18,7 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - The `.versailles/` file set (`config.json`, `contracts.json`, `manifests.json`, `predicates.json`) as a versioned, jointly-loaded unit.
 - Contract expression grammar: parse, structural constraints, semantic validation, structured error reporting.
 - Deterministic test generation: per-operation cases (boundary, partitions, precondition-violation, postcondition-satisfaction) and per-component invariant tests, with traceability comments and a coverage manifest.
-- LLM authoring loop: prompt → parse+validate → structured-error retry (capped) → stage for human review.
+- Machine-readable CLI surface for agent control: structured errors, stable JSON output, deterministic behavior an external LLM/agent can consume and iterate against.
 - CI lint: validation + staleness detection with distinct exit codes.
 
 **Out of scope:**
@@ -47,11 +47,11 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - **When** `versailles check` runs in CI
 - **Then** exit code `2` with a list of stale IDs if `staleness.blockOnStale` is true, else a warning report and exit `0`
 
-### LLM output is validated before a human sees it
+### The CLI is deterministic and never prompts an LLM; an external agent iterates against it
 
-- **Given** an LLM-authored contract object in the authoring loop
-- **When** it fails parse or semantic validation
-- **Then** the structured error is fed back as a correction prompt, retried (capped, e.g. 3), and on persistent failure surfaced to a human — never merged automatically
+- **Given** an external LLM/agent that authors contract objects from source
+- **When** it calls `versailles validate` / `versailles check` on its output
+- **Then** the CLI responds with deterministic structured errors (stable JSON, exit codes) that the agent reads, fixes against, and re-runs — the CLI never prompts, calls, or retries an LLM itself
 
 ### Human approval merges one object, not the file
 
@@ -76,7 +76,7 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - The expression grammar is boolean-valued only: no assignment, no loops, no statements; anything outside the grammar is a parse error.
 - `old(field)` is valid only in `postconditions[]` — a parse error (not semantic) elsewhere.
 - Predicate calls resolve only to registered predicates with `verifiedPure: true`; unverified predicates are a hard error.
-- Generation is a pure function of approved contracts; regeneration is idempotent and full-file; `generated/` is tool-owned and never hand-edited.
+- Generation is a pure function of approved contracts; regeneration is idempotent and full-file; `generated/` is tool-owned and never hand-edited. The tool never invokes an LLM — no LLM client, no prompting logic, no LLM retry loop anywhere in the tool.
 - `contracts.json` changes are single-object merges — never a full-file LLM rewrite.
 - `.versailles/` files are never interpreted in isolation; all tools load them as a unit.
 
@@ -97,3 +97,4 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 | 2026-08-11 | associate-head-coach | v1 scope pinned by ADR-0009: TS/C#/Python + vitest/xUnit/pytest, TS+vitest first |
 | 2026-08-11 | associate-head-coach | Linked Plans section added pointing to the v1 pipeline implementation plan |
 | 2026-08-11 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
+| 2026-08-11 | associate-head-coach | Architecture correction: CLI never drives an LLM; LLMs drive the CLI (ADR-0010) |

@@ -4,7 +4,7 @@
 
 ## Responsibility (what this context owns)
 
-Human review and approval of **staged contracts** — the human-in-the-loop gate between authoring and approved contracts:
+Human review and approval of **staged contracts** — the human-in-the-loop gate between external contract authoring and approved contracts:
 
 - Presenting a **scoped** view of a staged contract (one component/operation sub-object via workspace-context's scoped extraction) — never the whole file.
 - Showing raw `expr` strings alongside their pretty-printed AST (parser-sanity check) and any validator warnings (non-blocking, for reviewer awareness).
@@ -14,7 +14,7 @@ Human review and approval of **staged contracts** — the human-in-the-loop gate
 
 ## Domain model
 
-**StagedContract** (entity) — a validated contract object from the authoring loop, awaiting review. (Owned in the authoring-loop context; consumed here.)
+**StagedContract** (entity) — a validated contract object staged by the external agent flow, awaiting review. (Consumed here; the staging side lives outside the tool.)
 
 **ScopedDiff** (value object) — the component/operation sub-object plus its errors/warnings, produced by workspace-context's scoped extraction.
 
@@ -37,7 +37,7 @@ Uses from [glossary](../glossary.md): *staged contract, approved contract, scope
 
 | Relation | Context | Nature |
 |---|---|---|
-| Downstream of | authoring-loop | Consumes staged contracts. |
+| Downstream of | external agent flow (via CLI) | Consumes validated contract objects staged for review. |
 | Downstream of | workspace-context | Scoped extraction provides the per-object review view. |
 | Upstream of | workspace-context | The merge writes back into `contracts.json` inside the workspace. |
 | Downstream of | contract-language | Warnings + pretty-printed AST come from the validation pipeline. |
@@ -45,7 +45,7 @@ Uses from [glossary](../glossary.md): *staged contract, approved contract, scope
 ## Business rules
 
 - Review shows a **scoped** sub-object, never the whole file (build-spec §11).
-- Approval merges **one object** via read-modify-write of just that key — never a full-file LLM rewrite (build-spec §11, ADR-0003).
+- Approval merges **one object** via read-modify-write of just that key — never a full-file rewrite (build-spec §11, ADR-0003).
 - The schema contains **no approval metadata**; git blame/commit history is the audit trail (ADR-0003).
 - Each approval is a distinct, reviewable merge commit — requires git discipline: review merges must be single-object commits (ADR-0003).
 
