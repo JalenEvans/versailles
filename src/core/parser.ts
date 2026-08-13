@@ -99,6 +99,14 @@ const COMP_OP_SYMBOLS = new Set(["==", "!=", ">", ">=", "<", "<="]);
 
 const ARITH_OP_SYMBOLS = new Set(["+", "-", "*", "/"]);
 
+/**
+ * Maximum expression nesting depth (nested predicate calls like
+ * f(f(...(a)...))). Input nested beyond this is rejected with a structured
+ * error instead of overflowing the call stack — the build-spec §4.4
+ * never-throws pin under the ADR-0010 untrusted-agent model.
+ */
+const MAX_PARSE_DEPTH = 256;
+
 const TERM_EXPECTED = [
 	"an identifier",
 	"a number",
@@ -270,6 +278,7 @@ class Parser {
 	private readonly tokens: Token[];
 	private index = 0;
 	private error: ParseError | null = null;
+	private depth = 0;
 
 	constructor(
 		tokens: Token[],
@@ -424,21 +433,54 @@ class Parser {
 		return null;
 	}
 
+	/**
+	 * The additive level of arithmetic (`+` `-`). Left-associative and
+	 * iterative: chains like "a + a + ..." are folded in a loop, so long
+	 * chains cannot overflow the call stack. Precedence: `*` `/` bind tighter
+	 * (parseFactor) and are parsed for every operand.
+	 */
 	private parseTerm(): Node | null {
-		const left = this.parsePrimary();
+		let left = this.parseFactor();
 		if (left === null) {
 			return null;
 		}
-		const op = this.peekArithOp();
-		if (op === null) {
-			return left;
+		while (true) {
+			const op = this.peekArithOp();
+			if (op === null || (op !== "+" && op !== "-")) {
+				break;
+			}
+			this.advance();
+			const right = this.parseFactor();
+			if (right === null) {
+				return null;
+			}
+			left = { type: "arithmetic", op, left, right };
 		}
-		this.advance();
-		const right = this.parseTerm();
-		if (right === null) {
+		return left;
+	}
+
+	/**
+	 * The multiplicative level of arithmetic (`*` `/`). Binds tighter than
+	 * `+` `-` and is itself left-associative and iterative.
+	 */
+	private parseFactor(): Node | null {
+		let left = this.parsePrimary();
+		if (left === null) {
 			return null;
 		}
-		return { type: "arithmetic", op, left, right };
+		while (true) {
+			const op = this.peekArithOp();
+			if (op === null || (op !== "*" && op !== "/")) {
+				break;
+			}
+			this.advance();
+			const right = this.parsePrimary();
+			if (right === null) {
+				return null;
+			}
+			left = { type: "arithmetic", op, left, right };
+		}
+		return left;
 	}
 
 	private peekArithOp(): ArithOp | null {
@@ -449,7 +491,33 @@ class Parser {
 		return null;
 	}
 
+	/**
+	 * Depth-guarded entry to the recursive term grammar. Every recursive
+	 * descent into a primary (nested predicate calls f(f(...(a)...))) passes
+	 * through here; beyond MAX_PARSE_DEPTH the input is rejected with a
+	 * structured error rather than overflowing the call stack (B1b,
+	 * build-spec §4.4 never-throws pin).
+	 */
 	private parsePrimary(): Node | null {
+		this.depth += 1;
+		try {
+			if (this.depth > MAX_PARSE_DEPTH) {
+				const token = this.peek();
+				this.fail(
+					token.position,
+					token.lexeme,
+					["fewer levels of nesting"],
+					`Expression nested too deeply at position ${token.position} — exceeds the maximum nesting depth of ${MAX_PARSE_DEPTH}`,
+				);
+				return null;
+			}
+			return this.parsePrimaryUnchecked();
+		} finally {
+			this.depth -= 1;
+		}
+	}
+
+	private parsePrimaryUnchecked(): Node | null {
 		const token = this.peek();
 		switch (token.kind) {
 			case "number":

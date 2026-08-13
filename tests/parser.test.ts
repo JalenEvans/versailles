@@ -3,16 +3,15 @@ import { describe, expect, it } from "vitest";
 import { parseExpression } from "../src/core/parser.js";
 
 /**
- * Parser contract — pinned by the Shooting Guard (phase 2, chunk 2.1, RED).
+ * Parser contract — pinned against build-spec §4.1–§4.4.
  *
- * The Point Guard implements src/core/parser.ts exactly to the module contract
- * below. The parser is the validation kernel of the contract-language bounded
+ * The parser is the validation kernel of the contract-language bounded
  * context; these tests freeze the grammar (build-spec §4.1), the structural
  * constraints enforced by the parser (§4.2), the AST node set (§4.3), and the
  * structured error contract (§4.4). The parser NEVER throws an unstructured
  * exception on malformed input — it always returns a typed union result.
  *
- * ── Module contract (implement identically) ────────────────────────────────
+ * ── Module contract ────────────────────────────────────────────────────────
  *
  * Module: src/core/parser.ts
  * Export: parseExpression(input: string, clauseKind: ClauseKind, contractId: string): ParseResult
@@ -60,7 +59,7 @@ import { parseExpression } from "../src/core/parser.js";
  * ): ParseResult;
  * ```
  *
- * ── Ambiguities resolved by these tests (implement identically) ────────────
+ * ── Ambiguities resolved by these tests ────────────────────────────────────
  *
  * 1. Precedence (tightest first): arithmetic > comparison > not > and > or.
  *    - "a or b and c"  = or(a, and(b, c))   (and binds tighter than or)
@@ -86,6 +85,12 @@ import { parseExpression } from "../src/core/parser.js";
  *    "preconditions" / "invariants" it is a structured parse error with
  *    position > 0 and found matching /old/ (build-spec §4.2, rejected at
  *    parse time, before semantic validation).
+ * 10. Arithmetic binds tighter than comparison and is left-associative across
+ *     two precedence levels: `*` and `/` group tighter than `+` and `-`, and
+ *     each level folds left. "a - b - c" = arithmetic(-, arithmetic(-, a, b),
+ *     c), never arithmetic(-, a, arithmetic(-, b, c)); "a * b + c" =
+ *     arithmetic(+, arithmetic(*, a, b), c), never arithmetic(*, a,
+ *     arithmetic(+, b, c)).
  */
 
 const PRE_ID = "OrderService.placeOrder.pre0";
@@ -134,6 +139,58 @@ describe("parseExpression — module contract: never throws, always structured",
 			const result = parseExpression(input, "preconditions", PRE_ID);
 			expect(result.ok).toBe(false);
 		}
+	});
+});
+
+describe("parseExpression — pathological battery (B1: never throws, build-spec §4.4)", () => {
+	const arithmeticChain = (terms: number): string =>
+		`${Array.from({ length: terms }, () => "a +").join(" ")} a`;
+	const nestedPredicate = (depth: number): string =>
+		`${"f(".repeat(depth)}a${")".repeat(depth)}`;
+	const orChain = (terms: number): string =>
+		`${Array.from({ length: terms }, () => "a or").join(" ")} a`;
+
+	/**
+	 * The build-spec §4.4 "never throws" pin for the pathological battery: the
+	 * call must return a structured ParseResult — either ok:true with an AST,
+	 * or ok:false with a nonempty errors array (the depth guard's structured
+	 * error). A thrown unstructured exception — the B1 crash class, a
+	 * RangeError stack overflow on deep recursion — fails the test at the
+	 * not.toThrow() guard.
+	 */
+	function assertNeverThrows(input: string): void {
+		let result: ReturnType<typeof parseExpression> | undefined;
+		expect(() => {
+			result = parseExpression(input, "preconditions", PRE_ID);
+		}).not.toThrow();
+		expect(result).toBeDefined();
+		if (result?.ok === false) {
+			expect(result.errors.length).toBeGreaterThan(0);
+		}
+	}
+
+	it('never throws on a 2000-term arithmetic chain "a + a + ... + a"', () => {
+		assertNeverThrows(arithmeticChain(2000));
+	});
+
+	it('never throws on a 5000-term arithmetic chain "a + a + ... + a"', () => {
+		assertNeverThrows(arithmeticChain(5000));
+	});
+
+	it('never throws on a 20000-term arithmetic chain "a + a + ... + a" (pre-fix crash class)', () => {
+		assertNeverThrows(arithmeticChain(20000));
+	});
+
+	it('never throws on 1000-deep nested predicate calls "f(f(...(a)...))"', () => {
+		assertNeverThrows(nestedPredicate(1000));
+	});
+
+	it('never throws on a 20000-deep nested predicate call chain "f(f(...(a)...))" (pre-fix crash class)', () => {
+		assertNeverThrows(nestedPredicate(20000));
+	});
+
+	it('never throws on a 2000-term "a or a or ... or a" chain', () => {
+		assertNeverThrows(orChain(2000));
 	});
 });
 
@@ -289,6 +346,110 @@ describe("parseExpression — arithmetic (build-spec §4.1 arithmetic)", () => {
 					right: { type: "fieldRef", path: ["discount"] },
 				},
 				right: { type: "literal", value: 0 },
+			},
+		});
+	});
+
+	it('parses "a - b - c" as left-associative: ((a - b) - c)', () => {
+		expect(parseExpression("a - b - c", "preconditions", PRE_ID)).toEqual({
+			ok: true,
+			ast: {
+				type: "arithmetic",
+				op: "-",
+				left: {
+					type: "arithmetic",
+					op: "-",
+					left: { type: "fieldRef", path: ["a"] },
+					right: { type: "fieldRef", path: ["b"] },
+				},
+				right: { type: "fieldRef", path: ["c"] },
+			},
+		});
+	});
+
+	it('parses "a - b + c" as left-associative: ((a - b) + c)', () => {
+		expect(parseExpression("a - b + c", "preconditions", PRE_ID)).toEqual({
+			ok: true,
+			ast: {
+				type: "arithmetic",
+				op: "+",
+				left: {
+					type: "arithmetic",
+					op: "-",
+					left: { type: "fieldRef", path: ["a"] },
+					right: { type: "fieldRef", path: ["b"] },
+				},
+				right: { type: "fieldRef", path: ["c"] },
+			},
+		});
+	});
+
+	it('parses "a + b * c" with * binding tighter than +', () => {
+		expect(parseExpression("a + b * c", "preconditions", PRE_ID)).toEqual({
+			ok: true,
+			ast: {
+				type: "arithmetic",
+				op: "+",
+				left: { type: "fieldRef", path: ["a"] },
+				right: {
+					type: "arithmetic",
+					op: "*",
+					left: { type: "fieldRef", path: ["b"] },
+					right: { type: "fieldRef", path: ["c"] },
+				},
+			},
+		});
+	});
+
+	it('parses "a * b + c" with the * group folded before +', () => {
+		expect(parseExpression("a * b + c", "preconditions", PRE_ID)).toEqual({
+			ok: true,
+			ast: {
+				type: "arithmetic",
+				op: "+",
+				left: {
+					type: "arithmetic",
+					op: "*",
+					left: { type: "fieldRef", path: ["a"] },
+					right: { type: "fieldRef", path: ["b"] },
+				},
+				right: { type: "fieldRef", path: ["c"] },
+			},
+		});
+	});
+
+	it('parses "a + b" to an arithmetic node with op "+"', () => {
+		expect(parseExpression("a + b", "preconditions", PRE_ID)).toEqual({
+			ok: true,
+			ast: {
+				type: "arithmetic",
+				op: "+",
+				left: { type: "fieldRef", path: ["a"] },
+				right: { type: "fieldRef", path: ["b"] },
+			},
+		});
+	});
+
+	it('parses "a * b" to an arithmetic node with op "*"', () => {
+		expect(parseExpression("a * b", "preconditions", PRE_ID)).toEqual({
+			ok: true,
+			ast: {
+				type: "arithmetic",
+				op: "*",
+				left: { type: "fieldRef", path: ["a"] },
+				right: { type: "fieldRef", path: ["b"] },
+			},
+		});
+	});
+
+	it('parses "a / b" to an arithmetic node with op "/"', () => {
+		expect(parseExpression("a / b", "preconditions", PRE_ID)).toEqual({
+			ok: true,
+			ast: {
+				type: "arithmetic",
+				op: "/",
+				left: { type: "fieldRef", path: ["a"] },
+				right: { type: "fieldRef", path: ["b"] },
 			},
 		});
 	});
