@@ -38,17 +38,19 @@ operations:
   parse:
     requires:
       - "exprString is a clause expr string of the contracts.json shape"
-      - "clauseKind is one of: preconditions[] | postconditions[] | invariants[]"
+      - "clauseKind is the bare clause kind: preconditions | postconditions | invariants (entry-index decoration, e.g. preconditions[0], is a loader concern, build-spec §6)"
     ensures:
       - "A well-formed boolean expression returns an AST built only from build-spec §4.3 node types"
-      - "old(...) parsed while clauseKind is preconditions[] or invariants[] returns a structured parse error of the build-spec §4.4 shape and is rejected before semantic validation"
+      - "old(...) parsed while clauseKind is preconditions or invariants returns a structured parse error of the build-spec §4.4 shape and is rejected before semantic validation"
       - "Any out-of-grammar token (assignment, loop, statement) returns a structured parse error listing expected alternatives; no non-boolean-valued expression is ever produced"
       - "The call never throws an unstructured exception"
     examples:
-      - input: "parse('balance >= 0', 'preconditions[0]')"
+      # clauseKind is the bare kind ("preconditions" | "postconditions" | "invariants"); the
+      # loader (build-spec §6) appends the entry index (e.g. "preconditions[0]") when surfacing errors.
+      - input: "parse('balance >= 0', 'preconditions')"
         output: "AST compare node (op '>=', left fieldRef balance, right literal 0), no parse errors"
-      - input: "parse('old(balance) > 0', 'preconditions[0]')"
-        output: "structured parse error { contractId, field: 'preconditions[0]', position, found, expected, message }"
+      - input: "parse('old(balance) > 0', 'preconditions')"
+        output: "structured parse error { contractId, field: 'preconditions', position, found, expected, message }"
   semantic_validate:
     requires:
       - "ast is the parse result of a clause with no parse errors"

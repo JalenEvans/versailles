@@ -193,7 +193,8 @@ old_ref     := "old(" field_ref ")"
 predicate_call := IDENT "(" ( term ( "," term )* )? ")"
 field_ref   := IDENT ( "." IDENT | "[" NUMBER "]" | "[]" )*
 literal     := NUMBER | STRING | "true" | "false" | "null" | list_literal
-list_literal:= "[" ( literal ( "," literal )* )? "]"
+list_literal:= "[" ( list_element ( "," list_element )* )? "]"
+list_element:= NUMBER | STRING | "true" | "false" | "null"
 ```
 
 ### 4.2 Structural (grammar-level) constraints, enforced by the parser itself, not the
