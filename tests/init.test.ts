@@ -5,17 +5,14 @@ import Ajv from "ajv";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import configSchema from "../config.schema.json";
-// Assumption: the Power Forward will create src/cli/init.ts exporting
-// initWorkspace(targetDir: string): Promise<void> — async, node:fs/promises,
-// mkdir recursive, NodeNext .js import extension. Until that module exists,
-// this import failure IS the Red.
+// initWorkspace scaffolds <targetDir>/.versailles/ with the four jointly-loaded
+// workspace files (build-spec §2): a default config plus three versioned stores.
 import { initWorkspace } from "../src/cli/init.js";
 
 /**
- * Red-phase gate for chunk 1.4: `versailles init` scaffolds the workspace
- * (build-spec §12 / CLI table: "Scaffold .versailles/ with empty/default
- * files"). The Head Coach pinned behavior: init SEEDS a default config plus
- * empty schema files — it is not a blank slate.
+ * Verifies `versailles init` seeds the .versailles/ workspace (build-spec §2,
+ * §12): a default config plus the three empty schema stores, each as a
+ * versioned envelope ({ "version": "1.0" }).
  *
  * Contract grounding:
  * - workspace-context.contract.yaml (load_workspace requires): the directory
@@ -96,7 +93,7 @@ describe("initWorkspace — scaffolds .versailles/", () => {
 	});
 
 	it.each(["contracts.json", "manifests.json", "predicates.json"])(
-		"seeds %s as a valid JSON object (empty initial state permitted)",
+		'seeds %s as the versioned envelope { "version": "1.0" } (build-spec §3.2/§3.3/§3.4)',
 		async (fileName) => {
 			const targetDir = await freshTargetDir(`c-${fileName}`);
 
@@ -107,9 +104,8 @@ describe("initWorkspace — scaffolds .versailles/", () => {
 				"utf8",
 			);
 			expect(() => JSON.parse(content)).not.toThrow();
-			const parsed = JSON.parse(content) as unknown;
-			expect(parsed).toBeTypeOf("object");
-			expect(parsed).not.toBeNull();
+			const parsed = JSON.parse(content) as Record<string, unknown>;
+			expect(parsed).toEqual({ version: "1.0" });
 		},
 	);
 

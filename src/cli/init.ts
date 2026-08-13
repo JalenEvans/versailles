@@ -33,7 +33,7 @@ function writeJsonFile(
 
 /**
  * Scaffolds `<targetDir>/.versailles/` with the four jointly-loaded workspace
- * files (build-spec §2): a seeded default config plus empty schema stores.
+ * files (build-spec §2): a seeded default config plus versioned schema stores.
  *
  * Idempotent: re-running re-seeds the same files (mkdir is recursive and the
  * seeds are always rewritten).
@@ -44,6 +44,6 @@ export async function initWorkspace(targetDir: string): Promise<void> {
 
 	await writeJsonFile(workspaceDir, "config.json", SEEDED_CONFIG);
 	for (const fileName of EMPTY_SCHEMA_FILE_NAMES) {
-		await writeJsonFile(workspaceDir, fileName, {});
+		await writeJsonFile(workspaceDir, fileName, { version: "1.0" });
 	}
 }

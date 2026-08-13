@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import configSchema from "../config.schema.json";
 
 /**
- * Red-phase gate for chunk 1.3: config.schema.json machine-checkable validation
- * against the ADR-0009 enum matrix and the config.json shape (build-spec §3.1).
+ * Pins config.schema.json machine-checkable validation: the ADR-0009 enum
+ * matrix, the config.json shape (build-spec §3.1), and strict nested objects.
  *
  * Contract grounding:
  * - workspace-context.contract.yaml (validate_config): language accepts
@@ -15,10 +15,9 @@ import configSchema from "../config.schema.json";
  *   default "throws", with the error-return alternative documented as "returns".
  * - build-spec §3.1: grammarVersion, schemaVersion, sourceRoots, language,
  *   testFramework, generatedDir, staleness.blockOnStale (boolean).
- *
- * Assumption: the schema lives at <repo root>/config.schema.json (JSON Schema
- * draft-07) and is imported directly. Until the Sixth Man authors that file, this
- * module cannot even load — that import failure IS the Red.
+ * - config.schema.json (JSON Schema draft-07, imported from the repo root):
+ *   the nested staleness/rejection objects reject unknown keys via
+ *   additionalProperties: false.
  */
 
 const ajv = new Ajv({ allErrors: true });
@@ -117,6 +116,32 @@ describe("config.schema.json — rejection.idiom gate (ADR-0007)", () => {
 			expect.arrayContaining(["throws", "returns"]),
 		);
 		expect(error?.message).toMatch(/allowed values/);
+	});
+});
+
+describe("config.schema.json — nested objects reject unknown keys", () => {
+	it("rejects an unknown key inside staleness", () => {
+		const config = baseConfig({
+			staleness: { blockOnStale: true, rogueKey: true },
+		});
+		expect(validateConfig(config)).toBe(false);
+
+		const error = errorAt("/staleness");
+		expect(error).toBeDefined();
+		expect(error?.keyword).toBe("additionalProperties");
+		expect(error?.params?.additionalProperty).toBe("rogueKey");
+	});
+
+	it("rejects an unknown key inside rejection", () => {
+		const config = baseConfig({
+			rejection: { idiom: "throws", rogueKey: true },
+		});
+		expect(validateConfig(config)).toBe(false);
+
+		const error = errorAt("/rejection");
+		expect(error).toBeDefined();
+		expect(error?.keyword).toBe("additionalProperties");
+		expect(error?.params?.additionalProperty).toBe("rogueKey");
 	});
 });
 

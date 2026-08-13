@@ -28,6 +28,7 @@
 		},
 		"staleness": {
 			"type": "object",
+			"additionalProperties": false,
 			"properties": {
 				"blockOnStale": {
 					"type": "boolean"
@@ -37,6 +38,7 @@
 		},
 		"rejection": {
 			"type": "object",
+			"additionalProperties": false,
 			"properties": {
 				"idiom": {
 					"type": "string",
