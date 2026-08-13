@@ -2,7 +2,7 @@
 
 **Machine contract:** [deterministic-generation.contract.yaml](deterministic-generation.contract.yaml)
 **Spec:** [docs/specs/deterministic-generation.md](../specs/deterministic-generation.md)
-**Status:** draft · **Validated:** pending
+**Status:** draft · **Validated:** pass
 
 ## What this context does
 

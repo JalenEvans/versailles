@@ -2,7 +2,7 @@
 
 **Machine contract:** [workspace-context.contract.yaml](workspace-context.contract.yaml)
 **Spec:** [docs/specs/workspace-context.md](../specs/workspace-context.md)
-**Status:** draft · **Validated:** pending
+**Status:** draft · **Validated:** pass
 
 ## What this context does
 

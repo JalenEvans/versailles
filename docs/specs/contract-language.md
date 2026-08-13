@@ -87,10 +87,6 @@ The contract language is the boolean-valued expression grammar (build-spec §4.1
 - No grammar variants per programming language (ADR-0008).
 - No LLM-assisted authoring inside the tool — the structured-error surface exists for external agents to iterate against (ADR-0010).
 
-## Linked Plans
-
-- PLAN-20260811-001 (llama plan "Overview" — Versailles v1 Pipeline): these specs are the behavioral layer; execution detail and sequencing live in the plan.
-
 ---
 
 ## Changelog
@@ -98,3 +94,4 @@ The contract language is the boolean-valued expression grammar (build-spec §4.1
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §4–§5, ADR-0006/0008/0010 |
+| 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |

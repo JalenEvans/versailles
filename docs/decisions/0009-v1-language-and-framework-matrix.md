@@ -52,7 +52,7 @@ Sequencing: **TypeScript + vitest first**, then C# + xUnit, then Python + pytest
 
 ## More Information / Links
 
-- Supersedes the single-language assumptions in [build spec §7](../build-spec.md#7-manifest-extractor-source--manifestsjson) and [§9.4](../build-spec.md#94-output-emitters), and the "single framework" row of [§14](../build-spec.md#14-open-decisions-to-pin-down-during-implementation)
+- Supersedes the single-language assumptions in [build spec §3.1](../build-spec.md#31-configjson) (the `config.json` example), [§7](../build-spec.md#7-manifest-extractor-source--manifestsjson), and [§9.4](../build-spec.md#94-output-emitters), and the "single framework" row of [§14](../build-spec.md#14-open-decisions-to-pin-down-during-implementation)
 - Complements [ADR-0008](0008-language-agnostic-core-pluggable-plugins.md) (language-agnostic core, pluggable edges)
 - Behavioral spec: [docs/specs/versailles.md](../specs/versailles.md)
 
@@ -63,3 +63,4 @@ Sequencing: **TypeScript + vitest first**, then C# + xUnit, then Python + pytest
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial proposal, accepted by Head Coach |
+| 2026-08-13 | associate-head-coach | Supersession note extended to include build-spec §3.1 (config example) |

@@ -93,10 +93,6 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 - No LLM involvement of any kind inside the tool (ADR-0010).
 - No hand-editing of `generated/` as a supported workflow (build-spec §9.4).
 
-## Linked Plans
-
-- PLAN-20260811-001 (llama plan "Overview" — Versailles v1 Pipeline): these specs are the behavioral layer; execution detail and sequencing live in the plan.
-
 ---
 
 ## Changelog
@@ -104,3 +100,4 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §9, §2; ADR-0002/0007/0008/0009/0010 |
+| 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |

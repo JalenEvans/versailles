@@ -86,10 +86,6 @@ Human review is the human-in-the-loop gate between staged contract objects and a
 - No retention policy for declined staged objects (open question in the review domain doc).
 - No batch/multi-object approval flow.
 
-## Linked Plans
-
-- PLAN-20260811-001 (llama plan "Overview" — Versailles v1 Pipeline): these specs are the behavioral layer; execution detail and sequencing live in the plan.
-
 ---
 
 ## Changelog
@@ -97,3 +93,4 @@ Human review is the human-in-the-loop gate between staged contract objects and a
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §11; ADR-0003/0010 |
+| 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |

@@ -67,7 +67,7 @@ predicates by name.
   "schemaVersion": "1.0",
   "sourceRoots": ["src/**/*.ts"],
   "language": "typescript",
-  "testFramework": "jest",
+  "testFramework": "vitest",
   "generatedDir": ".versailles/generated",
   "staleness": {
     "blockOnStale": true
@@ -392,7 +392,7 @@ For each operation:
 
 ### 9.4 Output emitters
 
-- Pluggable per `config.testFramework` (pytest, jest, etc. — v1 target: one framework).
+- Pluggable per `config.testFramework` (pytest, xunit, etc. — v1 target: three frameworks; typescript + vitest first).
 - Emitter responsibility: take the generator's framework-agnostic test-case IR (input
   values, expected outcome, assertion list, traceability comment) and render it to actual
   test-file syntax.

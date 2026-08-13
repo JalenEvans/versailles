@@ -6,15 +6,15 @@ Contributor map. Start here. If you can't find what you need, open an issue — 
 
 ## Structure Tree
 
-Target layout (this repo is currently scaffold-only; `src/` and `tests/` are filled in by implementation):
+Target layout (init scaffold, config schema, contracts, and tests are in place; remaining `src/` pipeline modules are filled in by implementation):
 
 ```
 versailles
 ├── .versailles/      ← tool state: config.json, contracts.json, manifests.json,
 │   │                    predicates.json, generated/ — versioned and loaded as one unit
 │   └── generated/    ← deterministic generator output (tool-owned, never hand-edited)
-├── src/              ← planned: parser, validator, loader, extractor, generator, cli
-├── tests/            ← planned
+├── src/              ← implemented: cli/init.ts, index.ts; planned: parser, validator, loader, extractor, generator
+├── tests/            ← implemented: init, config-schema enum, smoke (vitest)
 ├── docs/             ← this layer (DDD knowledge base)
 │   ├── domains/      ← bounded contexts (contract-language, manifest-extraction,
 │   │                    workspace-context, deterministic-generation, review)
@@ -30,14 +30,14 @@ versailles
 
 ## Modules / Boundaries
 
-Planned module boundaries per the build spec (§13 milestones). Contracts/specs are created when each context is implemented.
+Module boundaries per the build spec (§13 milestones). Contracts/specs are registered for each implemented context.
 
 | Module | Path (planned) | Owns | Spec | Contract |
 |--------|----------------|------|------|----------|
-| Contract language (grammar + parser + validator) | `src/parser`, `src/validator` | expression grammar, AST, semantic checks, structured error contract | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/contract-language.contract.yaml) |
-| Loader / context | `src/loader` | unified versioned context, version gates, scoped extraction helper | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/workspace-context.contract.yaml) |
-| Manifest extractor | `src/extractor` | source → `manifests.json`, structural `sourceHash` | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/manifest-extraction.contract.yaml) |
-| Deterministic generator | `src/generator` | test-case IR → test files, `generated/coverage.json` | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/deterministic-generation.contract.yaml) |
+| Contract language (grammar + parser + validator) | `src/parser`, `src/validator` | expression grammar, AST, semantic checks, structured error contract | [docs/specs/contract-language.md](specs/contract-language.md) | [draft](contracts/contract-language.contract.yaml) |
+| Loader / context | `src/loader` | unified versioned context, version gates, scoped extraction helper | [docs/specs/workspace-context.md](specs/workspace-context.md) | [draft](contracts/workspace-context.contract.yaml) |
+| Manifest extractor | `src/extractor` | source → `manifests.json`, structural `sourceHash` | [docs/specs/manifest-extraction.md](specs/manifest-extraction.md) | [draft](contracts/manifest-extraction.contract.yaml) |
+| Deterministic generator | `src/generator` | test-case IR → test files, `generated/coverage.json` | [docs/specs/deterministic-generation.md](specs/deterministic-generation.md) | [draft](contracts/deterministic-generation.contract.yaml) |
 | CLI | `src/cli` | command surface (`init`, `extract-manifests`, `validate`, `check`, `generate`, `review`), machine-readable structured output + exit codes for external agents | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/index.md) |
 
 Each module maps to a [bounded context](domains/index.md); the shared vocabulary is the [ubiquitous language](glossary.md).
@@ -52,7 +52,7 @@ Each module maps to a [bounded context](domains/index.md); the shared vocabulary
 
 ## Run / Build / Test
 
-Tool not yet implemented — scaffold stage. Placeholders until `src/` exists (build-spec §13 defines the build order).
+`versailles init` scaffold and tests are implemented. Remaining pipeline modules are built per build-spec §13.
 
 ```bash
 # docs + contract validation

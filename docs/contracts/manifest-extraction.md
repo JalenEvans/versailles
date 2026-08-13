@@ -2,7 +2,7 @@
 
 **Machine contract:** [manifest-extraction.contract.yaml](manifest-extraction.contract.yaml)
 **Spec:** [docs/specs/manifest-extraction.md](../specs/manifest-extraction.md)
-**Status:** draft · **Validated:** pending
+**Status:** draft · **Validated:** pass
 
 ## What this context does
 

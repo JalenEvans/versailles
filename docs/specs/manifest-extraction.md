@@ -87,10 +87,6 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 - No SMT-backed generation or witness synthesis (v2, build-spec §9.5).
 - No LLM client, prompt templates, or in-tool LLM extraction (ADR-0010).
 
-## Linked Plans
-
-- PLAN-20260811-001 (llama plan "Overview" — Versailles v1 Pipeline): these specs are the behavioral layer; execution detail and sequencing live in the plan.
-
 ---
 
 ## Changelog
@@ -98,3 +94,4 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §3.3, §7; ADR-0004/0005/0008/0009/0010 |
+| 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |

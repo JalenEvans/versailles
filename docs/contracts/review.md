@@ -2,7 +2,7 @@
 
 **Machine contract:** [review.contract.yaml](review.contract.yaml)
 **Spec:** [docs/specs/review.md](../specs/review.md)
-**Status:** draft · **Validated:** pending
+**Status:** draft · **Validated:** pass
 
 ## What this context does
 

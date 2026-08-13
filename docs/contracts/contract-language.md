@@ -2,7 +2,7 @@
 
 **Machine contract:** [contract-language.contract.yaml](contract-language.contract.yaml)
 **Spec:** [docs/specs/contract-language.md](../specs/contract-language.md)
-**Status:** draft · **Validated:** pending
+**Status:** draft · **Validated:** pass
 
 ## What this context does
 

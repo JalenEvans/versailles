@@ -88,10 +88,6 @@ The `.versailles/` workspace — `config.json`, `contracts.json`, `manifests.jso
 - No review UI or merge-on-approval implementation (review) — this context supplies the scoped view only.
 - No LLM client, prompt templates, or in-tool LLM invocation (ADR-0010).
 
-## Linked Plans
-
-- PLAN-20260811-001 (llama plan "Overview" — Versailles v1 Pipeline): these specs are the behavioral layer; execution detail and sequencing live in the plan.
-
 ---
 
 ## Changelog
@@ -99,3 +95,4 @@ The `.versailles/` workspace — `config.json`, `contracts.json`, `manifests.jso
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §2, §3.1, §6, §8; ADR-0009/0010 |
+| 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
