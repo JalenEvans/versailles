@@ -1,0 +1,57 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"type": "object",
+	"additionalProperties": false,
+	"properties": {
+		"grammarVersion": {
+			"type": "string"
+		},
+		"schemaVersion": {
+			"type": "string"
+		},
+		"sourceRoots": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		},
+		"language": {
+			"type": "string",
+			"enum": ["typescript", "csharp", "python"]
+		},
+		"testFramework": {
+			"type": "string",
+			"enum": ["vitest", "xunit", "pytest"]
+		},
+		"generatedDir": {
+			"type": "string"
+		},
+		"staleness": {
+			"type": "object",
+			"properties": {
+				"blockOnStale": {
+					"type": "boolean"
+				}
+			},
+			"required": ["blockOnStale"]
+		},
+		"rejection": {
+			"type": "object",
+			"properties": {
+				"idiom": {
+					"type": "string",
+					"enum": ["throws", "returns"]
+				}
+			}
+		}
+	},
+	"required": [
+		"grammarVersion",
+		"schemaVersion",
+		"sourceRoots",
+		"language",
+		"testFramework",
+		"generatedDir",
+		"staleness"
+	]
+}
