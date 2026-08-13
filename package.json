@@ -25,6 +25,7 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",
+		"@types/node": "^26.2.0",
 		"ajv": "^8.17.0",
 		"typescript": "^5.8.0",
 		"vitest": "^3.0.0"
