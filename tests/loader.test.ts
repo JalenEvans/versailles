@@ -1,0 +1,622 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { initWorkspace } from "../src/cli/init.js";
+// The joint .versailles/ loader (Phase 3.1, chunk 3.1). The semantic
+// validator (Phase 3.2) does NOT exist yet — the loader returns
+// validationErrors / validationWarnings as empty arrays, and isValid is
+// driven only by parse, version, and config errors.
+import { extractScoped, loadWorkspace } from "../src/loader/workspace.js";
+
+/**
+ * Loader/context — pinned against build-spec §6, §2, §3.1 and the
+ * workspace-context contract (docs/contracts/workspace-context.contract.yaml).
+ *
+ * The loader is the single shared path into the .versailles/ workspace: it
+ * reads and JSON-parses the four jointly-loaded files (config.json,
+ * contracts.json, manifests.json, predicates.json), applies the version gates
+ * (build-spec §3.1) BEFORE any other processing, parses every expr string in
+ * contracts.json into an AST via parseExpression (src/core/parser.ts),
+ * validates config.json against config.schema.json (ADR-0009 matrix), and
+ * returns ONE VersaillesContext with an aggregated isValid flag (build-spec
+ * §6.5). In this chunk the loader does not run a semantic validator: config
+ * schema errors are recorded into validationErrors under code CONFIG_INVALID,
+ * and validationErrors/validationWarnings otherwise stay empty.
+ *
+ * ── Module contract ────────────────────────────────────────────────────────
+ *
+ * Module: src/loader/workspace.ts
+ * Exports: loadWorkspace, extractScoped, SUPPORTED_GRAMMAR_VERSION,
+ *          SUPPORTED_SCHEMA_VERSION (+ the types below)
+ *
+ * ```ts
+ * export const SUPPORTED_GRAMMAR_VERSION = "1.0";
+ * export const SUPPORTED_SCHEMA_VERSION = "1.0";
+ *
+ * export type WorkspaceConfig = {
+ *   grammarVersion: string;
+ *   schemaVersion: string;
+ *   sourceRoots: string[];
+ *   language: "typescript" | "csharp" | "python";
+ *   testFramework: "vitest" | "xunit" | "pytest";
+ *   generatedDir: string;
+ *   staleness: { blockOnStale: boolean };
+ *   rejection?: { idiom: "throws" | "returns" };
+ * };
+ *
+ * export type ContractClause = { id: string; expr: string };
+ *
+ * export type ContractOperation = {
+ *   id: string;
+ *   params: { name: string; type: string }[];
+ *   preconditions: ContractClause[];
+ *   postconditions: ContractClause[];
+ *   effects: { field: string; kind: "mutate" | "create" | "delete" }[];
+ *   sourceHash: string;
+ * };
+ *
+ * export type ComponentContract = {
+ *   invariants: ContractClause[];
+ *   operations: Record<string, ContractOperation>;
+ * };
+ *
+ * export type ContractsFile = {
+ *   version: string;
+ *   contracts: Record<string, ComponentContract>;
+ * };
+ *
+ * export type ManifestsFile = {
+ *   version: string;
+ *   manifests: Record<string, { sourceHash: string; fields: Record<string, string> }>;
+ * };
+ *
+ * export type PredicatesFile = {
+ *   version: string;
+ *   predicates: Record<string, {
+ *     params: string[];
+ *     paramTypes: string[];
+ *     returnType: string;
+ *     sourceRef: string;
+ *     sourceHash: string;
+ *     verifiedPure: boolean;
+ *   }>;
+ * };
+ *
+ * export type LoaderErrorCode =
+ *   | "VERSION_MISMATCH" // config.grammarVersion / config.schemaVersion out of date
+ *   | "MISSING_FILE"     // one of the four jointly-loaded files absent
+ *   | "INVALID_JSON"     // a present file fails JSON.parse
+ *   | "CONFIG_INVALID"   // config.schema.json / ADR-0009 rejection
+ *   | "NOT_FOUND";       // extractScoped target missing
+ *
+ * export type LoaderError = { code: LoaderErrorCode; field: string; detail: string };
+ * export type LoaderWarning = { code: string; field: string; detail: string };
+ *
+ * export type VersaillesContext = {
+ *   config: WorkspaceConfig | null;
+ *   contracts: ContractsFile | null;
+ *   manifests: ManifestsFile | null;
+ *   predicates: PredicatesFile | null;
+ *   parsedContracts: Record<string, Node>; // clause id from contracts.json → AST
+ *   parseErrors: ParseError[];             // build-spec §4.4, field decorated with the entry index
+ *   validationErrors: LoaderError[];       // version/config/missing-file/invalid-json hard errors
+ *   validationWarnings: LoaderWarning[];
+ *   isValid: boolean;                      // parseErrors empty AND validationErrors empty
+ * };
+ *
+ * export type ScopedView = {
+ *   component: string;
+ *   operation: string | null;
+ *   contract: ComponentContract | ContractOperation | null;
+ *   errors: (ParseError | LoaderError)[]; // scoped by contractId prefix; loader-level errors excluded
+ *   warnings: LoaderWarning[];
+ * };
+ *
+ * export declare function loadWorkspace(workspaceDir: string): Promise<VersaillesContext>;
+ * export declare function extractScoped(
+ *   context: VersaillesContext,
+ *   component: string,
+ *   operation?: string,
+ * ): ScopedView;
+ * ```
+ *
+ * ── Ambiguities resolved by these tests ────────────────────────────────────
+ *
+ * 1. Async: loadWorkspace is async (Promise<VersaillesContext>) — matches the
+ *    repo's existing node:fs/promises convention (initWorkspace in
+ *    src/cli/init.ts) and keeps the door open for an async semantic validator
+ *    in Phase 3.2.
+ * 2. parsedContracts keys: the clause `id` from contracts.json, which the
+ *    build-spec §3.2 file shape already defines as "Component.operation.postN"
+ *    / "Component.operation.preN" / "Component.invariantN" (build-spec §4.4
+ *    example "OrderService.placeOrder.post0"). The loader passes that id to
+ *    parseExpression as the contractId and uses it as the parsedContracts key.
+ * 3. parseErrors keep the §4.4 shape; the loader decorates `field` with the
+ *    entry index (e.g. "postconditions[0]"), which the standalone parser does
+ *    not add (see the tests/parser.test.ts header note).
+ * 4. Version mismatch short-circuits BEFORE any processing: no config schema
+ *    validation and no expr parsing (build-spec §3.1 "checked before
+ *    processing").
+ * 5. Missing file / invalid JSON never throw: the loader records a structured
+ *    LoaderError and the affected context field is null.
+ * 6. Config schema errors go into validationErrors as
+ *    { code: "CONFIG_INVALID", field: <ajv instancePath>, detail: <ajv message> }
+ *    so the contract invariant isValid === (parseErrors empty && validationErrors
+ *    empty) holds in this chunk.
+ * 7. Scoped extraction filters parseErrors/validationErrors by contractId
+ *    prefix; loader-level errors (which carry no contractId) never appear in a
+ *    scoped view.
+ */
+
+// The exact SEEDED_CONFIG written by initWorkspace (src/cli/init.ts); kept
+// local so the loader's happy path is pinned against the seed, not against
+// the loader's own exported constants.
+const SEEDED_CONFIG = {
+	grammarVersion: "1.0",
+	schemaVersion: "1.0",
+	sourceRoots: ["src/**/*.ts"],
+	language: "typescript",
+	testFramework: "vitest",
+	generatedDir: ".versailles/generated",
+	staleness: { blockOnStale: true },
+};
+
+function contractsFixture(): unknown {
+	return {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [{ id: "OrderService.inv0", expr: "total >= 0" }],
+				operations: {
+					placeOrder: {
+						id: "OrderService.placeOrder",
+						params: [
+							{ name: "items", type: "list<OrderItem>" },
+							{ name: "customerId", type: "string" },
+						],
+						preconditions: [
+							{ id: "OrderService.placeOrder.pre0", expr: 'customerId != ""' },
+							{ id: "OrderService.placeOrder.pre1", expr: "items.length > 0" },
+						],
+						postconditions: [
+							{
+								id: "OrderService.placeOrder.post0",
+								expr: 'order.status == "OPEN"',
+							},
+							{
+								id: "OrderService.placeOrder.post1",
+								expr: "old(total) <= total",
+							},
+						],
+						effects: [{ field: "order.status", kind: "mutate" }],
+						sourceHash: "abc123",
+					},
+				},
+			},
+			CustomerService: {
+				invariants: [],
+				operations: {
+					register: {
+						id: "CustomerService.register",
+						params: [{ name: "email", type: "string" }],
+						preconditions: [
+							{
+								id: "CustomerService.register.pre0",
+								expr: "isValidEmail(email)",
+							},
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "def456",
+					},
+				},
+			},
+		},
+	};
+}
+
+function manifestsFixture(): unknown {
+	return {
+		version: "1.0",
+		manifests: {
+			OrderService: {
+				sourceHash: "man-hash-1",
+				fields: { total: "number", status: "string" },
+			},
+			OrderItem: {
+				sourceHash: "man-hash-2",
+				fields: { sku: "string", quantity: "number" },
+			},
+		},
+	};
+}
+
+function predicatesFixture(): unknown {
+	return {
+		version: "1.0",
+		predicates: {
+			isValidEmail: {
+				params: ["email"],
+				paramTypes: ["string"],
+				returnType: "boolean",
+				sourceRef: "EmailUtils.isValidEmail",
+				sourceHash: "pred-hash-1",
+				verifiedPure: true,
+			},
+		},
+	};
+}
+
+async function writeWorkspaceFile(
+	workspaceDir: string,
+	fileName: string,
+	value: unknown,
+): Promise<void> {
+	await writeFile(
+		join(workspaceDir, fileName),
+		`${JSON.stringify(value, null, 2)}\n`,
+		"utf8",
+	);
+}
+
+let tempRoot: string;
+
+beforeAll(async () => {
+	tempRoot = await mkdtemp(join(tmpdir(), "versailles-loader-"));
+});
+
+afterAll(async () => {
+	await rm(tempRoot, { recursive: true, force: true });
+});
+
+/**
+ * Seeds a brand-new workspace via the real initWorkspace (so the seeded
+ * config.json is exercised end-to-end) and returns the `.versailles/` dir.
+ * Tests then overlay the richer contracts/manifests/predicates fixtures (or
+ * deliberately break one file) — each test stays in its own fresh subdir.
+ */
+async function seedWorkspace(name: string): Promise<string> {
+	const targetDir = join(tempRoot, name);
+	await rm(targetDir, { recursive: true, force: true });
+	await initWorkspace(targetDir);
+	return join(targetDir, ".versailles");
+}
+
+async function seedRichWorkspace(name: string): Promise<string> {
+	const ws = await seedWorkspace(name);
+	await writeWorkspaceFile(ws, "contracts.json", contractsFixture());
+	await writeWorkspaceFile(ws, "manifests.json", manifestsFixture());
+	await writeWorkspaceFile(ws, "predicates.json", predicatesFixture());
+	return ws;
+}
+
+describe("loadWorkspace — joint loading of the four .versailles/ files", () => {
+	it("returns one context with all four files parsed, no errors, isValid true", async () => {
+		const ws = await seedRichWorkspace("a-happy-path");
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(context.config).toEqual(SEEDED_CONFIG);
+		expect(context.contracts).toEqual(contractsFixture());
+		expect(context.manifests).toEqual(manifestsFixture());
+		expect(context.predicates).toEqual(predicatesFixture());
+		expect(context.parseErrors).toEqual([]);
+		expect(context.validationErrors).toEqual([]);
+		expect(context.validationWarnings).toEqual([]);
+		expect(context.isValid).toBe(true);
+	});
+
+	it("parses every well-formed expr into an AST keyed by the clause id", async () => {
+		const ws = await seedRichWorkspace("a2-asts");
+
+		const context = await loadWorkspace(ws);
+
+		expect(Object.keys(context.parsedContracts).sort()).toEqual([
+			"CustomerService.register.pre0",
+			"OrderService.inv0",
+			"OrderService.placeOrder.post0",
+			"OrderService.placeOrder.post1",
+			"OrderService.placeOrder.pre0",
+			"OrderService.placeOrder.pre1",
+		]);
+
+		expect(
+			context.parsedContracts["OrderService.placeOrder.post0"],
+		).toMatchObject({ type: "compare", op: "==" });
+		expect(
+			context.parsedContracts["OrderService.placeOrder.post1"],
+		).toMatchObject({ type: "compare", op: "<=", left: { type: "old" } });
+		expect(context.parsedContracts["OrderService.inv0"]).toMatchObject({
+			type: "compare",
+			op: ">=",
+		});
+		expect(
+			context.parsedContracts["CustomerService.register.pre0"],
+		).toMatchObject({ type: "predicateCall", name: "isValidEmail" });
+	});
+});
+
+describe("loadWorkspace — parse errors", () => {
+	it("collects a §4.4-structured error with the decorated field for a malformed expr — never throws", async () => {
+		const ws = await seedWorkspace("b-malformed");
+		await writeWorkspaceFile(ws, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				OrderService: {
+					invariants: [],
+					operations: {
+						placeOrder: {
+							id: "OrderService.placeOrder",
+							params: [],
+							preconditions: [],
+							postconditions: [
+								{ id: "OrderService.placeOrder.post0", expr: "total = 100" },
+							],
+							effects: [],
+							sourceHash: "abc123",
+						},
+					},
+				},
+			},
+		});
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(context.parseErrors).toHaveLength(1);
+		const error = context.parseErrors[0];
+		expect(error).toMatchObject({
+			contractId: "OrderService.placeOrder.post0",
+			field: "postconditions[0]",
+			position: 6,
+			found: "=",
+			expected: ["=="],
+		});
+		expect(error.message).toMatch(/did you mean '=='/);
+		expect(context.parsedContracts).toEqual({});
+		expect(context.isValid).toBe(false);
+	});
+});
+
+describe("loadWorkspace — version gates (build-spec §3.1)", () => {
+	it.each(["grammarVersion", "schemaVersion"])(
+		"hard-fails with an upgrade-path message when config.%s is out of date — never throws",
+		async (versionField) => {
+			const ws = await seedWorkspace(`c-${versionField}`);
+			await writeWorkspaceFile(ws, "config.json", {
+				...SEEDED_CONFIG,
+				[versionField]: "9.9",
+			});
+			// A well-formed expr is present: the version gate must short-circuit
+			// parsing, proving "checked before processing" (build-spec §3.1).
+			await writeWorkspaceFile(ws, "contracts.json", contractsFixture());
+
+			const load = loadWorkspace(ws);
+			await expect(load).resolves.toBeDefined();
+			const context = await load;
+
+			const versionError = context.validationErrors.find(
+				(error) => error.code === "VERSION_MISMATCH",
+			);
+			expect(versionError).toBeDefined();
+			expect(versionError?.field).toBe(versionField);
+			expect(versionError?.detail).toMatch(/upgrade/i);
+			expect(context.parseErrors).toEqual([]);
+			expect(context.parsedContracts).toEqual({});
+			expect(context.isValid).toBe(false);
+		},
+	);
+});
+
+describe("loadWorkspace — missing files", () => {
+	it.each([
+		"config.json",
+		"contracts.json",
+		"manifests.json",
+		"predicates.json",
+	])(
+		"records a structured MISSING_FILE error when %s is absent — never throws",
+		async (missingFile) => {
+			const ws = await seedWorkspace(`d-${missingFile.replace(".", "-")}`);
+			await rm(join(ws, missingFile), { force: true });
+
+			const load = loadWorkspace(ws);
+			await expect(load).resolves.toBeDefined();
+			const context = await load;
+
+			const missingErrors = context.validationErrors.filter(
+				(error) => error.code === "MISSING_FILE",
+			);
+			expect(missingErrors).toHaveLength(1);
+			expect(missingErrors[0].field).toBe(missingFile);
+			expect(missingErrors[0].detail).not.toBe("");
+			if (missingFile === "config.json") {
+				expect(context.config).toBeNull();
+			}
+			expect(context.isValid).toBe(false);
+		},
+	);
+
+	it("records a structured INVALID_JSON error for an unparseable present file — never throws", async () => {
+		const ws = await seedWorkspace("d2-invalid-json");
+		await writeFile(join(ws, "contracts.json"), "{ not valid json !!!", "utf8");
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		const invalidError = context.validationErrors.find(
+			(error) => error.code === "INVALID_JSON",
+		);
+		expect(invalidError).toBeDefined();
+		expect(invalidError?.field).toBe("contracts.json");
+		expect(context.isValid).toBe(false);
+	});
+});
+
+describe("loadWorkspace — config validation against the ADR-0009 matrix", () => {
+	it("rejects config with testFramework 'jest' via a structured CONFIG_INVALID error", async () => {
+		const ws = await seedWorkspace("e-invalid-config");
+		await writeWorkspaceFile(ws, "config.json", {
+			...SEEDED_CONFIG,
+			testFramework: "jest",
+		});
+		await writeWorkspaceFile(ws, "contracts.json", contractsFixture());
+		await writeWorkspaceFile(ws, "manifests.json", manifestsFixture());
+		await writeWorkspaceFile(ws, "predicates.json", predicatesFixture());
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		const configError = context.validationErrors.find(
+			(error) => error.code === "CONFIG_INVALID",
+		);
+		expect(configError).toBeDefined();
+		expect(configError?.field).toBe("/testFramework");
+		expect(configError?.detail).toMatch(/allowed values/);
+		expect(context.parseErrors).toEqual([]);
+		expect(context.isValid).toBe(false);
+	});
+});
+
+describe("extractScoped — scoped views for human review (build-spec §6.6)", () => {
+	it("returns just the operation sub-object with only its own errors — never the whole file", async () => {
+		const ws = await seedWorkspace("f-scoped-operator");
+		await writeWorkspaceFile(ws, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				OrderService: {
+					invariants: [{ id: "OrderService.inv0", expr: "total >= 0" }],
+					operations: {
+						placeOrder: {
+							id: "OrderService.placeOrder",
+							params: [{ name: "customerId", type: "string" }],
+							preconditions: [
+								{
+									id: "OrderService.placeOrder.pre0",
+									expr: 'customerId != ""',
+								},
+							],
+							postconditions: [
+								{ id: "OrderService.placeOrder.post0", expr: "total = 100" },
+							],
+							effects: [],
+							sourceHash: "abc123",
+						},
+					},
+				},
+				CustomerService: {
+					invariants: [],
+					operations: {
+						register: {
+							id: "CustomerService.register",
+							params: [{ name: "email", type: "string" }],
+							preconditions: [
+								{ id: "CustomerService.register.pre0", expr: 'email != ""' },
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "def456",
+						},
+					},
+				},
+			},
+		});
+
+		const context = await loadWorkspace(ws);
+		const view = extractScoped(context, "OrderService", "placeOrder");
+
+		expect(view.component).toBe("OrderService");
+		expect(view.operation).toBe("placeOrder");
+		expect(view.contract).not.toBeNull();
+		const contract = view.contract as Record<string, unknown>;
+		expect(contract).toMatchObject({
+			id: "OrderService.placeOrder",
+			params: [{ name: "customerId", type: "string" }],
+			sourceHash: "abc123",
+		});
+		// Never the whole file: an operation sub-object has no operations map.
+		expect(contract).not.toHaveProperty("operations");
+		expect(contract).not.toHaveProperty("contracts");
+		// Its errors: only the parse error that belongs to this operation.
+		expect(view.errors).toHaveLength(1);
+		expect(view.errors[0]).toMatchObject({
+			contractId: "OrderService.placeOrder.post0",
+			field: "postconditions[0]",
+		});
+	});
+
+	it("scopes by prefix: a clean operation has no errors; component scope aggregates its operations", async () => {
+		const ws = await seedWorkspace("f2-scoped-clean");
+		await writeWorkspaceFile(ws, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				OrderService: {
+					invariants: [],
+					operations: {
+						placeOrder: {
+							id: "OrderService.placeOrder",
+							params: [],
+							preconditions: [],
+							postconditions: [
+								{ id: "OrderService.placeOrder.post0", expr: "total = 100" },
+							],
+							effects: [],
+							sourceHash: "abc123",
+						},
+					},
+				},
+				CustomerService: {
+					invariants: [],
+					operations: {
+						register: {
+							id: "CustomerService.register",
+							params: [{ name: "email", type: "string" }],
+							preconditions: [
+								{ id: "CustomerService.register.pre0", expr: 'email != ""' },
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "def456",
+						},
+					},
+				},
+			},
+		});
+
+		const context = await loadWorkspace(ws);
+
+		const clean = extractScoped(context, "CustomerService", "register");
+		expect(clean.contract).not.toBeNull();
+		expect(clean.contract).toMatchObject({ id: "CustomerService.register" });
+		expect(clean.errors).toEqual([]);
+
+		const componentView = extractScoped(context, "OrderService");
+		expect(componentView.operation).toBeNull();
+		expect(componentView.contract).not.toBeNull();
+		const component = componentView.contract as Record<string, unknown>;
+		expect(component).toHaveProperty("operations");
+		expect(component).toHaveProperty("invariants");
+		// Not the whole file: no top-level "contracts" key.
+		expect(component).not.toHaveProperty("contracts");
+		expect(componentView.errors).toHaveLength(1);
+	});
+});
+
+describe("loadWorkspace — repeatability", () => {
+	it("returns the same structure across repeated loadWorkspace calls", async () => {
+		const ws = await seedRichWorkspace("g-idempotent");
+
+		const first = await loadWorkspace(ws);
+		const second = await loadWorkspace(ws);
+
+		expect(second).toEqual(first);
+		expect(second.isValid).toBe(true);
+	});
+});
