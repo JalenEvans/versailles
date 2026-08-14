@@ -1,0 +1,22 @@
+name: validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  code-validation:
+    name: Code validation (lint, format, build, tests)
+    uses: ./.github/workflows/code-validation.yml
+
+  docs-validation:
+    name: Docs drift + contract validity
+    uses: ./.github/workflows/docs-validation.yml
