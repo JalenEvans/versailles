@@ -440,7 +440,10 @@ function resolveFieldPath(state: WalkState, path: FieldPath): TermResolved {
 		const segment = path[i];
 		const nextDescriptor = appendDescriptor(descriptor, segment);
 
-		if (typeof segment === "string") {
+		// The parser emits the [] wildcard as the STRING "[]" (parser.ts
+		// parseFieldRefSuffixes). Dispatch it as an index — strip list<T> to T
+		// (pinned decision 7) — not as a nested field name.
+		if (typeof segment === "string" && segment !== "[]") {
 			if (current.kind !== "component") {
 				addError(
 					state,

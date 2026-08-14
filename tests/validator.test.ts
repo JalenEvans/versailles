@@ -881,3 +881,156 @@ describe("semanticValidate — error/warning shape (M) + never-throws", () => {
 		expect(result?.errors[0]?.code).toBe("UNKNOWN_FIELD");
 	});
 });
+
+describe("semanticValidate — [] wildcard field-path segment (decision 7)", () => {
+	// build-spec §4.1: field_ref := IDENT ( "." IDENT | "[" NUMBER "]" | "[]" )*;
+	// §4.3: FieldPath = (string | number | "[]")[]. Pinned decision 7: index
+	// segments ("[0]", "[]") are valid only when the current type is list<T>
+	// and strip the type to T. The parser emits the wildcard as the STRING "[]"
+	// (parser.ts parseFieldRefSuffixes), so resolveFieldPath must dispatch "[]"
+	// as an index BEFORE the nested-field-name branch — otherwise a list<T>
+	// field emits a spurious UNRESOLVED_NESTED_FIELD ("not a component type").
+	// docs/specs/manifest-extraction.md relies on the wildcard: order.items[].sku.
+	//
+	// RED phase (chunk 3.2c): (a)–(d) fail against current src; (e) negative
+	// controls assert unchanged outcomes (valid:false + code + field — the
+	// detail message for `[]` on a non-list changes from "not a component type"
+	// to "not a list type" once the fix lands, so the message is not pinned);
+	// (f) pins that none of the positives emit low-confidence warnings.
+
+	it("a: [] on a list<number> field strips to the element type (items[] >= 0)", () => {
+		const result = validate("items[] >= 0", "preconditions", PRE0, PRE_SCOPE);
+		expect(result).toEqual({ valid: true, errors: [], warnings: [] });
+	});
+
+	it("b: [] on a list<component> field then a nested name resolves (orders[].total > 0)", () => {
+		const context = makeContext({
+			manifests: {
+				[OS]: {
+					sourceHash: "man-os",
+					fields: { orders: "list<Order>" },
+				},
+				Order: {
+					sourceHash: "man-order",
+					fields: { total: "number" },
+				},
+			},
+		});
+		const result = validate(
+			"orders[].total > 0",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+			context,
+		);
+		expect(result).toEqual({ valid: true, errors: [], warnings: [] });
+	});
+
+	it("c: chained wildcards resolve through nested lists (orders[].items[] >= 0)", () => {
+		const context = makeContext({
+			manifests: {
+				[OS]: {
+					sourceHash: "man-os",
+					fields: { orders: "list<Order>" },
+				},
+				Order: {
+					sourceHash: "man-order",
+					fields: { items: "list<number>" },
+				},
+			},
+		});
+		const result = validate(
+			"orders[].items[] >= 0",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+			context,
+		);
+		expect(result).toEqual({ valid: true, errors: [], warnings: [] });
+	});
+
+	it("d: wildcard and numeric index mix in one reachable-set comparison (orders[].total > 0 and orders[0].total > 0)", () => {
+		const context = makeContext({
+			manifests: {
+				[OS]: {
+					sourceHash: "man-os",
+					fields: { orders: "list<Order>" },
+				},
+				Order: {
+					sourceHash: "man-order",
+					fields: { total: "number" },
+				},
+			},
+		});
+		const result = validate(
+			"orders[].total > 0 and orders[0].total > 0",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+			context,
+		);
+		expect(result).toEqual({ valid: true, errors: [], warnings: [] });
+	});
+
+	it('e: [] on a non-list field stays UNRESOLVED_NESTED_FIELD (name[] == "x")', () => {
+		const context = makeContext({
+			manifests: {
+				[OS]: {
+					sourceHash: "man-os",
+					fields: { name: "string" },
+				},
+			},
+		});
+		const result = validate(
+			'name[] == "x"',
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+			context,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toMatchObject({
+			code: "UNRESOLVED_NESTED_FIELD",
+			field: "name[]",
+		});
+	});
+
+	it("e: a nested-name segment on a list<number> field stays UNRESOLVED_NESTED_FIELD (items.foo)", () => {
+		const result = validate("items.foo > 0", "preconditions", PRE0, PRE_SCOPE);
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toMatchObject({
+			code: "UNRESOLVED_NESTED_FIELD",
+			field: "items.foo",
+		});
+	});
+
+	it("e: a numeric index on a list<number> field remains valid (items[1] == 0)", () => {
+		const result = validate("items[1] == 0", "preconditions", PRE0, PRE_SCOPE);
+		expect(result).toEqual({ valid: true, errors: [], warnings: [] });
+	});
+
+	it("f: wildcard positives never emit LOW_CONFIDENCE_FIELD (all declared types)", () => {
+		const context = makeContext({
+			manifests: {
+				[OS]: {
+					sourceHash: "man-os",
+					fields: { orders: "list<Order>" },
+				},
+				Order: {
+					sourceHash: "man-order",
+					fields: { total: "number", items: "list<number>" },
+				},
+			},
+		});
+		const result = validate(
+			"orders[].total > 0 and orders[].items[] >= 0",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+			context,
+		);
+		expect(result.valid).toBe(true);
+		expect(result.errors).toEqual([]);
+		expect(result.warnings).toEqual([]);
+	});
+});

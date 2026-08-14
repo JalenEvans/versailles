@@ -30,19 +30,20 @@ import type {
  *    generated AST.
  * 3. Resolvable-field positive invariant: expressions built from fields that
  *    ARE resolvable in the fixture context (balance, order.customer.name,
- *    items[0], params, registered predicates) always validate valid:true with
- *    no resolution errors.
+ *    items[0], items[], params, registered predicates) always validate
+ *    valid:true with no resolution errors.
  * 4. Type-compat consistency: generated number-vs-number field comparisons
  *    never produce a TYPE_MISMATCH error.
  *
- * Note on `[]` wildcard paths: the resolvable-field and type-compat pools use
- * `items[0]` but NOT `items[]`. The parser accepts `items[]` (build-spec §4.1
- * field_ref) as path segment "[]", but the current validator mis-resolves the
- * "[]" wildcard as a nested field name (it requires a component type) instead
- * of stripping list<T> to T, so `items[]` emits a spurious UNRESOLVED_NESTED_FIELD
- * error. That is a separate defect tracked for the validator; these positive
- * invariants only claim paths that ARE resolvable. The never-throws property
- * still covers `[]` segments via the random AST generator.
+ * Note on `[]` wildcard paths: the resolvable-field and type-compat pools DO
+ * include `items[]` (build-spec §4.1 field_ref; the parser emits path segment
+ * "[]"). Pinned decision 7 requires the wildcard to strip list<T> to T, but
+ * the current validator mis-resolves "[]" as a nested field name (it requires
+ * a component type) and emits a spurious UNRESOLVED_NESTED_FIELD error — so
+ * these two properties are RED in the 3.2c chunk and give fast-check
+ * counterexamples for the resolveFieldPath fix (e.g. `items[] == balance`,
+ * `items[] == 0`). The never-throws property still covers `[]` segments via
+ * the random AST generator.
  *
  * Every property uses the standard fast-check-in-vitest pattern:
  * `fc.assert(fc.property(arb, fn), { numRuns })`, with numRuns 100.
@@ -382,6 +383,7 @@ describe("semanticValidate — resolvable-field positive invariant", () => {
 		"amount",
 		"order.total",
 		"items[0]",
+		"items[]",
 	);
 	const NUMBER_LITERAL = fc.integer({ min: 0, max: 1000 });
 	const NUMBER_TERM = fc.oneof(NUMBER_REF, NUMBER_LITERAL);
@@ -476,6 +478,7 @@ describe("semanticValidate — type-compat consistency", () => {
 			"amount",
 			"order.total",
 			"items[0]",
+			"items[]",
 		);
 		const NUMBER_TERM = fc.oneof(NUMBER_REF, fc.integer({ min: 0, max: 1000 }));
 		const numberComparison = fc
