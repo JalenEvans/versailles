@@ -549,8 +549,14 @@ function findOperationParam(
 	if (operation === undefined) {
 		return null;
 	}
-	const params = operation.params ?? [];
-	return params.find((param) => param.name === name) ?? null;
+	// Defense-in-depth (chunk 3.4b, B1): the loader shape guard flags a
+	// non-array / null-element params array as INVALID_SHAPE before any
+	// semantic validation runs, but a direct semanticValidate caller can
+	// still hand us a malformed operation. Mirror the predicate-params
+	// pattern in resolvePredicate and skip null/primitive entries instead
+	// of reading `.name` unguarded (ADR-0010 never-throws).
+	const params = Array.isArray(operation.params) ? operation.params : [];
+	return params.find((param) => param?.name === name) ?? null;
 }
 
 function getManifestEntry(
@@ -585,12 +591,30 @@ function parseManifestField(raw: unknown): ManifestFieldEntry {
 }
 
 /**
+ * Maximum number of list< / optional< wrappers accepted in a single typeRef.
+ * Bounds the ResolvedType depth so compatible()'s per-nesting recursion (one
+ * frame per list/optional level) can never overflow the call stack on a
+ * pathologically deep reference — a same-family compare like `total == total`
+ * with total = list<list<...>> would otherwise recurse 20000 levels deep and
+ * throw RangeError (chunk 3.4b, W1). The parser's own MAX_PARSE_DEPTH (256)
+ * bounds expression nesting; typeRefs live in manifest/param JSON and are not
+ * parsed, so they get their own cap. 512 gives headroom above that while
+ * keeping any one compare well inside the JS call stack. Refs nested past the
+ * cap resolve to null → structured UNKNOWN_FIELD / UNRESOLVED_NESTED_FIELD
+ * errors, never a throw.
+ */
+const MAX_TYPE_REF_DEPTH = 512;
+
+/**
  * Parses a typeRef (build-spec §3.3) into a ResolvedType. Returns null for an
  * empty or structurally invalid reference so callers can fail resolution
  * structurally. Iterative (chunk 3.4a, F2): outer wrappers (list<, optional<)
  * are peeled off in a loop and unwrapped inside-out, so a pathologically deep
  * typeRef (e.g. "list<" repeated 20000×) cannot overflow the call stack — the
- * previous recursive form threw RangeError at depth ~10000.
+ * previous recursive form threw RangeError at depth ~10000. References nested
+ * past MAX_TYPE_REF_DEPTH are rejected (return null) rather than producing a
+ * ResolvedType deep enough to overflow compatible()'s recursion (chunk 3.4b,
+ * W1).
  */
 function parseTypeRef(ref: string): ResolvedType | null {
 	// Defense-in-depth: a malformed manifest may carry a non-string typeRef.
@@ -607,11 +631,17 @@ function parseTypeRef(ref: string): ResolvedType | null {
 			return wrapTypeRef(stack, { kind: "scalar", name: current });
 		}
 		if (current.startsWith("list<") && current.endsWith(">")) {
+			if (stack.length >= MAX_TYPE_REF_DEPTH) {
+				return null;
+			}
 			stack.push("list");
 			current = current.slice("list<".length, -1).trim();
 			continue;
 		}
 		if (current.startsWith("optional<") && current.endsWith(">")) {
+			if (stack.length >= MAX_TYPE_REF_DEPTH) {
+				return null;
+			}
 			stack.push("optional");
 			current = current.slice("optional<".length, -1).trim();
 			continue;

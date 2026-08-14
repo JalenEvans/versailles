@@ -151,8 +151,10 @@ function getConfigValidator(): ConfigValidator {
 
 /**
  * Reads and JSON-parses one workspace file. Missing file → MISSING_FILE error
- * and null; invalid JSON → INVALID_JSON error and null. Never throws for the
- * covered failure modes.
+ * and null; invalid JSON → INVALID_JSON error and null (a present file whose
+ * content is the JSON literal null is also INVALID_JSON — null is not a valid
+ * workspace store; chunk 3.4b, W2). Never throws for the covered failure
+ * modes.
  */
 async function loadJsonFile(
 	workspaceDir: string,
@@ -174,7 +176,24 @@ async function loadJsonFile(
 		throw error;
 	}
 	try {
-		return JSON.parse(raw) as unknown;
+		const parsed = JSON.parse(raw) as unknown;
+		// W2 (chunk 3.4b): a PRESENT file whose content is the JSON literal
+		// `null` parses successfully to null with NO error, then the shape
+		// guard treats null as missing-file-covered and isValid ends TRUE
+		// (false green). A workspace file must be an object; null content is
+		// a structured INVALID_JSON signal carrying the file's field, pushed
+		// BEFORE the config/contracts consumers see the null store — the
+		// `config !== null` guard would otherwise skip config validation and
+		// lose the signal entirely.
+		if (parsed === null) {
+			validationErrors.push({
+				code: "INVALID_JSON",
+				field: fileName,
+				detail: `Workspace file "${fileName}" is the JSON literal null — expected an object`,
+			});
+			return null;
+		}
+		return parsed;
 	} catch {
 		validationErrors.push({
 			code: "INVALID_JSON",
@@ -222,6 +241,8 @@ function isClauseEntry(value: unknown): boolean {
  * - top-level file primitive:            "<file>.json"
  * - clause entry (primitive):            "contracts.contracts.<Component>.<clauseKind>[<index>]"
  * - clauseKind that is not an array:     "contracts.contracts.<Component>.<clauseKind>"
+ * - operation params (non-array/null entry):
+ *   "contracts.contracts.<Component>.operations.<Op>.params"
  * - manifest entry:                      "manifests.manifests.<Component>.fields"
  */
 function validateWorkspaceShapes(
@@ -315,6 +336,27 @@ function validateContractsShape(
 					);
 					ok = false;
 					continue;
+				}
+				// B1 (chunk 3.4b): findOperationParam reads
+				// operation.params unguarded (`params.find(...)` then
+				// `param.name`); a non-array params value ("x", 42, {}) or an
+				// array containing a null/primitive entry crashes the
+				// semantic validator with a raw TypeError. Each entry must be
+				// an object with a string `name` (the crash read); `type`
+				// string-ness is handled defensively by parseTypeRef
+				// downstream. Mirrors the per-entry predicates check.
+				if (
+					operation.params !== undefined &&
+					(!Array.isArray(operation.params) ||
+						operation.params.some(
+							(param) => !isRecord(param) || typeof param.name !== "string",
+						))
+				) {
+					pushShapeError(
+						`contracts.contracts.${componentName}.operations.${operationId}.params`,
+						`Operation "${operationId}" params must be an array of { name, type } entries`,
+					);
+					ok = false;
 				}
 				for (const clauseKind of ["preconditions", "postconditions"] as const) {
 					const clauses = operation[clauseKind];
@@ -695,7 +737,17 @@ function findContract(
 	component: string,
 	operation: string | undefined,
 ): ComponentContract | ContractOperation | null {
-	if (contracts === null) {
+	// B2 (chunk 3.4b): a shape-invalid primitive contracts.json (42, true)
+	// reaches extractScoped via withRecordKey untouched; indexing
+	// `contracts.contracts[component]` on a primitive throws a raw TypeError
+	// (reading the component property of undefined). Mirror the isRecord
+	// helper — a non-object store is simply not found, never a crash
+	// (ADR-0010).
+	if (
+		contracts === null ||
+		typeof contracts !== "object" ||
+		Array.isArray(contracts)
+	) {
 		return null;
 	}
 	const componentContract = contracts.contracts[component];

@@ -92,6 +92,7 @@ import { extractScoped, loadWorkspace } from "../src/loader/workspace.js";
  *   | "MISSING_FILE"     // one of the four jointly-loaded files absent
  *   | "INVALID_JSON"     // a present file fails JSON.parse
  *   | "CONFIG_INVALID"   // config.schema.json / ADR-0009 rejection
+ *   | "INVALID_SHAPE"    // valid-JSON/wrong-shape file (chunk 3.4a, ADR-0010)
  *   | "NOT_FOUND";       // extractScoped target missing
  *
  * export type LoaderError = { code: LoaderErrorCode; field: string; detail: string };
@@ -1276,4 +1277,157 @@ describe("loadWorkspace — malformed-shape workspace files never throw (ADR-001
 		expect(Array.isArray(context.validationErrors)).toBe(true);
 		expect(typeof context.isValid).toBe("boolean");
 	});
+});
+
+/**
+ * Re-review crash holes (chunk 3.4b): the Center's re-review of the 3.4a
+ * robustness fix found four holes the 3.4a fixtures could not reach — none of
+ * them mutated `operation.params`, and none combined a primitive store with
+ * extractScoped. Each test must genuinely reject today with the raw
+ * TypeError/RangeError noted in its comment; the assertions below pin the
+ * structured outcome the fix must produce (no lazy try/catch can satisfy
+ * them).
+ *
+ * B1 — operation.params non-array / null element: findOperationParam
+ *   (src/core/validator.ts) does `operation.params ?? []` then `.find(...)`,
+ *   so `params: "x"`, `42`, `{}` → TypeError: params.find is not a function
+ *   and `[null]` → TypeError: reading 'name'. (params: null coalesces to [] —
+ *   it already passes, so it is not pinned.) Post-fix: a shape-guard check on
+ *   operation.params (mirrors the per-entry predicates check) records
+ *   INVALID_SHAPE with a field naming the params path.
+ * B2 — extractScoped on a shape-invalid primitive contracts.json: findContract
+ *   (src/loader/workspace.ts) does `contracts.contracts[component]` where
+ *   `contracts` is the primitive 42/true → TypeError: Cannot read properties
+ *   of undefined (reading 'Svc'). Post-fix: a non-throwing scoped view with an
+ *   errors array.
+ * W1 — compatible recursion on deep same-family typeRefs: the 3.4a F2 test
+ *   compared a scalar literal to the deep list (returns false, no recursion);
+ *   a same-family compare (`total == total`) makes compatible recurse per
+ *   nesting level (validator.ts list/optional cases) → RangeError at depth
+ *   20000. Post-fix: loadWorkspace resolves with a structured validationErrors
+ *   array + boolean isValid (do not over-pin which).
+ * W2 — a present file whose content is the JSON literal `null` parses to null
+ *   with NO error (loadJsonFile), the shape guard treats null as
+ *   missing-file-covered, and isValid ends TRUE (false green). Post-fix: a
+ *   structured signal carrying the file's field and isValid false.
+ */
+describe("loadWorkspace — re-review crash holes close (chunk 3.4b)", () => {
+	it.each([
+		{ dir: "s11-b1-string", label: 'the string "x"', params: "x" },
+		{ dir: "s11-b1-number", label: "the number 42", params: 42 },
+		{ dir: "s11-b1-object", label: "a plain object {}", params: {} },
+		{
+			dir: "s11-b1-null-element",
+			label: "an array containing a null element",
+			params: [null],
+		},
+	])(
+		"records INVALID_SHAPE when operation params is $label (B1) — never throws",
+		async ({ dir, params }) => {
+			const contracts = baseContracts();
+			contracts.contracts.Svc.operations.op.params =
+				params as ShapeOperation["params"];
+			// A precondition referencing a field forces findOperationParam to
+			// resolve the (broken) params array — without it no param lookup
+			// runs and the crash class stays latent.
+			contracts.contracts.Svc.operations.op.preconditions = [
+				{ id: "Svc.op.pre0", expr: "total >= 0" },
+			];
+
+			const ws = await seedShapeWorkspace(dir, { contracts });
+
+			const load = loadWorkspace(ws);
+			await expect(load).resolves.toBeDefined();
+			const context = await load;
+
+			expect(context.isValid).toBe(false);
+			expect(context.validationErrors).toContainEqual(
+				expect.objectContaining({
+					code: "INVALID_SHAPE",
+					// Chosen naming: contracts.contracts.Svc.operations.op.params
+					field: expect.stringContaining("params"),
+				}),
+			);
+		},
+	);
+
+	it.each([
+		{ dir: "s12-b2-number", label: "the number 42", value: 42 },
+		{ dir: "s12-b2-boolean", label: "the boolean true", value: true },
+	])(
+		"extractScoped returns a scoped view with an errors array when contracts.json is $label (B2) — never throws",
+		async ({ dir, value }) => {
+			const ws = await seedShapeWorkspace(dir, { contracts: value });
+
+			const load = loadWorkspace(ws);
+			await expect(load).resolves.toBeDefined();
+			const context = await load;
+
+			expect(context.isValid).toBe(false);
+			expect(context.validationErrors).toContainEqual(
+				expect.objectContaining({
+					code: "INVALID_SHAPE",
+					field: "contracts.json",
+				}),
+			);
+
+			const view = extractScoped(context, "Svc", "op");
+			expect(view).toBeDefined();
+			expect(Array.isArray(view.errors)).toBe(true);
+		},
+	);
+
+	it("never throws when compatible compares two same-family typeRefs nested 20000 deep (W1) — result keeps validationErrors/isValid", async () => {
+		// W1: the 3.4a F2 test compared a scalar literal to the deep list type
+		// (compatible returns false with no recursion); a same-family compare
+		// (`total == total`) recurses per nesting level in the validator's
+		// list/optional cases → RangeError: Maximum call stack size exceeded.
+		// The fix may emit a structured error or handle the depth — pin only
+		// never-throws plus the shape of the result.
+		const DEPTH = 20000;
+		const deepTypeRef = `${"list<".repeat(DEPTH)}number${">".repeat(DEPTH)}`;
+		const contracts = baseContracts();
+		contracts.contracts.Svc.operations.op.preconditions = [
+			{ id: "Svc.op.pre0", expr: "total == total" },
+		];
+		const manifests = {
+			version: "1.0",
+			manifests: {
+				Svc: { sourceHash: "man-svc", fields: { total: deepTypeRef } },
+			},
+		};
+
+		const ws = await seedShapeWorkspace("s13-compatible-depth-20000", {
+			contracts,
+			manifests,
+		});
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(Array.isArray(context.validationErrors)).toBe(true);
+		expect(typeof context.isValid).toBe("boolean");
+	});
+
+	it.each(["config.json", "contracts.json"])(
+		"does not silently load %s with literal JSON null content as valid (W2) — structured signal with the file field, isValid false",
+		async (file) => {
+			const ws = await seedWorkspace(`s14-null-${file.replace(".", "-")}`);
+			await writeWorkspaceFile(ws, "contracts.json", baseContracts());
+			await writeWorkspaceFile(ws, "manifests.json", baseManifests());
+			await writeWorkspaceFile(ws, "predicates.json", basePredicates());
+			// The file is PRESENT and its content is the JSON literal null
+			// (readFile succeeds, JSON.parse yields null) — distinct from the
+			// missing-file and invalid-JSON cases.
+			await writeFile(join(ws, file), "null", "utf8");
+
+			const context = await loadWorkspace(ws);
+
+			expect(context.isValid).toBe(false);
+			expect(context.validationErrors).toContainEqual(
+				expect.objectContaining({ field: file }),
+			);
+		},
+	);
 });
