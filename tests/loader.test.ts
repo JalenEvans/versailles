@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { initWorkspace } from "../src/cli/init.js";
-// The joint .versailles/ loader (Phase 3.1, chunk 3.1). The semantic
-// validator (Phase 3.2) does NOT exist yet — the loader returns
-// validationErrors / validationWarnings as empty arrays, and isValid is
-// driven only by parse, version, and config errors.
+// The joint .versailles/ loader (Phase 3.1, chunk 3.1; semantic wiring in
+// chunk 3.3). The loader runs the semantic validator (src/core/validator.ts)
+// over every successfully-parsed clause and aggregates its errors/warnings
+// into validationErrors/validationWarnings, which feed the aggregated isValid
+// flag (build-spec §6.5) alongside parse, version, and config errors.
 import { extractScoped, loadWorkspace } from "../src/loader/workspace.js";
 
 /**
@@ -21,9 +22,11 @@ import { extractScoped, loadWorkspace } from "../src/loader/workspace.js";
  * contracts.json into an AST via parseExpression (src/core/parser.ts),
  * validates config.json against config.schema.json (ADR-0009 matrix), and
  * returns ONE VersaillesContext with an aggregated isValid flag (build-spec
- * §6.5). In this chunk the loader does not run a semantic validator: config
- * schema errors are recorded into validationErrors under code CONFIG_INVALID,
- * and validationErrors/validationWarnings otherwise stay empty.
+ * §6.5). After parsing, the loader runs the semantic validator over every
+ * successfully-parsed clause and aggregates its errors/warnings into
+ * validationErrors/validationWarnings (build-spec §6.5); loader-level results
+ * (config schema errors under code CONFIG_INVALID, plus version, missing-file,
+ * and invalid-json errors) are recorded into the same arrays.
  *
  * ── Module contract ────────────────────────────────────────────────────────
  *
@@ -178,7 +181,7 @@ function contractsFixture(): unknown {
 						],
 						preconditions: [
 							{ id: "OrderService.placeOrder.pre0", expr: 'customerId != ""' },
-							{ id: "OrderService.placeOrder.pre1", expr: "items.length > 0" },
+							{ id: "OrderService.placeOrder.pre1", expr: "items[0] != null" },
 						],
 						postconditions: [
 							{
@@ -223,11 +226,15 @@ function manifestsFixture(): unknown {
 		manifests: {
 			OrderService: {
 				sourceHash: "man-hash-1",
-				fields: { total: "number", status: "string" },
+				fields: { total: "number", status: "string", order: "Order" },
 			},
 			OrderItem: {
 				sourceHash: "man-hash-2",
 				fields: { sku: "string", quantity: "number" },
+			},
+			Order: {
+				sourceHash: "man-hash-3",
+				fields: { status: "string" },
 			},
 		},
 	};
@@ -618,5 +625,287 @@ describe("loadWorkspace — repeatability", () => {
 
 		expect(second).toEqual(first);
 		expect(second.isValid).toBe(true);
+	});
+});
+
+/**
+ * Semantic-wiring fixtures (chunk 3.3): the loader runs semanticValidate over
+ * every successfully-parsed clause with the right clauseKind + scope and
+ * appends semantic errors (contractId-carrying) and warnings to
+ * validationErrors/validationWarnings alongside loader-level results. These
+ * tests pin build-spec §6.5: any semantic error flips isValid (ADR-0004
+ * warnings excepted).
+ */
+function semanticErrorContractsFixture(): unknown {
+	return {
+		version: "1.0",
+		contracts: {
+			svc: {
+				invariants: [],
+				operations: {
+					op: {
+						id: "svc.op",
+						params: [],
+						preconditions: [{ id: "svc.op.pre0", expr: "missingField == 0" }],
+						postconditions: [],
+						effects: [],
+						sourceHash: "abc123",
+					},
+				},
+			},
+			otherComp: {
+				invariants: [],
+				operations: {
+					doThing: {
+						id: "otherComp.doThing",
+						params: [],
+						preconditions: [],
+						postconditions: [],
+						effects: [],
+						sourceHash: "def456",
+					},
+				},
+			},
+		},
+	};
+}
+
+function semanticErrorManifestsFixture(): unknown {
+	return {
+		version: "1.0",
+		manifests: {
+			svc: { sourceHash: "man-svc", fields: { known: "number" } },
+			otherComp: { sourceHash: "man-other", fields: {} },
+		},
+	};
+}
+
+function emptyPredicatesFixture(): unknown {
+	return { version: "1.0", predicates: {} };
+}
+
+async function seedSemanticErrorWorkspace(name: string): Promise<string> {
+	const ws = await seedWorkspace(name);
+	await writeWorkspaceFile(
+		ws,
+		"contracts.json",
+		semanticErrorContractsFixture(),
+	);
+	await writeWorkspaceFile(
+		ws,
+		"manifests.json",
+		semanticErrorManifestsFixture(),
+	);
+	await writeWorkspaceFile(ws, "predicates.json", emptyPredicatesFixture());
+	return ws;
+}
+
+describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
+	it("a: an unknown-field clause propagates UNKNOWN_FIELD into validationErrors and flips isValid false", async () => {
+		const ws = await seedSemanticErrorWorkspace("a-unknown-field");
+
+		const context = await loadWorkspace(ws);
+
+		// The clause parsed successfully — the semantic error is an error in
+		// ADDITION to the parse, not a sign the parse failed.
+		expect(context.parsedContracts["svc.op.pre0"]).toBeDefined();
+		expect(context.validationErrors).toContainEqual(
+			expect.objectContaining({
+				code: "UNKNOWN_FIELD",
+				contractId: "svc.op.pre0",
+			}),
+		);
+		expect(context.isValid).toBe(false);
+	});
+
+	it("b: a fully-valid workspace (all fields resolvable, predicates registered+verifiedPure) stays valid with no semantic errors", async () => {
+		const ws = await seedWorkspace("b-semantic-clean");
+		await writeWorkspaceFile(ws, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				svc: {
+					invariants: [{ id: "svc.inv0", expr: "total >= 0" }],
+					operations: {
+						op: {
+							id: "svc.op",
+							params: [{ name: "amount", type: "number" }],
+							preconditions: [
+								{ id: "svc.op.pre0", expr: "isPositive(amount)" },
+							],
+							postconditions: [
+								{ id: "svc.op.post0", expr: "old(total) <= total" },
+							],
+							effects: [],
+							sourceHash: "abc123",
+						},
+					},
+				},
+			},
+		});
+		await writeWorkspaceFile(ws, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				svc: { sourceHash: "man-svc", fields: { total: "number" } },
+			},
+		});
+		await writeWorkspaceFile(ws, "predicates.json", {
+			version: "1.0",
+			predicates: {
+				isPositive: {
+					params: ["n"],
+					paramTypes: ["number"],
+					returnType: "boolean",
+					sourceRef: "Num.isPositive",
+					sourceHash: "p1",
+					verifiedPure: true,
+				},
+			},
+		});
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.isValid).toBe(true);
+		expect(context.validationErrors).toEqual([]);
+		expect(context.validationWarnings).toEqual([]);
+	});
+
+	it("c: a type mismatch between a clause literal and the manifest-declared field type propagates TYPE_MISMATCH with the clause contractId", async () => {
+		const ws = await seedWorkspace("c-type-mismatch");
+		await writeWorkspaceFile(ws, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				svc: {
+					invariants: [],
+					operations: {
+						op: {
+							id: "svc.op",
+							params: [],
+							preconditions: [{ id: "svc.op.pre0", expr: 'balance == "str"' }],
+							postconditions: [],
+							effects: [],
+							sourceHash: "abc123",
+						},
+					},
+				},
+			},
+		});
+		await writeWorkspaceFile(ws, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				svc: { sourceHash: "man-svc", fields: { balance: "number" } },
+			},
+		});
+		await writeWorkspaceFile(ws, "predicates.json", emptyPredicatesFixture());
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.validationErrors).toContainEqual(
+			expect.objectContaining({
+				code: "TYPE_MISMATCH",
+				contractId: "svc.op.pre0",
+			}),
+		);
+		expect(context.isValid).toBe(false);
+	});
+
+	it("d: an inferred (low-confidence) manifest field warns LOW_CONFIDENCE_FIELD but never flips isValid (ADR-0004)", async () => {
+		const ws = await seedWorkspace("d-low-confidence");
+		await writeWorkspaceFile(ws, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				svc: {
+					invariants: [],
+					operations: {
+						op: {
+							id: "svc.op",
+							params: [],
+							preconditions: [
+								{ id: "svc.op.pre0", expr: "inferredField >= 0" },
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "abc123",
+						},
+					},
+				},
+			},
+		});
+		// ADR-0004 extension object form: { type, confidence: "inferred" }.
+		await writeWorkspaceFile(ws, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				svc: {
+					sourceHash: "man-svc",
+					fields: {
+						inferredField: { type: "number", confidence: "inferred" },
+					},
+				},
+			},
+		});
+		await writeWorkspaceFile(ws, "predicates.json", emptyPredicatesFixture());
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.validationWarnings).toContainEqual(
+			expect.objectContaining({ code: "LOW_CONFIDENCE_FIELD" }),
+		);
+		expect(context.validationErrors).toEqual([]);
+		expect(context.isValid).toBe(true);
+	});
+
+	it("e: extractScoped includes the semantic error for the owning component/operation only", async () => {
+		const ws = await seedSemanticErrorWorkspace("e-scoped-semantic");
+
+		const context = await loadWorkspace(ws);
+
+		const opView = extractScoped(context, "svc", "op");
+		expect(opView.errors).toContainEqual(
+			expect.objectContaining({
+				code: "UNKNOWN_FIELD",
+				contractId: "svc.op.pre0",
+			}),
+		);
+
+		const otherView = extractScoped(context, "otherComp");
+		expect(otherView.errors).not.toContainEqual(
+			expect.objectContaining({
+				code: "UNKNOWN_FIELD",
+				contractId: "svc.op.pre0",
+			}),
+		);
+	});
+
+	it("f: loader-level MISSING_FILE and semantic UNKNOWN_FIELD coexist in validationErrors (append, not replace)", async () => {
+		const ws = await seedWorkspace("f-loader-plus-semantic");
+		await writeWorkspaceFile(
+			ws,
+			"contracts.json",
+			semanticErrorContractsFixture(),
+		);
+		await writeWorkspaceFile(
+			ws,
+			"manifests.json",
+			semanticErrorManifestsFixture(),
+		);
+		// predicates.json removed on purpose: config stays valid so the version
+		// gate passes, the loader records MISSING_FILE, and the semantic
+		// validator still runs over the parsed clause.
+		await rm(join(ws, "predicates.json"), { force: true });
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.validationErrors).toContainEqual(
+			expect.objectContaining({
+				code: "MISSING_FILE",
+				field: "predicates.json",
+			}),
+		);
+		expect(context.validationErrors).toContainEqual(
+			expect.objectContaining({
+				code: "UNKNOWN_FIELD",
+				contractId: "svc.op.pre0",
+			}),
+		);
+		expect(context.isValid).toBe(false);
 	});
 });
