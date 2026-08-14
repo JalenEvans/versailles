@@ -15,10 +15,8 @@ concurrency:
 jobs:
   code-validation:
     name: Code validation (lint, format, build, tests)
-    runs-on: ubuntu-latest
     uses: ./.github/workflows/code-validation.yml
 
   docs-validation:
     name: Docs drift + contract validity
-    runs-on: ubuntu-latest
     uses: ./.github/workflows/docs-validation.yml
