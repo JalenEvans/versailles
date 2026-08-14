@@ -25,7 +25,7 @@ versailles
 │   ├── decisions/    ← architecture decision records (ADRs)
 │   └── glossary.md   ← ubiquitous language (single vocabulary for all docs)
 ├── scripts/          ← repo-level validation scripts
-└── .github/          ← PR description template
+└── .github/          ← PR validation pipeline (workflows/) + PR description template
 ```
 
 ## Modules / Boundaries
@@ -59,6 +59,8 @@ Each module maps to a [bounded context](domains/index.md); the shared vocabulary
 scripts/validate-docs.sh
 scripts/validate-contracts.sh
 ```
+
+PRs and pushes to `main` run both gates automatically via `.github/workflows/validation.yml` — `code-validation.yml` (lint, format, build, smoke, tests) and `docs-validation.yml` (the two scripts above).
 
 ## Conventions
 
