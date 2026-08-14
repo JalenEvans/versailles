@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { parseExpression } from "../src/core/parser.js";
 import type { Node } from "../src/core/parser.js";
-// RED phase (VERSAILLES-6): src/generator/ does not exist yet — these value
-// imports fail to resolve. That IS the expected Red state.
+// The generator core (src/generator/) is implemented; these value imports
+// resolve at runtime.
 import {
 	coverageManifest,
 	emitSuite,
@@ -36,17 +36,15 @@ import type { VersaillesContext } from "../src/loader/workspace.js";
  */
 
 const COMPARE_OPS = fc.constantFrom(">=", ">", "<=", "<");
-// NOTE (Power Forward, Green phase): the grammar has no unary minus (pinned in
+// Authoring note: the grammar has no unary minus (pinned in
 // tests/parser.test.ts), so a negative boundary would make the fixture expr
 // (e.g. "amount < -3") fail to parse in parseAst below. Bounding the arbitrary
-// to non-negative values keeps the random-boundary intent and every assertion
-// in this file unchanged.
+// to non-negative values keeps the random-boundary intent.
 const BOUNDARY = fc.integer({ min: 0, max: 50 });
-// NOTE (Power Forward, Green phase): `fc.set` returns a Set (not an array)
-// in the pinned fast-check ^4.9.0 (it is uniqueArray + Set conversion since
-// 4.4.0), and the contextArb fixture calls `members.map(...)`. `uniqueArray`
-// is the array-returning equivalent with identical uniqueness semantics —
-// every assertion in this file is unchanged.
+// Authoring note: `fc.set` returns a Set (not an array) in the pinned
+// fast-check ^4.9.0 (it is uniqueArray + Set conversion since 4.4.0), and the
+// contextArb fixture calls `members.map(...)`. `uniqueArray` is the
+// array-returning equivalent with identical uniqueness semantics.
 const MEMBERS = fc.uniqueArray(fc.constantFrom("A", "B", "C"), {
 	minLength: 1,
 	maxLength: 3,

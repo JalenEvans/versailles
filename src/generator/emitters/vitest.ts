@@ -9,6 +9,8 @@
  * "returns" → expect(op(inputs)).toBeNull()) — never hardcoded (ADR-0007).
  */
 import type {
+	AssertionDescriptor,
+	EmitOptions,
 	EmittedFile,
 	OperationCaseGroup,
 	PlannedCase,
@@ -16,23 +18,48 @@ import type {
 } from "../ir.js";
 
 /** Tool-owned generated output directory (config default, build-spec §9.4). */
-const GENERATED_DIR = ".versailles/generated";
+const DEFAULT_GENERATED_DIR = ".versailles/generated";
+/** Default module import specifier relative to a generated file. */
+const DEFAULT_MODULE_PREFIX = "../../src/";
 
 type ComponentGroup = {
 	operations: OperationCaseGroup[];
 	invariantCases: PlannedCase[];
 };
 
-export function emitVitest(suite: PlannedSuite): EmittedFile[] {
+/**
+ * Valid JS identifier (Center W1): component / operation names and input keys
+ * flow raw into import specifiers, describe titles, method calls and object
+ * keys — the emitter refuses to render anything that could break out of the
+ * generated surface.
+ */
+const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+function assertIdentifier(name: string, what: string): void {
+	if (!IDENTIFIER_RE.test(name)) {
+		throw new Error(
+			`Refusing to emit: ${what} "${name}" is not a valid JS identifier (must match /^[A-Za-z_$][A-Za-z0-9_$]*$/)`,
+		);
+	}
+}
+
+export function emitVitest(
+	suite: PlannedSuite,
+	options?: EmitOptions,
+): EmittedFile[] {
+	const generatedDir = options?.generatedDir ?? DEFAULT_GENERATED_DIR;
+	const modulePaths = options?.modulePaths ?? {};
 	const groups = groupByComponent(suite);
 	const files: EmittedFile[] = [];
 	for (const component of Object.keys(groups)) {
+		assertIdentifier(component, "component name");
 		const content = renderComponentFile(
 			component,
 			groups[component],
 			suite.clauseIds,
+			modulePaths,
 		);
-		files.push({ path: `${GENERATED_DIR}/${component}.test.ts`, content });
+		files.push({ path: `${generatedDir}/${component}.test.ts`, content });
 	}
 	return files;
 }
@@ -60,6 +87,7 @@ function renderComponentFile(
 	component: string,
 	group: ComponentGroup,
 	clauseIds: string[],
+	modulePaths: Record<string, string>,
 ): string {
 	const lines: string[] = [];
 	lines.push(
@@ -68,14 +96,21 @@ function renderComponentFile(
 	lines.push("// Do not edit — regenerate with `versailles generate`.");
 	// §9.3: the traceability comment references the contract clause ids the
 	// generated surface covers (the full source clause set, so zero-coverage
-	// gaps stay visible against the manifest).
-	lines.push(`// traces: ${clauseIds.join(", ")}`);
+	// gaps stay visible against the manifest). Clause ids are escaped with
+	// JSON.stringify so a hostile id can never break out of the comment into
+	// an executable line (Center W1).
+	lines.push(
+		`// traces: ${clauseIds.map((id) => JSON.stringify(id)).join(", ")}`,
+	);
 	lines.push('import { describe, expect, it } from "vitest";');
 	lines.push("");
-	lines.push(`import { ${component} } from "../../src/${component}.js";`);
+	const modulePath =
+		modulePaths[component] ?? `${DEFAULT_MODULE_PREFIX}${component}.js`;
+	lines.push(`import { ${component} } from "${modulePath}";`);
 	lines.push("");
 
 	for (const operation of group.operations) {
+		assertIdentifier(operation.operation, "operation name");
 		lines.push(`describe("${operation.operation}", () => {`);
 		for (const case_ of operation.cases) {
 			lines.push(...renderCase(case_, component, operation.operation));
@@ -87,13 +122,33 @@ function renderComponentFile(
 	if (group.invariantCases.length > 0) {
 		lines.push(`describe("${component} invariants", () => {`);
 		for (const case_ of group.invariantCases) {
-			lines.push(...renderCase(case_, component, operationOf(case_)));
+			const operation = operationOf(case_);
+			assertIdentifier(operation, "operation name");
+			lines.push(...renderCase(case_, component, operation));
 		}
 		lines.push("});");
 		lines.push("");
 	}
 
 	return lines.join("\n");
+}
+
+/**
+ * Matcher family per assertion op — renders a real vitest matcher on the
+ * subject field instead of a bare toBeDefined() accept render (Center W2b).
+ */
+const MATCHER: Record<AssertionDescriptor["op"], string> = {
+	">=": "toBeGreaterThanOrEqual",
+	">": "toBeGreaterThan",
+	"<=": "toBeLessThanOrEqual",
+	"<": "toBeLessThan",
+	"==": "toEqual",
+	"!=": "not.toEqual",
+};
+
+function renderAssertion(assertion: AssertionDescriptor): string {
+	const matcher = MATCHER[assertion.op];
+	return `expect(result.${assertion.subject}).${matcher}(${renderValue(assertion.literal)})`;
 }
 
 function renderCase(
@@ -108,29 +163,51 @@ function renderCase(
 	lines.push(`\tit(${JSON.stringify(title)}, () => {`);
 	if (case_.expects.outcome === "reject") {
 		const idiom = case_.expects.rejectionIdiom ?? "throws";
-		if (idiom === "throws") {
-			lines.push(`\t\texpect(() => ${call}).toThrow();`);
-		} else {
-			lines.push(`\t\texpect(${call}).toBeNull();`);
+		switch (idiom) {
+			case "throws":
+				lines.push(`\t\texpect(() => ${call}).toThrow();`);
+				break;
+			case "returns":
+				lines.push(`\t\texpect(${call}).toBeNull();`);
+				break;
+			default:
+				throw new Error(
+					`Unknown rejection idiom "${idiom}" for case "${case_.id}"`,
+				);
 		}
 	} else {
-		lines.push(`\t\texpect(${call}).toBeDefined();`);
+		const assertions = case_.expects.assertions ?? [];
+		lines.push(`\t\tconst result = ${call};`);
+		lines.push("\t\texpect(result).toBeDefined();");
+		for (const assertion of assertions) {
+			lines.push(`\t\t${renderAssertion(assertion)};`);
+		}
 	}
 	lines.push("\t});");
 	lines.push("");
 	return lines;
 }
 
-/** The operation name is the second segment of "<component>.<operation>.<kind>-<n>". */
+/**
+ * The operation name is the second segment of "<component>.<operation>.<kind>-<n>".
+ * With the id format pinned by Center B1 the segment is always present — a
+ * malformed id is a hard error, never masked by a fallback.
+ */
 function operationOf(case_: PlannedCase): string {
 	const parts = case_.id.split(".");
-	return parts.length >= 2 ? parts[1] : "operation";
+	if (parts.length < 2 || parts[1].length === 0) {
+		throw new Error(
+			`Cannot derive the operation name from case id "${case_.id}" — expected "<component>.<operation>.<kind>-<n>"`,
+		);
+	}
+	return parts[1];
 }
 
 function renderObjectLiteral(inputs: Record<string, unknown>): string {
-	const entries = Object.entries(inputs).map(
-		([key, value]) => `${key}: ${renderValue(value)}`,
-	);
+	const entries = Object.entries(inputs).map(([key, value]) => {
+		assertIdentifier(key, "input key");
+		return `${key}: ${renderValue(value)}`;
+	});
 	return `{ ${entries.join(", ")} }`;
 }
 

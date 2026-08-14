@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { parseExpression } from "../src/core/parser.js";
 import type { ClauseKind, Node, ParseError } from "../src/core/parser.js";
-// RED phase (VERSAILLES-6): src/generator/ does not exist yet. These value
-// imports fail to resolve — that IS the expected Red state. The assertions
-// below are the contract the Power Forward must satisfy when implementing.
+// The generator core (src/generator/) is implemented; these value imports
+// resolve at runtime. The assertions below pin the generator contract the
+// implementation must satisfy.
 import {
 	coverageManifest,
 	emitSuite,
@@ -12,6 +12,7 @@ import {
 } from "../src/generator/index.js";
 import type {
 	CoverageManifest,
+	EmittedFile,
 	OperationCaseGroup,
 	PlannedCase,
 	PlannedSuite,
@@ -33,9 +34,8 @@ import type {
  * The generator is the core value proposition of Versailles: a pure,
  * deterministic compiler from an approved VersaillesContext (isValid: true)
  * to a framework-agnostic test-case IR. This file freezes the IR contract
- * that the Power Forward implements in src/generator/. The Red phase fails
- * at the module boundary (src/generator/index.js is absent); the assertions
- * below are the behaviours the Green phase must satisfy.
+ * that src/generator/ implements. The assertions below pin the behaviours
+ * the implementation must satisfy.
  *
  * ── Module contract (what these tests require from src/generator/) ────────
  *
@@ -77,10 +77,18 @@ import type {
  * };
  *
  * export type EmittedFile = { path: string; content: string };
+ * export type EmitOptions = {
+ *   generatedDir?: string;              // overrides ".versailles/generated"
+ *   modulePaths?: Record<string, string>; // per-component import specifier overrides
+ * };
  * export type CoverageManifest = { coverage: Record<string, string[]> };
  *
  * export declare function planTestCases(context: VersaillesContext): PlannedSuite;
- * export declare function emitSuite(suite: PlannedSuite, framework: "vitest"): EmittedFile[];
+ * export declare function emitSuite(
+ *   suite: PlannedSuite,
+ *   framework: "vitest",
+ *   options?: EmitOptions,
+ * ): EmittedFile[];
  * export declare function coverageManifest(suite: PlannedSuite): CoverageManifest;
  * ```
  *
@@ -548,8 +556,10 @@ describe("planTestCases — per-component invariant tests (§9.2)", () => {
 		const suite = planTestCases(makeContext());
 
 		for (const operation of ["withdraw", "setStatus"]) {
-			const inv = suite.invariantCases.filter((case_) =>
-				case_.id.startsWith(`AccountService.${operation}.`),
+			const inv = suite.invariantCases.filter(
+				(case_) =>
+					case_.kind === "invariant" &&
+					case_.id.startsWith(`AccountService.${operation}.`),
 			);
 			expect(inv.length).toBeGreaterThan(0);
 			for (const case_ of inv) {
@@ -583,6 +593,25 @@ describe("planTestCases — per-component invariant tests (§9.2)", () => {
 		expect(amount).toBeGreaterThanOrEqual(10);
 		expect(amount).toBeLessThanOrEqual(100);
 	});
+
+	it("picks inputs whose DERIVED post-state still satisfies the invariant — the case must be self-consistent (Center W2)", () => {
+		const suite = planTestCases(makeContext());
+		const inv = suite.invariantCases.find(
+			(case_) =>
+				case_.id.startsWith("AccountService.withdraw.") &&
+				case_.kind === "invariant",
+		);
+		expect(inv).toBeDefined();
+		// post0 `old(balance) - amount == balance` derives
+		// post.balance = old(balance) - amount = inputs.balance - inputs.amount.
+		// An invariant case asserts balance >= 0 POST-call, so the derived
+		// post-state must satisfy it — the planner may not emit a case whose
+		// call would itself violate the invariant it claims to preserve
+		// (current: amount=55, balance=50 → post-state -5).
+		const balance = inv?.inputs.balance as number;
+		const callAmount = inv?.inputs.amount as number;
+		expect(balance - callAmount).toBeGreaterThanOrEqual(0);
+	});
 });
 
 describe("planTestCases — expected-rejection cases (§9.2)", () => {
@@ -608,6 +637,40 @@ describe("planTestCases — expected-rejection cases (§9.2)", () => {
 				trace.startsWith("AccountService.withdraw.post"),
 			),
 		).toBe(true);
+	});
+
+	it("uses the IR id format <component>.<operation>.<kind>-<n> — the expected-rejection id carries the operation segment (Center B1)", () => {
+		const suite = planTestCases(makeContext());
+		const er = suite.invariantCases.find(
+			(case_) => case_.kind === "expected-rejection",
+		);
+		expect(er).toBeDefined();
+		// The id must be "<component>.<operation>.<kind>-<n>", so the emitter
+		// can derive the real operation name from segment 1. A component-only
+		// prefix like "AccountService.expected-rejection-0" (no operation) is
+		// a contract violation.
+		expect(er?.id).toMatch(/^[^.]+\.[^.]+\.[^.]+-\d+$/);
+		expect(er?.id).toMatch(
+			/^AccountService\.withdraw\.expected-rejection-\d+$/,
+		);
+	});
+
+	it("traces post0 for the expected-rejection case whose inputs genuinely satisfy it under post-state resolution (Center W3)", () => {
+		const suite = planTestCases(makeContext());
+		const er = suite.invariantCases.find(
+			(case_) => case_.kind === "expected-rejection",
+		);
+		expect(er).toBeDefined();
+		// Deterministic sweep first hit: amount=51 with captured pre-state
+		// balance=50 derives post.balance = 50 - 51 = -1. DbC semantics: bare
+		// field refs in a postcondition resolve to the POST-state (old() →
+		// pre-state), so post0 `old(balance) - amount == balance` evaluates
+		// 50 - 51 == -1 → true. A genuinely-satisfied postcondition must not
+		// be dropped from the case's traces.
+		expect(er?.inputs.amount).toBe(51);
+		expect(er?.traces).toContain("AccountService.withdraw.post0");
+		expect(er?.traces).toContain("AccountService.withdraw.post1");
+		expect(er?.traces).toContain("AccountService.inv0");
 	});
 });
 
@@ -764,6 +827,67 @@ describe("emitSuite — vitest emitter (§9.4, ADR-0008)", () => {
 		expect(() => emitSuite(suite, "xunit" as never)).toThrow();
 		expect(() => emitSuite(suite, "pytest" as never)).toThrow();
 	});
+
+	it("renders every test call as a valid <component>.<operation>(...) — never a case-id-derived method (Center B1)", () => {
+		const suite = planTestCases(makeContext());
+		const files = emitSuite(suite, "vitest");
+		const all = allCases(suite);
+
+		for (const case_ of all) {
+			const file = files.find((candidate) =>
+				candidate.content.includes(case_.id),
+			);
+			expect(file).toBeDefined();
+			// The emitter derives the operation from the id's <kind>-<n> tail,
+			// not from a real operation for expected-rejection cases. No call
+			// expression may be formed from the case-id suffix — the id
+			// `<component>.<operation>.<kind>-<n>` must contain the real
+			// operation in segment 1.
+			const nonComponent = case_.id.split(".").slice(1).join(".");
+			expect(file?.content).not.toContain(`.${nonComponent}(`);
+		}
+
+		// The fixture's expected-rejection case must call the real operation
+		// `withdraw` — `AccountService.expected-rejection-0({...})` is invalid.
+		const er = suite.invariantCases.find(
+			(case_) => case_.kind === "expected-rejection",
+		);
+		expect(er).toBeDefined();
+		const erFile = files.find((candidate) =>
+			candidate.content.includes(er?.id),
+		);
+		expect(erFile).toBeDefined();
+		expect(erFile?.content).toContain("AccountService.withdraw({");
+		expect(erFile?.content).not.toContain("AccountService.expected-rejection");
+	});
+
+	it("emits a real invariant assertion for invariant cases — the subject field must be checked, not just toBeDefined() (Center W2)", () => {
+		const suite = planTestCases(makeContext());
+		const files = emitSuite(suite, "vitest");
+		const inv = suite.invariantCases.find(
+			(case_) => case_.kind === "invariant",
+		);
+		expect(inv).toBeDefined();
+		const file = files.find((candidate) => candidate.content.includes(inv?.id));
+		expect(file).toBeDefined();
+
+		// Scope to the invariant case's own rendered it() block.
+		const start = file?.content.indexOf(`it("${inv?.id}`);
+		expect(start).toBeGreaterThan(-1);
+		const end = file?.content.indexOf("\n\t});", start);
+		const block = file?.content.slice(start, end);
+
+		// The block must reference the invariant's subject field (balance) in
+		// an assertion — and at least one such assertion must NOT be the
+		// degenerate `expect(op(inputs)).toBeDefined()` accept render.
+		const balanceAssertions = block
+			.split("\n")
+			.filter((line) => line.includes("expect(") && line.includes("balance"));
+		expect(balanceAssertions.length).toBeGreaterThan(0);
+		expect(
+			balanceAssertions.some((line) => !line.includes("toBeDefined()")),
+		).toBe(true);
+	});
 });
 
 describe("emitSuite — idempotent full-file regeneration (§9.4)", () => {
@@ -775,6 +899,160 @@ describe("emitSuite — idempotent full-file regeneration (§9.4)", () => {
 		expect(second).toEqual(first);
 		expect(second.map((file) => file.content)).toEqual(
 			first.map((file) => file.content),
+		);
+	});
+});
+
+describe("emitSuite — identifier safety (Center W1: injection into generated files)", () => {
+	// A hostile name that would terminate a string/statement if it flowed raw
+	// into an import, describe title, method call, object key, or comment.
+	const HOSTILE = 'Evil";globalThis.PWNED=1;//';
+
+	function makeNamedContext(
+		componentName: string,
+		operationName: string,
+		extraParamNames: string[],
+	): VersaillesContext {
+		const contracts: ContractsFile = {
+			version: "1.0",
+			contracts: {
+				[componentName]: {
+					invariants: [{ id: `${componentName}.inv0`, expr: "balance >= 0" }],
+					operations: {
+						[operationName]: {
+							id: `${componentName}.${operationName}`,
+							params: [
+								{ name: "amount", type: "number" },
+								...extraParamNames.map((name) => ({
+									name,
+									type: "string",
+								})),
+							],
+							preconditions: [
+								{
+									id: `${componentName}.${operationName}.pre0`,
+									expr: "amount >= 10",
+								},
+							],
+							postconditions: [],
+							effects: [{ field: "balance", kind: "mutate" }],
+							sourceHash: "named-hash",
+						},
+					},
+				},
+			},
+		};
+		return {
+			config: makeConfig(),
+			contracts,
+			manifests: {
+				version: "1.0",
+				manifests: {
+					[componentName]: {
+						sourceHash: "man-named",
+						fields: { balance: "number" },
+					},
+				},
+			},
+			predicates: predicatesFixture(),
+			parsedContracts: parseAll(contracts),
+			parseErrors: [],
+			validationErrors: [],
+			validationWarnings: [],
+			isValid: true,
+		};
+	}
+
+	it("throws when the component name is not a valid JS identifier — the raw hostile name never reaches a file (Center W1)", () => {
+		const context = makeNamedContext(HOSTILE, "withdraw", []);
+		// STRONGEST pinned behavior: emitSuite (or the planner) throws on an
+		// invalid identifier instead of rendering it raw into the import
+		// statement, describe title, call expression, object key, or path.
+		expect(() => emitSuite(planTestCases(context), "vitest")).toThrow();
+	});
+
+	it("throws when the operation name is not a valid JS identifier (Center W1)", () => {
+		const context = makeNamedContext("AccountService", HOSTILE, []);
+		expect(() => emitSuite(planTestCases(context), "vitest")).toThrow();
+	});
+
+	it("throws when a param name is not a valid JS identifier — object-key injection (Center W1)", () => {
+		const context = makeNamedContext("AccountService", "withdraw", [HOSTILE]);
+		expect(() => emitSuite(planTestCases(context), "vitest")).toThrow();
+	});
+
+	it("never lets a hostile clause id break out of the traceability comment (Center W1)", () => {
+		const context = makeContext();
+		const contracts = context.contracts;
+		if (contracts === null) {
+			throw new Error("test precondition: contracts fixture must be present");
+		}
+		const withdraw = contracts.contracts[ACCOUNT].operations.withdraw;
+		// A clause id with an embedded newline would terminate the `// traces:`
+		// comment and inject an executable statement into the generated file.
+		withdraw.preconditions = [
+			{ id: "AccountService.withdraw.pre0\nPWNED();//", expr: "amount >= 10" },
+			withdraw.preconditions[1],
+		];
+		context.parsedContracts = parseAll(contracts);
+
+		const suite = planTestCases(context);
+		let files: EmittedFile[];
+		try {
+			files = emitSuite(suite, "vitest");
+		} catch {
+			// Strongest behavior: invalid identifiers throw — no file is
+			// generated, so no breakout can exist.
+			return;
+		}
+
+		for (const file of files) {
+			const traceLine = file.content
+				.split("\n")
+				.find((line) => line.trimStart().startsWith("// traces:"));
+			expect(traceLine).toBeDefined();
+			// The hostile payload may appear inside a JSON-stringified title,
+			// but never as a standalone executable line (a comment breakout).
+			const breakoutLines = file.content
+				.split("\n")
+				.filter((line) => line.trimStart().startsWith("PWNED();"));
+			expect(breakoutLines).toEqual([]);
+		}
+	});
+});
+
+describe("emitSuite — output path configuration (Center W4)", () => {
+	it("defaults to the config generatedDir and ../../src/ module paths when no options are passed", () => {
+		const suite = planTestCases(makeContext());
+		const files = emitSuite(suite, "vitest");
+
+		const accountFile = files.find((file) =>
+			file.path.endsWith("AccountService.test.ts"),
+		);
+		expect(accountFile).toBeDefined();
+		expect(accountFile?.path.startsWith(".versailles/generated/")).toBe(true);
+		expect(accountFile?.content).toContain(
+			'import { AccountService } from "../../src/AccountService.js";',
+		);
+	});
+
+	it("honors a custom generatedDir and module path mapping via the options argument (Center W4)", () => {
+		const suite = planTestCases(makeContext());
+		const files = emitSuite(suite, "vitest", {
+			generatedDir: "custom/generated",
+			modulePaths: { AccountService: "src/account/index.js" },
+		});
+
+		const accountFile = files.find((file) =>
+			file.path.endsWith("AccountService.test.ts"),
+		);
+		expect(accountFile).toBeDefined();
+		expect(accountFile?.path.startsWith("custom/generated/")).toBe(true);
+		expect(accountFile?.content).toContain(
+			'import { AccountService } from "src/account/index.js";',
+		);
+		expect(accountFile?.content).not.toContain(
+			'from "../../src/AccountService.js"',
 		);
 	});
 });

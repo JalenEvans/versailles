@@ -20,6 +20,22 @@ export type CaseKind =
 export type ExpectedOutcome = "accept" | "reject";
 
 /**
+ * A renderable assertion on the call result's subject field, derived from a
+ * simple `field op literal` contract expression (e.g. the invariant
+ * `balance >= 0`). The emitter translates `op` into a real vitest matcher
+ * (`expect(result.balance).toBeGreaterThanOrEqual(0)`) so generated invariant
+ * cases assert the subject field instead of a degenerate `toBeDefined()`.
+ */
+export type AssertionDescriptor = {
+	/** Result field to assert (the expression's subject). */
+	subject: string;
+	/** Comparison operator against the literal. */
+	op: ">=" | ">" | "<=" | "<" | "==" | "!=";
+	/** The value compared against. */
+	literal: unknown;
+};
+
+/**
  * A single planned test case. `inputs` carries the call arguments (param name
  * → value) PLUS the captured pre-call component state (manifest field name →
  * value) so the emitter can resolve `old(field)` and build the pre-state.
@@ -37,6 +53,13 @@ export type PlannedCase = {
 		rejectionIdiom?: string;
 		/** Postcondition clause IDs a satisfaction/invariant case asserts. */
 		postconditions?: string[];
+		/**
+		 * Real matcher assertions on the call result (§9.1/§9.2). The planner
+		 * fills these from simple `field op literal` contract expressions so
+		 * the emitter never reduces an invariant/postcondition check to a bare
+		 * `expect(op(inputs)).toBeDefined()`.
+		 */
+		assertions?: AssertionDescriptor[];
 	};
 	/** Contract clause IDs the case covers (§9.3). */
 	traces: string[];
@@ -62,6 +85,14 @@ export type PlannedSuite = {
 
 /** A full-file output unit — ready for idempotent full-file regeneration. */
 export type EmittedFile = { path: string; content: string };
+
+/** Output configuration for emitSuite (Center W4). */
+export type EmitOptions = {
+	/** Overrides the default ".versailles/generated" output directory. */
+	generatedDir?: string;
+	/** Per-component import specifier overrides (component → module path). */
+	modulePaths?: Record<string, string>;
+};
 
 /** Maps every source clause ID → the test IDs tracing it (§9.3). */
 export type CoverageManifest = { coverage: Record<string, string[]> };

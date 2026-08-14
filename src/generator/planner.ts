@@ -36,6 +36,7 @@ import type {
 	VersaillesContext,
 } from "../loader/workspace.js";
 import type {
+	AssertionDescriptor,
 	CaseKind,
 	CoverageManifest,
 	OperationCaseGroup,
@@ -48,13 +49,6 @@ type NumericOp = ">" | ">=" | "<" | "<=";
 type ClauseShape =
 	| { kind: "numeric"; variable: string; op: NumericOp; boundary: number }
 	| { kind: "in"; variable: string; members: unknown[] }
-	| { kind: "null-check"; variable: string }
-	| {
-			kind: "literal-compare";
-			variable: string;
-			op: "==" | "!=";
-			literal: unknown;
-	  }
 	| { kind: "other" };
 
 type EvalEnv = {
@@ -77,6 +71,46 @@ const EXPECTED_REJECTION_SWEEP_MAX = 300;
 const PRE_STATE_ADJUST_ROUNDS = 10;
 
 /**
+ * Valid JS identifier (Center W1): component / operation / param names flow
+ * into generated files as import specifiers, describe titles, method calls and
+ * object keys. Anything else would let hostile contract names break out of the
+ * generated surface, so the planner refuses to plan them.
+ */
+const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+function assertSafeIdentifier(name: string, what: string): void {
+	if (!IDENTIFIER_RE.test(name)) {
+		throw new Error(
+			`Refusing to generate tests: ${what} "${name}" is not a valid JS identifier (must match /^[A-Za-z_$][A-Za-z0-9_$]*$/)`,
+		);
+	}
+}
+
+/**
+ * Gate: no component / operation / param name may flow raw into a generated
+ * file (Center W1). Clause ids are dotted contract paths, not identifiers, so
+ * they are NOT validated here — the emitter escapes them instead.
+ */
+function assertSafeIdentifiers(context: VersaillesContext): void {
+	if (context.contracts === null) {
+		return;
+	}
+	for (const [componentName, component] of Object.entries(
+		context.contracts.contracts,
+	)) {
+		assertSafeIdentifier(componentName, "component name");
+		for (const [operationName, operation] of Object.entries(
+			component.operations ?? {},
+		)) {
+			assertSafeIdentifier(operationName, "operation name");
+			for (const param of operation.params ?? []) {
+				assertSafeIdentifier(param.name, "param name");
+			}
+		}
+	}
+}
+
+/**
  * Plans the full test-case suite for a validated context. Throws when
  * `context.isValid` is false — generation only runs against approved
  * contracts (contract invariant 1, build-spec §9).
@@ -90,6 +124,7 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 	if (context.contracts === null) {
 		throw new Error("planTestCases requires a contracts store in the context");
 	}
+	assertSafeIdentifiers(context);
 
 	const idiom = context.config?.rejection?.idiom ?? "throws";
 	const operations: OperationCaseGroup[] = [];
@@ -106,17 +141,16 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 		const manifestFields =
 			context.manifests?.manifests[componentName]?.fields ?? {};
 
-		// Component-level counter: expected-rejection ids are prefixed
-		// "<component>." (not "<component>.<operation>.") so the §9.2
-		// per-operation invariant grouping — which treats every
-		// "AccountService.<op>." invariantCases entry as an invariant-kind
-		// case — never misattributes an expected-rejection case to an
-		// operation's invariant surface.
+		// Component-level counter: expected-rejection ids carry the operation
+		// segment "<component>.<operation>.expected-rejection-<n>" (Center B1)
+		// so the emitter can derive the real operation name from segment 1.
+		// The counter itself stays component-scoped so ids stay unique even
+		// when several operations contribute §9.2 cases.
 		const componentCounters: Partial<Record<CaseKind, number>> = {};
-		const nextComponentId = (kind: CaseKind): string => {
+		const nextComponentId = (kind: CaseKind, operation: string): string => {
 			const current = componentCounters[kind] ?? 0;
 			componentCounters[kind] = current + 1;
-			return `${componentName}.${kind}-${current}`;
+			return `${componentName}.${operation}.${kind}-${current}`;
 		};
 
 		for (const [operationName, operation] of Object.entries(
@@ -201,13 +235,36 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 			if (invariants.length > 0) {
 				const validParams = buildValidParams(operation, preconditions, context);
 				const preState = buildPreState(manifestFields, invariants, context);
+				// Center W2a: pick call inputs whose DERIVED post-state still
+				// satisfies every invariant (e.g. amount <= balance for
+				// `old(balance) - amount == balance` with `balance >= 0`) —
+				// the case must be self-consistent.
+				const invariantParams = pickInvariantPreservingParams(
+					operation,
+					preconditions,
+					postconditions,
+					invariants,
+					manifestFields,
+					preState,
+					validParams,
+					context,
+				);
 				const invariantIds = invariants.map((invariant) => invariant.id);
+				// Center W2b: thread real assertion descriptors for simple
+				// `field op literal` invariants so the emitter renders
+				// `expect(result.balance).toBeGreaterThanOrEqual(0)` instead
+				// of a bare toBeDefined() accept render.
+				const assertions = invariantAssertions(invariants, context);
 				invariantCases.push({
 					id: nextId("invariant"),
 					kind: "invariant",
 					description: `call ${componentName}.${operationName} and assert invariant ${invariantIds.join(", ")} still holds`,
-					inputs: { ...validParams, ...preState },
-					expects: { outcome: "accept", postconditions: invariantIds },
+					inputs: { ...invariantParams, ...preState },
+					expects: {
+						outcome: "accept",
+						postconditions: invariantIds,
+						assertions,
+					},
 					traces: invariantIds,
 				});
 
@@ -221,7 +278,7 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 				);
 				if (rejection !== null) {
 					invariantCases.push({
-						id: nextComponentId("expected-rejection"),
+						id: nextComponentId("expected-rejection", operationName),
 						kind: "expected-rejection",
 						description: `postconditions hold but invariant ${rejection.violatedInvariants.join(", ")} would be violated`,
 						inputs: rejection.inputs,
@@ -544,6 +601,183 @@ function allInvariantsHold(
 }
 
 /**
+ * Center W2a: an invariant case must be self-consistent — its call inputs must
+ * derive a post-state that still satisfies every invariant (e.g. amount <=
+ * balance for `old(balance) - amount == balance` with `balance >= 0`). If the
+ * operation's effects feed an invariant, sweep the first numeric param from
+ * its valid lower bound upward and pick the first value whose derived
+ * post-state honors all invariants. Falls back to the valid params when no
+ * adjustment is needed or none can be derived (v1 heuristic — deterministic).
+ */
+function pickInvariantPreservingParams(
+	operation: ContractOperation,
+	preconditions: ContractClause[],
+	postconditions: ContractClause[],
+	invariants: ContractClause[],
+	manifestFields: Record<string, string>,
+	preState: Record<string, unknown>,
+	baseParams: Record<string, unknown>,
+	context: VersaillesContext,
+): Record<string, unknown> {
+	const effectFields = new Set(
+		(operation.effects ?? []).map((effect) => effect.field),
+	);
+	const invariantFields = new Set<string>();
+	for (const invariant of invariants) {
+		const ast = context.parsedContracts[invariant.id];
+		if (ast !== undefined) {
+			collectFieldRefs(ast, invariantFields);
+		}
+	}
+	if (![...effectFields].some((field) => invariantFields.has(field))) {
+		return baseParams;
+	}
+
+	const numericParams = (operation.params ?? [])
+		.filter((param) => param.type.trim() === "number")
+		.map((param) => param.name);
+	if (numericParams.length === 0) {
+		return baseParams;
+	}
+	const target = numericParams[0];
+	const { lower, upper } = numericConstraintBounds(preconditions, context);
+	const lo = lower[target] ?? Number.NEGATIVE_INFINITY;
+	const hi = upper[target] ?? Number.POSITIVE_INFINITY;
+	if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) {
+		return baseParams;
+	}
+
+	for (
+		let value = lo;
+		value <= Math.min(hi, EXPECTED_REJECTION_SWEEP_MAX);
+		value += 1
+	) {
+		const params = { ...baseParams, [target]: value };
+		const post = derivePostState(
+			postconditions,
+			preState,
+			params,
+			effectFields,
+			context,
+		);
+		if (allInvariantsHold(post, invariants, context)) {
+			return params;
+		}
+	}
+	return baseParams;
+}
+
+/**
+ * Center W2b: derives renderable assertion descriptors from simple
+ * `field op literal` invariants (e.g. `balance >= 0`) so the emitter can
+ * assert the invariant's subject field with a real matcher. Compound or
+ * non-comparable invariants contribute no descriptor.
+ */
+function invariantAssertions(
+	invariants: ContractClause[],
+	context: VersaillesContext,
+): AssertionDescriptor[] {
+	const assertions: AssertionDescriptor[] = [];
+	for (const invariant of invariants) {
+		const ast = context.parsedContracts[invariant.id];
+		if (ast === undefined) {
+			continue;
+		}
+		const descriptor = simpleCompareDescriptor(ast);
+		if (descriptor !== null) {
+			assertions.push(descriptor);
+		}
+	}
+	return assertions;
+}
+
+const SIMPLE_COMPARE_OPS = new Set([">=", ">", "<=", "<", "==", "!="]);
+
+const INVERTED_NUMERIC_OP: Record<string, string> = {
+	">": "<",
+	"<": ">",
+	">=": "<=",
+	"<=": ">=",
+};
+
+/**
+ * Extracts `{ subject, op, literal }` from a `field op literal` / `literal op
+ * field` compare node, or null for any other shape.
+ */
+function simpleCompareDescriptor(ast: Node): AssertionDescriptor | null {
+	if (ast.type !== "compare" || !SIMPLE_COMPARE_OPS.has(ast.op)) {
+		return null;
+	}
+	const leftVar = fieldRefName(ast.left);
+	const rightVar = fieldRefName(ast.right);
+	if (leftVar !== null && ast.right.type === "literal") {
+		return {
+			subject: leftVar,
+			op: ast.op as AssertionDescriptor["op"],
+			literal: ast.right.value,
+		};
+	}
+	if (rightVar !== null && ast.left.type === "literal") {
+		const op =
+			ast.op === "==" || ast.op === "!=" ? ast.op : INVERTED_NUMERIC_OP[ast.op];
+		if (op === undefined) {
+			return null;
+		}
+		return {
+			subject: rightVar,
+			op: op as AssertionDescriptor["op"],
+			literal: ast.left.value,
+		};
+	}
+	return null;
+}
+
+/**
+ * Extracts per-variable numeric lower/upper bounds from numeric comparison
+ * preconditions (the same classification buildValidParams relies on).
+ */
+function numericConstraintBounds(
+	preconditions: ContractClause[],
+	context: VersaillesContext,
+): { lower: Record<string, number>; upper: Record<string, number> } {
+	const lower: Record<string, number> = {};
+	const upper: Record<string, number> = {};
+	for (const pre of preconditions) {
+		const ast = context.parsedContracts[pre.id];
+		if (ast === undefined) {
+			continue;
+		}
+		const shape = classifyClause(ast);
+		if (shape.kind !== "numeric") {
+			continue;
+		}
+		const b = shape.boundary;
+		if (shape.op === ">=") {
+			lower[shape.variable] = Math.max(
+				lower[shape.variable] ?? Number.NEGATIVE_INFINITY,
+				b,
+			);
+		} else if (shape.op === ">") {
+			lower[shape.variable] = Math.max(
+				lower[shape.variable] ?? Number.NEGATIVE_INFINITY,
+				b + 1,
+			);
+		} else if (shape.op === "<=") {
+			upper[shape.variable] = Math.min(
+				upper[shape.variable] ?? Number.POSITIVE_INFINITY,
+				b,
+			);
+		} else {
+			upper[shape.variable] = Math.min(
+				upper[shape.variable] ?? Number.POSITIVE_INFINITY,
+				b - 1,
+			);
+		}
+	}
+	return { lower, upper };
+}
+
+/**
  * Builds deterministic valid call arguments: numeric params pick a value
  * inside the intersection of their numeric comparison constraints; string
  * params pick the first `in`-clause member when constrained; enum params pick
@@ -554,8 +788,7 @@ function buildValidParams(
 	preconditions: ContractClause[],
 	context: VersaillesContext,
 ): Record<string, unknown> {
-	const lower: Record<string, number> = {};
-	const upper: Record<string, number> = {};
+	const { lower, upper } = numericConstraintBounds(preconditions, context);
 	const inFirst: Record<string, unknown> = {};
 	for (const pre of preconditions) {
 		const ast = context.parsedContracts[pre.id];
@@ -563,30 +796,7 @@ function buildValidParams(
 			continue;
 		}
 		const shape = classifyClause(ast);
-		if (shape.kind === "numeric") {
-			const b = shape.boundary;
-			if (shape.op === ">=") {
-				lower[shape.variable] = Math.max(
-					lower[shape.variable] ?? Number.NEGATIVE_INFINITY,
-					b,
-				);
-			} else if (shape.op === ">") {
-				lower[shape.variable] = Math.max(
-					lower[shape.variable] ?? Number.NEGATIVE_INFINITY,
-					b + 1,
-				);
-			} else if (shape.op === "<=") {
-				upper[shape.variable] = Math.min(
-					upper[shape.variable] ?? Number.POSITIVE_INFINITY,
-					b,
-				);
-			} else {
-				upper[shape.variable] = Math.min(
-					upper[shape.variable] ?? Number.POSITIVE_INFINITY,
-					b - 1,
-				);
-			}
-		} else if (
+		if (
 			shape.kind === "in" &&
 			inFirst[shape.variable] === undefined &&
 			shape.members.length > 0
@@ -695,14 +905,20 @@ function evaluate(node: Node, env: EvalEnv): unknown {
 		case "fieldRef": {
 			const root = node.path[0];
 			if (typeof root === "string") {
+				// DbC post-state resolution (Center W3): in postcondition
+				// evaluation a bare field ref is the POST-state — only
+				// old(...) names the pre-state. Resolution order is therefore
+				// params → post → pre. (Callers that evaluate invariants and
+				// preconditions pass pre === post, so this order is neutral
+				// there.)
 				if (root in env.params) {
 					return env.params[root];
 				}
-				if (root in env.pre) {
-					return env.pre[root];
-				}
 				if (root in env.post) {
 					return env.post[root];
+				}
+				if (root in env.pre) {
+					return env.pre[root];
 				}
 			}
 			return undefined;
@@ -837,31 +1053,9 @@ function classifyClause(ast: Node): ClauseShape {
 		}
 		return { kind: "other" };
 	}
-	if (effectiveOp === "!=") {
-		const variable = fieldRefName(left);
-		if (variable !== null && right.type === "literal" && right.value === null) {
-			return { kind: "null-check", variable };
-		}
-		if (variable !== null && right.type === "literal") {
-			return {
-				kind: "literal-compare",
-				variable,
-				op: "!=",
-				literal: right.value,
-			};
-		}
-	}
-	if (effectiveOp === "==") {
-		const variable = fieldRefName(left);
-		if (variable !== null && right.type === "literal") {
-			return {
-				kind: "literal-compare",
-				variable,
-				op: "==",
-				literal: right.value,
-			};
-		}
-	}
+	// Anything else (== / != / compound expressions) has no dedicated planner
+	// branch: it falls through to planGenericViolationCase, which derives a
+	// falsifying input straight from the AST.
 	return { kind: "other" };
 }
 
