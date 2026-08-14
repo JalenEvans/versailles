@@ -587,53 +587,64 @@ function parseManifestField(raw: unknown): ManifestFieldEntry {
 /**
  * Parses a typeRef (build-spec §3.3) into a ResolvedType. Returns null for an
  * empty or structurally invalid reference so callers can fail resolution
- * structurally. Nested wrappers are handled by greedy regex backtracking, so
- * list<list<number>> and optional<Order> parse recursively.
+ * structurally. Iterative (chunk 3.4a, F2): outer wrappers (list<, optional<)
+ * are peeled off in a loop and unwrapped inside-out, so a pathologically deep
+ * typeRef (e.g. "list<" repeated 20000×) cannot overflow the call stack — the
+ * previous recursive form threw RangeError at depth ~10000.
  */
 function parseTypeRef(ref: string): ResolvedType | null {
-	const trimmed = ref.trim();
-	if (trimmed === "") {
+	// Defense-in-depth: a malformed manifest may carry a non-string typeRef.
+	if (typeof ref !== "string") {
 		return null;
 	}
-	if (trimmed === "string") {
-		return { kind: "scalar", name: "string" };
-	}
-	if (trimmed === "number") {
-		return { kind: "scalar", name: "number" };
-	}
-	if (trimmed === "boolean") {
-		return { kind: "scalar", name: "boolean" };
-	}
-
-	const listMatch = /^list<(.+)>$/.exec(trimmed);
-	if (listMatch !== null) {
-		const element = parseTypeRef(listMatch[1]);
-		if (element === null) {
+	const stack: ("list" | "optional")[] = [];
+	let current = ref.trim();
+	for (;;) {
+		if (current === "") {
 			return null;
 		}
-		return { kind: "list", element };
-	}
-
-	const optionalMatch = /^optional<(.+)>$/.exec(trimmed);
-	if (optionalMatch !== null) {
-		const inner = parseTypeRef(optionalMatch[1]);
-		if (inner === null) {
-			return null;
+		if (current === "string" || current === "number" || current === "boolean") {
+			return wrapTypeRef(stack, { kind: "scalar", name: current });
 		}
-		return { kind: "optional", inner };
+		if (current.startsWith("list<") && current.endsWith(">")) {
+			stack.push("list");
+			current = current.slice("list<".length, -1).trim();
+			continue;
+		}
+		if (current.startsWith("optional<") && current.endsWith(">")) {
+			stack.push("optional");
+			current = current.slice("optional<".length, -1).trim();
+			continue;
+		}
+		if (current.startsWith("enum<") && current.endsWith(">")) {
+			const members = current
+				.slice("enum<".length, -1)
+				.split(",")
+				.map((member) => member.trim())
+				.filter((member) => member !== "")
+				.map(parseEnumMember);
+			return wrapTypeRef(stack, { kind: "enum", members });
+		}
+		return wrapTypeRef(stack, { kind: "component", name: current });
 	}
+}
 
-	const enumMatch = /^enum<(.+)>$/.exec(trimmed);
-	if (enumMatch !== null) {
-		const members = enumMatch[1]
-			.split(",")
-			.map((member) => member.trim())
-			.filter((member) => member !== "")
-			.map(parseEnumMember);
-		return { kind: "enum", members };
+/**
+ * Builds a ResolvedType from the inside out: the innermost base type wrapped
+ * by every peeled wrapper, outermost first (stack bottom = outermost).
+ */
+function wrapTypeRef(
+	stack: ("list" | "optional")[],
+	inner: ResolvedType,
+): ResolvedType {
+	let resolved = inner;
+	for (let i = stack.length - 1; i >= 0; i--) {
+		resolved =
+			stack[i] === "list"
+				? { kind: "list", element: resolved }
+				: { kind: "optional", inner: resolved };
 	}
-
-	return { kind: "component", name: trimmed };
+	return resolved;
 }
 
 function parseEnumMember(raw: string): string | number | boolean {

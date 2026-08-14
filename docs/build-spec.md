@@ -312,6 +312,15 @@ CI lint, generator) — no component re-implements loading or cross-referencing 
    sub-object plus its errors — used by the human review UI so reviewers see a scoped diff,
    not the whole file.
 
+The loader never throws on malformed input — missing files, invalid JSON, valid-JSON/wrong-shape
+files, and malformed expressions all produce structured errors (`LoaderError` codes
+`VERSION_MISMATCH` | `MISSING_FILE` | `INVALID_JSON` | `CONFIG_INVALID` | `INVALID_SHAPE`, with
+scoped extraction reporting unknown targets as `NOT_FOUND`) rather than unstructured exceptions.
+A runtime shape-guard pass catches wrong-shape files before any consumer touches them, and the
+semantic validator returns structured results — never a raw throw — on arbitrary ASTs/contexts,
+with its errors/warnings flowing into `validationErrors`/`validationWarnings` and `isValid`
+aggregating parse + loader + semantic errors (ADR-0010).
+
 ---
 
 ## 7. Manifest extractor (source → `manifests.json`)

@@ -32,6 +32,7 @@ invariants:
   - "The four top-level .versailles/ files are always loaded together; no file is interpreted in isolation (build-spec §2)."
   - "Any load path that hits a grammarVersion or schemaVersion mismatch produces a hard error with an explicit upgrade-path message — never a silent best-effort parse (build-spec §3.1)."
   - "isValid is the aggregation of all hard errors: isValid === (parseErrors is empty and validationErrors is empty)."
+  - "The loader never throws on malformed input — missing files, invalid JSON, malformed-shape files, and malformed expressions all surface as structured LoaderError/ParseError/ValidationError objects inside the returned context; no failure path raises an unstructured exception (ADR-0010)."
   - "Every consuming component reaches the workspace through the single shared loader; no component re-implements loading (build-spec §6)."
   - "config.language and config.testFramework always validate against the ADR-0009 enum matrix."
 
@@ -42,6 +43,8 @@ operations:
     ensures:
       - "Returns a single VersaillesContext with config, contracts, manifests, predicates, parsedContracts (contract ID → AST), parseErrors, validationErrors, validationWarnings, and isValid"
       - "Version gates are checked before any processing; a mismatch returns a hard error with an upgrade-path message"
+      - "Never throws on missing files, invalid JSON, malformed-shape files, or version/config mismatches — every failure path returns the VersaillesContext carrying structured LoaderErrors of the fixed code set (VERSION_MISMATCH | MISSING_FILE | INVALID_JSON | CONFIG_INVALID | INVALID_SHAPE)"
+      - "The call never throws an unstructured exception; semantic validation results (ValidationResult { valid, errors, warnings }) are aggregated into validationErrors/validationWarnings, never raised"
       - "No file is interpreted on its own"
     examples:
       - input: "load_workspace('.versailles') on a complete, version-matching workspace"
@@ -67,6 +70,7 @@ operations:
     ensures:
       - "Returns just that component/operation sub-object plus its errors and warnings"
       - "Never returns the whole contracts.json contents"
+      - "Never throws on degenerate or partial contexts (missing files, shape-invalid stores, unknown component/operation) — returns a ScopedView with an errors array, including a structured NOT_FOUND error for unknown targets"
     examples:
       - input: "extract_scoped(context, 'OrderService', 'placeOrder')"
         output: "the OrderService.placeOrder sub-object with its parse/validation errors and warnings only"
@@ -92,6 +96,7 @@ must:
   - "Expose the scoped extraction helper that returns a single component/operation sub-object plus its errors and warnings (build-spec §6.6)."
   - "Orchestrate versailles check: fail on non-empty parseErrors/validationErrors; recompute every stored sourceHash and compare; honor config.staleness.blockOnStale; exit 0 clean, 1 on parse/validation error, 2 on blocking staleness, and warn-with-0 when staleness is non-blocking (build-spec §8)."
   - "Be the single shared loader: every consuming component (CLI commands, review UI, CI lint, generator) loads the workspace through this module, never re-implementing loading (build-spec §6)."
+  - "Return every failure as structured errors inside the returned context or scoped view — never throw — for missing files (MISSING_FILE), invalid JSON (INVALID_JSON), malformed shapes (INVALID_SHAPE, shape-guard pass), version/config mismatches (VERSION_MISMATCH | CONFIG_INVALID), malformed expressions (ParseError), and unknown scoped targets (NOT_FOUND) (build-spec §6, ADR-0010)."
 
 must_not:
   - "Must not interpret any of the four top-level files in isolation — they are versioned together and loaded as one unit (build-spec §2)."
@@ -100,6 +105,7 @@ must_not:
   - "Must not let consumers re-implement loading — the shared loader is the only path into the context (build-spec §6)."
   - "Must not return a whole file from scoped extraction — always the single sub-object plus its errors (build-spec §6.6)."
   - "Must not fail versailles check on staleness when config.staleness.blockOnStale is false — it warns and exits 0 (build-spec §8)."
+  - "Must not throw unstructured exceptions on malformed input — missing/invalid/malformed files, malformed exprs, and degenerate contexts always produce structured error objects (ADR-0010)."
   - "Must not invoke an LLM anywhere in loading or checking (ADR-0010)."
 
 can:
@@ -120,6 +126,9 @@ asserts:
   - "assert: every loader path that encounters a version mismatch returns a hard error containing an upgrade-path message."
   - "assert: extract_scoped returns at most the requested sub-object and never the whole contracts.json content."
   - "assert: check_staleness exits 0 on clean, 1 on parse/validation errors, 2 on blocking staleness, and 0 with a warning when staleness is non-blocking."
+  - "assert: load_workspace never throws on missing/invalid-JSON/malformed-shape files — it returns a VersaillesContext with structured LoaderErrors of the fixed code set (VERSION_MISMATCH | MISSING_FILE | INVALID_JSON | CONFIG_INVALID | INVALID_SHAPE)."
+  - "assert: extract_scoped never throws on degenerate/partial contexts — it returns a ScopedView with an errors array, and reports an unknown component/operation as a structured NOT_FOUND error."
+  - "assert: the semantic validation pass never throws on arbitrary ASTs/contexts — it returns ValidationResult { valid, errors, warnings } and the loader appends its errors to validationErrors and its warnings to validationWarnings (ADR-0010)."
 
 ---
 ## Changelog
@@ -127,3 +136,4 @@ asserts:
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-11 | general-manager | Initial contract from docs/specs/workspace-context.md; build-spec §2, §3.1, §6, §8; ADR-0009/0010 |
+| 2026-08-13 | general-manager | Pinned the loader never-throws guarantee (F3): invariants/ensures/must/must_not/asserts for structured LoaderErrors on missing/invalid-JSON/malformed-shape files, ScopedView errors for degenerate contexts, and ValidationResult aggregation for semantic validation (ADR-0010) |

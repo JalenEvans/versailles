@@ -909,3 +909,371 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 		expect(context.isValid).toBe(false);
 	});
 });
+
+/**
+ * Malformed-shape robustness block (chunk 3.4a, ADR-0010): valid-JSON but
+ * wrong-SHAPE workspace files must never throw — the loader's documented
+ * never-throws promise (src/loader/workspace.ts:10-11). Each test seeds a
+ * valid workspace from the base fixtures below (mirroring
+ * contractsFixture/manifestsFixture) and corrupts ONE file, then pins the
+ * post-fix outcome contract: a structured INVALID_SHAPE loader error, or —
+ * for the degenerate extractScoped cases (C6/C9) — a non-throwing scoped
+ * view carrying an errors array. The tests must genuinely reject today with
+ * the raw TypeError/RangeError; the assertions below are the structured
+ * outcomes the fix must produce (no lazy try/catch can satisfy them).
+ *
+ * Field naming convention chosen for INVALID_SHAPE errors:
+ * - top-level file:                       "<file>.json"
+ * - clause entry (primitive):             "contracts.contracts.<Component>.<clauseKind>[<index>]"
+ * - clauseKind that is not an array:      "contracts.contracts.<Component>.<clauseKind>"
+ * - manifest entry:                       "manifests.manifests.<Component>.fields"
+ */
+type ShapeOperation = {
+	id: string;
+	params: unknown[];
+	preconditions: unknown;
+	postconditions: unknown[];
+	effects: unknown[];
+	sourceHash: string;
+};
+
+type ShapeContractFile = {
+	version: string;
+	contracts: Record<
+		string,
+		{
+			invariants: unknown;
+			operations: Record<string, ShapeOperation>;
+		}
+	>;
+};
+
+type ShapeOverrides = {
+	contracts?: unknown;
+	manifests?: unknown;
+	predicates?: unknown;
+};
+
+function baseContracts(): ShapeContractFile {
+	return {
+		version: "1.0",
+		contracts: {
+			Svc: {
+				invariants: [{ id: "Svc.inv0", expr: "total >= 0" }],
+				operations: {
+					op: {
+						id: "Svc.op",
+						params: [],
+						preconditions: [],
+						postconditions: [],
+						effects: [],
+						sourceHash: "abc123",
+					},
+				},
+			},
+		},
+	};
+}
+
+function baseManifests(): unknown {
+	return {
+		version: "1.0",
+		manifests: {
+			Svc: { sourceHash: "man-svc", fields: { total: "number" } },
+		},
+	};
+}
+
+function basePredicates(): unknown {
+	return { version: "1.0", predicates: {} };
+}
+
+async function seedShapeWorkspace(
+	name: string,
+	overrides: ShapeOverrides = {},
+): Promise<string> {
+	const ws = await seedWorkspace(name);
+	await writeWorkspaceFile(
+		ws,
+		"contracts.json",
+		overrides.contracts ?? baseContracts(),
+	);
+	await writeWorkspaceFile(
+		ws,
+		"manifests.json",
+		overrides.manifests ?? baseManifests(),
+	);
+	await writeWorkspaceFile(
+		ws,
+		"predicates.json",
+		overrides.predicates ?? basePredicates(),
+	);
+	return ws;
+}
+
+describe("loadWorkspace — malformed-shape workspace files never throw (ADR-0010)", () => {
+	it.each([
+		{ file: "contracts.json", value: 42 },
+		{ file: "manifests.json", value: "hello" },
+		{ file: "predicates.json", value: true },
+	])(
+		"records INVALID_SHAPE with field $file when top-level $file is a primitive (C1/C2/C17) — never throws",
+		async ({ file, value }) => {
+			const overrides: ShapeOverrides = {};
+			if (file === "contracts.json") {
+				overrides.contracts = value;
+			}
+			if (file === "manifests.json") {
+				overrides.manifests = value;
+			}
+			if (file === "predicates.json") {
+				overrides.predicates = value;
+			}
+
+			const ws = await seedShapeWorkspace(
+				`s1-primitive-top-level-${file.replace(".", "-")}`,
+				overrides,
+			);
+
+			const load = loadWorkspace(ws);
+			await expect(load).resolves.toBeDefined();
+			const context = await load;
+
+			expect(context.isValid).toBe(false);
+			expect(context.validationErrors).toContainEqual(
+				expect.objectContaining({ code: "INVALID_SHAPE", field: file }),
+			);
+		},
+	);
+
+	it.each([
+		{ label: "a number (42)", value: 42 },
+		{ label: "null", value: null },
+	])(
+		"records INVALID_SHAPE for a clause entry that is $label (C4/C5) — never throws",
+		async ({ value }) => {
+			const contracts = baseContracts();
+			contracts.contracts.Svc.invariants = [value];
+
+			const ws = await seedShapeWorkspace(
+				`s2-clause-entry-${JSON.stringify(value)}`,
+				{ contracts },
+			);
+
+			const load = loadWorkspace(ws);
+			await expect(load).resolves.toBeDefined();
+			const context = await load;
+
+			expect(context.isValid).toBe(false);
+			expect(context.validationErrors).toContainEqual(
+				expect.objectContaining({
+					code: "INVALID_SHAPE",
+					// Chosen naming: contracts.contracts.Svc.invariants[0]
+					field: expect.stringContaining("invariants"),
+				}),
+			);
+		},
+	);
+
+	it("records INVALID_SHAPE when the invariants clauseKind is not an array (C12) — never throws", async () => {
+		const contracts = baseContracts();
+		contracts.contracts.Svc.invariants = 5;
+
+		const ws = await seedShapeWorkspace("s3-invariants-non-array", {
+			contracts,
+		});
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(context.isValid).toBe(false);
+		expect(context.validationErrors).toContainEqual(
+			expect.objectContaining({
+				code: "INVALID_SHAPE",
+				// Chosen naming: contracts.contracts.Svc.invariants
+				field: expect.stringContaining("invariants"),
+			}),
+		);
+	});
+
+	it("records INVALID_SHAPE when the preconditions clauseKind is not an array (C13) — never throws", async () => {
+		const contracts = baseContracts();
+		contracts.contracts.Svc.operations.op.preconditions = "x";
+
+		const ws = await seedShapeWorkspace("s4-preconditions-non-array", {
+			contracts,
+		});
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(context.isValid).toBe(false);
+		expect(context.validationErrors).toContainEqual(
+			expect.objectContaining({
+				code: "INVALID_SHAPE",
+				// Chosen naming: contracts.contracts.Svc.operations.op.preconditions
+				field: expect.stringContaining("preconditions"),
+			}),
+		);
+	});
+
+	it("records INVALID_SHAPE when a manifest entry is missing fields, root ref (C7) — never throws", async () => {
+		const manifests = {
+			version: "1.0",
+			manifests: { Svc: { sourceHash: "man-svc" } },
+		};
+
+		const ws = await seedShapeWorkspace("s5-manifest-missing-fields-root", {
+			manifests,
+		});
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(context.isValid).toBe(false);
+		expect(context.validationErrors).toContainEqual(
+			expect.objectContaining({
+				code: "INVALID_SHAPE",
+				// Chosen naming: manifests.manifests.Svc.fields
+				field: expect.stringContaining("Svc"),
+			}),
+		);
+	});
+
+	it("records INVALID_SHAPE when a nested-referenced manifest entry is missing fields (C8) — never throws", async () => {
+		const contracts = baseContracts();
+		contracts.contracts.Svc.invariants = [
+			{ id: "Svc.inv0", expr: 'order.status == "OPEN"' },
+		];
+		const manifests = {
+			version: "1.0",
+			manifests: {
+				Svc: { sourceHash: "man-svc", fields: { order: "Order" } },
+				Order: { sourceHash: "man-order" },
+			},
+		};
+
+		const ws = await seedShapeWorkspace("s6-manifest-missing-fields-nested", {
+			contracts,
+			manifests,
+		});
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(context.isValid).toBe(false);
+		expect(context.validationErrors).toContainEqual(
+			expect.objectContaining({
+				code: "INVALID_SHAPE",
+				// Chosen naming: manifests.manifests.Order.fields
+				field: expect.stringContaining("Order"),
+			}),
+		);
+	});
+
+	it("records INVALID_SHAPE when a manifest entry has fields: null (C10) — never throws", async () => {
+		const manifests = {
+			version: "1.0",
+			manifests: { Svc: { sourceHash: "man-svc", fields: null } },
+		};
+
+		const ws = await seedShapeWorkspace("s7-manifest-fields-null", {
+			manifests,
+		});
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(context.isValid).toBe(false);
+		expect(context.validationErrors).toContainEqual(
+			expect.objectContaining({
+				code: "INVALID_SHAPE",
+				// Chosen naming: manifests.manifests.Svc.fields
+				field: expect.stringContaining("Svc"),
+			}),
+		);
+	});
+
+	it("extractScoped returns a scoped view with an errors array for a component lacking operations (C9) — never throws", async () => {
+		const contracts = {
+			version: "1.0",
+			contracts: { Svc: { invariants: [] } },
+		};
+
+		const ws = await seedShapeWorkspace("s8-extract-scoped-no-operations", {
+			contracts,
+		});
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		const view = extractScoped(context, "Svc", "op");
+		expect(view).toBeDefined();
+		expect(Array.isArray(view.errors)).toBe(true);
+	});
+
+	it("extractScoped returns a scoped view with an errors array after an id-less failing clause (C6) — never throws", async () => {
+		const contracts = {
+			version: "1.0",
+			contracts: {
+				Svc: {
+					invariants: [],
+					operations: {
+						op: {
+							id: "Svc.op",
+							params: [],
+							preconditions: [{ expr: "total = 100" }],
+							postconditions: [],
+							effects: [],
+							sourceHash: "abc123",
+						},
+					},
+				},
+			},
+		};
+
+		const ws = await seedShapeWorkspace("s9-idless-failing-clause", {
+			contracts,
+		});
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		const view = extractScoped(context, "Svc", "op");
+		expect(view).toBeDefined();
+		expect(Array.isArray(view.errors)).toBe(true);
+	});
+
+	it("never throws when a manifest typeRef nests 20000 levels deep (F2) — result keeps validationErrors/isValid", async () => {
+		// F2: today the validator's recursive parseTypeRef overflows the call
+		// stack at depth 20000 (RangeError: Maximum call stack size exceeded).
+		// The fix may emit a structured error OR raise/lower the depth guard —
+		// pin only never-throws plus the shape of the result.
+		const DEPTH = 20000;
+		const deepTypeRef = `${"list<".repeat(DEPTH)}number${">".repeat(DEPTH)}`;
+		const manifests = {
+			version: "1.0",
+			manifests: {
+				Svc: { sourceHash: "man-svc", fields: { total: deepTypeRef } },
+			},
+		};
+
+		const ws = await seedShapeWorkspace("s10-type-ref-depth-20000", {
+			manifests,
+		});
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(Array.isArray(context.validationErrors)).toBe(true);
+		expect(typeof context.isValid).toBe("boolean");
+	});
+});
