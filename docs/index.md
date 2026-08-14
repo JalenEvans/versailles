@@ -38,7 +38,7 @@ Module boundaries per the build spec (§13 milestones). Contracts/specs are regi
 | Loader / context | `src/loader` | unified versioned context, version gates, scoped extraction helper | [docs/specs/workspace-context.md](specs/workspace-context.md) | [draft](contracts/workspace-context.contract.yaml) |
 | Manifest extractor | `src/extractor` | source → `manifests.json`, structural `sourceHash` | [docs/specs/manifest-extraction.md](specs/manifest-extraction.md) | [draft](contracts/manifest-extraction.contract.yaml) |
 | Deterministic generator | `src/generator` | test-case IR → test files, `generated/coverage.json` | [docs/specs/deterministic-generation.md](specs/deterministic-generation.md) | [draft](contracts/deterministic-generation.contract.yaml) |
-| CLI | `src/cli` | command surface (`init`, `extract-manifests`, `validate`, `check`, `generate`, `review`), machine-readable structured output + exit codes for external agents | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/index.md) |
+| CLI | `src/cli` | command surface (`init`, `extract-manifests`, `validate`, `check`, `generate`, `review`), machine-readable structured output + exit codes for external agents | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/versailles.contract.yaml) |
 
 Each module maps to a [bounded context](domains/index.md); the shared vocabulary is the [ubiquitous language](glossary.md).
 

@@ -4,7 +4,7 @@
 **Lifecycle:** draft
 **Owner:** associate-head-coach
 **Threshold:** public-api (the CLI surface, `.versailles/` file formats, generated test files), data (contracts/manifests/predicates are the tool's data layer)
-**Linked contract:** `docs/contracts/versailles.contract.yaml` *(pending)*
+**Linked contract:** `docs/contracts/versailles.contract.yaml`
 
 ---
 
