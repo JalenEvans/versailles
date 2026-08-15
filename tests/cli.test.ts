@@ -65,7 +65,7 @@ import { extractManifests } from "../src/extractors/index.js";
  * | validate          | { valid: boolean }                                     |
  * | check             | { staleIds: string[] }                                 |
  * | generate          | { files: string[] }  (paths written, relative to cwd)   |
- * | review            | (none — PR 2 returns REVIEW_NOT_AVAILABLE, exit 1)      |
+ * | review            | (view/approve/reject payloads — pinned in tests/review.test.ts) |
  *
  * updated   = components covered by the fresh extraction (added OR refreshed)
  * preserved = components in the previous manifests.json the extraction did not
@@ -96,9 +96,11 @@ import { extractManifests } from "../src/extractors/index.js";
  *    ADR-0007). Routes through src/generator/index.js (planTestCases /
  *    emitSuite / coverageManifest) — the generator surface is pinned in the
  *    dedicated describe below and the PF integrates feat/generator-core.
- * 7. review (PR 2 scope): arg validation happens at the CLI boundary; valid
- *    arg shapes route to the review handler which returns REVIEW_NOT_AVAILABLE
- *    (exit 1) until PR 3 replaces the stub — never UNKNOWN_COMMAND.
+ * 7. review: arg validation happens at the CLI boundary; valid arg shapes
+ *    (component [operation]) route to the review handler. A valid shape with
+ *    NO staged object returns NOT_FOUND (exit 1) — never REVIEW_NOT_AVAILABLE,
+ *    never UNKNOWN_COMMAND. The full flow (scoped view / --approve /
+ *    --reject) is pinned in tests/review.test.ts.
  * 8. Determinism (ADR-0002): same argv + same workspace → byte-identical
  *    JSON (no timestamps / randomness) — no LLM is ever invoked (ADR-0010).
  *
@@ -928,16 +930,19 @@ describe("runCli generate — deterministic generation (build-spec §9)", () => 
 	});
 });
 
-// ── review (PR 2 scope: routing + arg validation only) ─────────────────────
+// ── review (valid arg routing; no staged object → NOT_FOUND, exit 1 — real flow) ─
 
-describe("runCli review — PR 2 scope (routing + arg validation; flow is PR 3)", () => {
-	it("valid args (component + operation) route to the review handler — REVIEW_NOT_AVAILABLE, exit 1, never UNKNOWN_COMMAND", async () => {
+describe("runCli review — valid arg shapes route to the handler; no staged object → NOT_FOUND, exit 1 (flow pinned in tests/review.test.ts)", () => {
+	it("valid args (component + operation) route to the review handler — no staged object → NOT_FOUND, exit 1, never REVIEW_NOT_AVAILABLE, never UNKNOWN_COMMAND", async () => {
 		const cwd = await seedGeneratorWorkspace("r-two-args");
 		const result = await runCli(["review", ACCOUNT, "withdraw"], { cwd });
 
 		expect(result.ok).toBe(false);
 		expect(result.exitCode).toBe(1);
 		expect(result.errors).toContainEqual(
+			expect.objectContaining({ code: "NOT_FOUND" }),
+		);
+		expect(result.errors).not.toContainEqual(
 			expect.objectContaining({ code: "REVIEW_NOT_AVAILABLE" }),
 		);
 		expect(result.errors).not.toContainEqual(
@@ -945,13 +950,16 @@ describe("runCli review — PR 2 scope (routing + arg validation; flow is PR 3)"
 		);
 	});
 
-	it("valid args (component only) also route to the review handler — REVIEW_NOT_AVAILABLE, exit 1", async () => {
+	it("valid args (component only) also route to the review handler — no staged object → NOT_FOUND, exit 1, never REVIEW_NOT_AVAILABLE", async () => {
 		const cwd = await seedGeneratorWorkspace("r-one-arg");
 		const result = await runCli(["review", ACCOUNT], { cwd });
 
 		expect(result.ok).toBe(false);
 		expect(result.exitCode).toBe(1);
 		expect(result.errors).toContainEqual(
+			expect.objectContaining({ code: "NOT_FOUND" }),
+		);
+		expect(result.errors).not.toContainEqual(
 			expect.objectContaining({ code: "REVIEW_NOT_AVAILABLE" }),
 		);
 	});

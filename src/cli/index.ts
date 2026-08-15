@@ -13,7 +13,7 @@ import { handleCheck } from "./handlers/check.js";
 import { handleExtractManifests } from "./handlers/extract.js";
 import { handleGenerate } from "./handlers/generate.js";
 import { handleInit } from "./handlers/init.js";
-import { handleReview } from "./handlers/review.js";
+import { type ReviewFlag, handleReview } from "./handlers/review.js";
 import { handleValidate } from "./handlers/validate.js";
 import type { CliResult } from "./types.js";
 
@@ -132,19 +132,34 @@ async function dispatch(argv: string[], cwd: string): Promise<CliResult> {
 			return handleExtractManifests(cwd, prune);
 		}
 		case "review": {
-			if (rest.some((arg) => arg.startsWith("-"))) {
+			let flag: ReviewFlag = null;
+			const positionals: string[] = [];
+			for (const arg of rest) {
+				if (arg === "--approve" || arg === "--reject") {
+					if (flag !== null) {
+						return usageError(
+							"USAGE",
+							`"review" flags --approve and --reject are mutually exclusive — pass only one`,
+						);
+					}
+					flag = arg === "--approve" ? "approve" : "reject";
+					continue;
+				}
+				if (arg.startsWith("-")) {
+					return usageError(
+						"USAGE",
+						`Unexpected flag "${arg}" for review — only --approve and --reject are supported`,
+					);
+				}
+				positionals.push(arg);
+			}
+			if (positionals.length < 1 || positionals.length > 2) {
 				return usageError(
 					"USAGE",
-					"Unexpected flag for review — expected: review <component> [operation]",
+					`review requires exactly one component and an optional operation — got ${positionals.length} argument(s)`,
 				);
 			}
-			if (rest.length < 1 || rest.length > 2) {
-				return usageError(
-					"USAGE",
-					`review requires exactly one component and an optional operation — got ${rest.length} argument(s)`,
-				);
-			}
-			return handleReview(rest[0], rest[1]);
+			return handleReview(cwd, positionals[0], positionals[1], flag);
 		}
 		default: {
 			// Unreachable: COMMANDS membership was checked above and every
