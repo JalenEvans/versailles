@@ -45,7 +45,15 @@ import type {
 	ManifestMap,
 } from "./types.js";
 
-/** Structural-analysis-only compiler options. */
+/**
+ * Structural-analysis-only compiler options.
+ *
+ * lib is pinned to es2015 (NOT the full default set) and types to none:
+ * loading lib.d.ts/lib.dom.d.ts/etc. costs ~1.5–2s per createProgram, and the
+ * extractor only needs primitives + Array/ReadonlyArray (both present in
+ * es2015) to resolve the typeRef grammar. This keeps check/extract-manifests
+ * fast (~ms instead of seconds) without changing extraction semantics.
+ */
 const COMPILER_OPTIONS: ts.CompilerOptions = {
 	target: ts.ScriptTarget.ES2022,
 	module: ts.ModuleKind.NodeNext,
@@ -53,6 +61,8 @@ const COMPILER_OPTIONS: ts.CompilerOptions = {
 	strict: true,
 	noEmit: true,
 	skipLibCheck: true,
+	lib: ["lib.es2015.d.ts"],
+	types: [],
 };
 
 type NamedComponentDeclaration = (
