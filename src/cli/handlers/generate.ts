@@ -10,7 +10,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { emitSuite, planTestCases } from "../../generator/index.js";
+import {
+	coverageManifest,
+	emitSuite,
+	planTestCases,
+} from "../../generator/index.js";
 import { loadWorkspace } from "../../loader/workspace.js";
 import { contextErrors, contextWarnings, messageOf } from "../context.js";
 import type { CliResult } from "../types.js";
@@ -53,12 +57,26 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 			await mkdir(dirname(target), { recursive: true });
 			await writeFile(target, file.content, "utf8");
 		}
+		// W4 (build-spec §9.3): the coverage artifact — every contract clause
+		// id → the generated test ids tracing it (zero-coverage clauses as
+		// empty arrays). Deterministic like the files, and part of the
+		// machine-readable output, not a hidden file.
+		const coveragePath = join(context.config.generatedDir, "coverage.json");
+		const coverageTarget = join(cwd, coveragePath);
+		await mkdir(dirname(coverageTarget), { recursive: true });
+		await writeFile(
+			coverageTarget,
+			`${JSON.stringify(coverageManifest(suite), null, 2)}\n`,
+			"utf8",
+		);
 		return {
 			ok: true,
 			errors: [],
 			warnings: contextWarnings(context),
 			exitCode: 0,
-			output: { files: files.map((file) => file.path) },
+			output: {
+				files: [...files.map((file) => file.path), coveragePath],
+			},
 		};
 	} catch (error) {
 		// planTestCases throws on an invalid context (the isValid gate should

@@ -8,8 +8,9 @@ import { existsSync, statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import type { ExtractorWarning } from "../extractors/types.js";
 import type { VersaillesContext } from "../loader/workspace.js";
-import type { CliError } from "./types.js";
+import type { CliError, CliResult } from "./types.js";
 
 /** Converts loader ParseError/ValidationError entries into CliError entries. */
 export function contextErrors(context: VersaillesContext): CliError[] {
@@ -34,6 +35,46 @@ export function contextWarnings(context: VersaillesContext): CliError[] {
 		field: warning.field,
 		detail: warning.detail,
 	}));
+}
+
+/** Converts non-blocking extractor warnings (ADR-0004) into the CliError surface. */
+export function extractorWarnings(warnings: ExtractorWarning[]): CliError[] {
+	return warnings.map((warning) => ({
+		code: warning.code,
+		field: warning.field,
+		detail: warning.detail,
+	}));
+}
+
+/**
+ * Zero-source-roots guard (Center W1/W2): when config.sourceRoots resolves to
+ * zero actual directories while the stored manifests store is non-empty, a
+ * command cannot meaningfully verify or update the grounding layer — the scan
+ * covered nothing, so a clean report or a prune would be a false signal (and
+ * a prune would silently destroy the store). Returns a structured
+ * NO_SOURCE_ROOTS result (exit 1) or null when the scan is usable.
+ */
+export function sourceRootsGuard(
+	roots: string[],
+	storedManifests: Record<string, unknown>,
+): CliResult | null {
+	if (roots.length === 0 && Object.keys(storedManifests).length > 0) {
+		return {
+			ok: false,
+			errors: [
+				{
+					code: "NO_SOURCE_ROOTS",
+					field: "config.sourceRoots",
+					detail:
+						"config.sourceRoots resolved to zero existing source directories while the manifests store is non-empty — refusing to report a clean check or modify the store (verify the sourceRoots glob patterns)",
+				},
+			],
+			warnings: [],
+			exitCode: 1,
+			output: { staleIds: [] },
+		};
+	}
+	return null;
 }
 
 /**

@@ -18,6 +18,8 @@ import {
 	contextErrors,
 	contextWarnings,
 	expandSourceRoots,
+	extractorWarnings,
+	sourceRootsGuard,
 } from "../context.js";
 import type { CliError, CliResult } from "../types.js";
 
@@ -50,8 +52,18 @@ export async function handleCheck(cwd: string): Promise<CliResult> {
 	}
 
 	const roots = expandSourceRoots(context.config.sourceRoots ?? [], cwd);
-	const extracted = extractManifests(roots);
 	const stored = context.manifests?.manifests ?? {};
+
+	// Center W1: zero resolved roots with a non-empty store must never
+	// false-green — every stored entry would be silently skipped as
+	// "not hash-comparable" and the staleness gate would disable itself.
+	const zeroRoots = sourceRootsGuard(roots, stored);
+	if (zeroRoots !== null) {
+		return zeroRoots;
+	}
+
+	const extracted = extractManifests(roots);
+	const extractionWarnings = extractorWarnings(extracted.warnings);
 
 	const staleIds: string[] = [];
 	for (const [component, entry] of Object.entries(stored)) {
@@ -71,7 +83,7 @@ export async function handleCheck(cwd: string): Promise<CliResult> {
 		return {
 			ok: true,
 			errors: [],
-			warnings: contextWarnings(context),
+			warnings: [...contextWarnings(context), ...extractionWarnings],
 			exitCode: 0,
 			output: { staleIds },
 		};
@@ -95,7 +107,7 @@ export async function handleCheck(cwd: string): Promise<CliResult> {
 	return {
 		ok: true,
 		errors: [],
-		warnings: [staleError],
+		warnings: [staleError, ...contextWarnings(context), ...extractionWarnings],
 		exitCode: 0,
 		output: { staleIds },
 	};

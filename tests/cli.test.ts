@@ -1056,3 +1056,195 @@ describe("generate — generator module surface (src/generator/index.js)", () =>
 		expect(accountFile?.content).toContain(".toThrow()");
 	});
 });
+
+// ── Center review regressions: pin the FIXED behavior (Red phase) ──────────
+//
+// The four describes below are the Red-phase pins for the Center review
+// findings on the CLI/extractor. Against the current implementation each
+// assertion FAILS (verified); the Power Forward must implement the fixed
+// behavior so these turn green. They ONLY touch the CLI surface (runCli) —
+// no production code is exercised beyond the module under test.
+
+// ── W1: check false-green when sourceRoots resolves to zero roots ─────────
+// Current: expandSourceRoots silently skips the non-existent prefix →
+// roots = [] → extractManifests([]) = {} → every stored entry is
+// "not hash-comparable" and skipped → staleIds = [] → exit 0 CLEAN. In CI
+// this disables the staleness gate silently.
+// Fixed: when sourceRoots resolves to zero actual roots while stored
+// manifests are non-empty, check returns a structured error (code family
+// NO_SOURCE_ROOT / ZERO_ROOTS / SOURCE_ROOTS), exit 1 — never a clean 0.
+
+describe("runCli check — zero-resolved sourceRoots must never false-green (Center W1)", () => {
+	it("returns a structured error (exit 1) when sourceRoots resolves to zero roots but stored manifests are non-empty — never a clean exit 0", async () => {
+		const cwd = await freshWorkspace("c-zero-roots", {
+			sourceRoots: ["does-not-exist/**/*.ts"],
+		});
+		// Genuine grounding the zero-root scan cannot verify: a stored
+		// manifest whose hash check must NOT be silently skipped.
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "deadbeef",
+					fields: { id: "number", total: "number" },
+				},
+			},
+		});
+
+		const result = await runCli(["check"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(
+			result.errors.some((error) =>
+				/NO_SOURCE_ROOT|ZERO_ROOTS|SOURCE_ROOTS/.test(error.code),
+			),
+		).toBe(true);
+	});
+});
+
+// ── W2: extract-manifests --prune with unusable roots destroys the store ──
+// Current: roots = [] → extracted.manifests = {} → merge with prune=true
+// removes every stored entry → manifests.json rewritten empty, exit 0. A
+// config typo destroys the grounding layer.
+// Fixed: when the scan covered nothing (roots empty) while stored manifests
+// are non-empty, extract-manifests --prune REFUSES (structured error, exit 1,
+// same guard as W1) and the on-disk manifests.json is left unchanged.
+
+describe("runCli extract-manifests --prune — unusable roots must not silently destroy the manifest store (Center W2)", () => {
+	it("refuses with a structured error (exit 1) and leaves manifests.json untouched when the scan covered nothing but stored manifests are non-empty", async () => {
+		const cwd = await freshWorkspace("x-prune-zero-roots", {
+			sourceRoots: ["does-not-exist/**/*.ts"],
+		});
+		const stored = {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "deadbeef",
+					fields: { id: "number", total: "number" },
+				},
+			},
+		};
+		await writeWorkspaceFile(cwd, "manifests.json", stored);
+		const before = await readFile(
+			join(cwd, ".versailles", "manifests.json"),
+			"utf8",
+		);
+
+		const result = await runCli(["extract-manifests", "--prune"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(
+			result.errors.some((error) =>
+				/NO_SOURCE_ROOT|ZERO_ROOTS|SOURCE_ROOTS/.test(error.code),
+			),
+		).toBe(true);
+
+		// The store must survive: byte-identical and semantically equal.
+		const after = await readFile(
+			join(cwd, ".versailles", "manifests.json"),
+			"utf8",
+		);
+		expect(after).toBe(before);
+		expect(JSON.parse(after)).toEqual(stored);
+	});
+});
+
+// ── W3: extractor warnings dropped at the CLI boundary ─────────────────────
+// Current: extracted.warnings (e.g. LOW_CONFIDENCE_FIELD) are discarded by
+// the extract handler (warnings: []) and the check handler (loader warnings
+// only) — ADR-0004's "non-blocking warning is surfaced" never reaches the
+// envelope.
+// Fixed: extraction warnings surface in CliResult.warnings for both
+// extract-manifests and check, with exit 0 (warnings are non-blocking).
+
+describe("runCli — extractor warnings surface at the CLI boundary (Center W3, ADR-0004)", () => {
+	const PROFILE_SOURCE = `export class Profile {
+	name: string;
+	balance = 0;
+}
+`;
+
+	it("extract-manifests returns LOW_CONFIDENCE_FIELD in warnings, ok true, exit 0 — warnings are non-blocking", async () => {
+		const cwd = await freshWorkspace("w3-extract-warning");
+		await writeSource(cwd, "Profile.ts", PROFILE_SOURCE);
+
+		const result = await runCli(["extract-manifests"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+		expect(result.warnings).toContainEqual(
+			expect.objectContaining({ code: "LOW_CONFIDENCE_FIELD" }),
+		);
+	});
+
+	it("check surfaces extraction warnings (LOW_CONFIDENCE_FIELD) in warnings while staying exit 0", async () => {
+		const cwd = await freshWorkspace("w3-check-warning");
+		await writeSource(cwd, "Profile.ts", PROFILE_SOURCE);
+		// Consistent stored hashes: staleness is NOT the signal — the only
+		// expected warning is the extraction one.
+		await writeWorkspaceFile(cwd, "manifests.json", referenceManifests(cwd));
+
+		const result = await runCli(["check"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+		expect(result.output).toMatchObject({ staleIds: [] });
+		expect(result.warnings).toContainEqual(
+			expect.objectContaining({ code: "LOW_CONFIDENCE_FIELD" }),
+		);
+	});
+});
+
+// ── W4: generate never writes generated/coverage.json ─────────────────────
+// Current: the generate handler writes only .test.ts files; coverageManifest
+// is never wired to the CLI — build-spec §9.3's coverage artifact is missing.
+// Fixed: after generate on a valid workspace, generated/coverage.json exists
+// under config.generatedDir, is valid JSON, maps every contract clause id →
+// test ids (zero-coverage clauses as empty arrays), and the path appears in
+// the machine-readable output (output.files or a coverageFile field).
+
+describe("runCli generate — writes generated/coverage.json (Center W4, build-spec §9.3)", () => {
+	it("writes a valid coverage.json mapping every contract clause id → test ids, listed in the output", async () => {
+		const cwd = await seedGeneratorWorkspace("g-coverage-json");
+		const clauseIds = [
+			"AccountService.inv0",
+			"AccountService.withdraw.pre0",
+			"AccountService.withdraw.pre1",
+			"AccountService.withdraw.post0",
+			"AccountService.withdraw.post1",
+			"AccountService.setStatus.pre0",
+			"AccountService.setStatus.post0",
+			"CustomerService.upgrade.pre0",
+		];
+
+		const result = await runCli(["generate"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		// §9.3 artifact under the configured generatedDir.
+		const coveragePath = join(cwd, ".versailles", "generated", "coverage.json");
+		const raw = await readFile(coveragePath, "utf8");
+		const coverage = JSON.parse(raw) as {
+			coverage: Record<string, string[]>;
+		};
+		expect(typeof coverage.coverage).toBe("object");
+		for (const clauseId of clauseIds) {
+			expect(coverage.coverage[clauseId]).toBeDefined();
+			expect(Array.isArray(coverage.coverage[clauseId])).toBe(true);
+		}
+
+		// The coverage artifact is machine-readable output, not a hidden file.
+		const output = result.output as { files?: string[]; coverageFile?: string };
+		const listedInFiles =
+			output.files?.includes(".versailles/generated/coverage.json") ?? false;
+		expect(
+			listedInFiles ||
+				output.coverageFile === ".versailles/generated/coverage.json",
+		).toBe(true);
+	});
+});
