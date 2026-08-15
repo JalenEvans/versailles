@@ -1,6 +1,6 @@
 # Bounded Contexts — Versailles
 
-The Versailles domain decomposed into bounded contexts (Domain-Driven Design). Each context owns a slice of the domain and speaks the shared [ubiquitous language](../glossary.md). The context set was derived from the [build spec](../build-spec.md) and the accepted ADRs; per-repo convention, no context is implemented until it has a registered [contract](../contracts/index.md) — all five contexts now have draft contracts.
+The Versailles domain decomposed into bounded contexts (Domain-Driven Design). Each context owns a slice of the domain and speaks the shared [ubiquitous language](../glossary.md). The context set was derived from the [build spec](../build-spec.md) and the accepted ADRs; per-repo convention, no context is implemented until it has a registered [contract](../contracts/index.md) — all five bounded contexts plus the CLI surface now have draft contracts.
 
 ## Context map
 

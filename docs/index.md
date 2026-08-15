@@ -6,15 +6,17 @@ Contributor map. Start here. If you can't find what you need, open an issue — 
 
 ## Structure Tree
 
-Target layout (init scaffold, config schema, contracts, and tests are in place; remaining `src/` pipeline modules are filled in by implementation):
+Implemented layout (pipeline core, generator, extractor, CLI, and tests are shipped; the human review flow lands in a later phase):
 
 ```
 versailles
 ├── .versailles/      ← tool state: config.json, contracts.json, manifests.json,
 │   │                    predicates.json, generated/ — versioned and loaded as one unit
 │   └── generated/    ← deterministic generator output (tool-owned, never hand-edited)
-├── src/              ← implemented: cli/init.ts, index.ts; planned: parser, validator, loader, extractor, generator
-├── tests/            ← implemented: init, config-schema enum, smoke (vitest)
+├── src/              ← implemented: core parser+validator, joint loader, TS extractor, generator + vitest emitter,
+│   │                    six-command CLI (src/cli + bin/versailles)
+├── tests/            ← implemented: init, config-schema enum, smoke, parser, validator, loader, generator,
+│                       extractor, CLI (unit + property, vitest)
 ├── docs/             ← this layer (DDD knowledge base)
 │   ├── domains/      ← bounded contexts (contract-language, manifest-extraction,
 │   │                    workspace-context, deterministic-generation, review)
@@ -32,11 +34,11 @@ versailles
 
 Module boundaries per the build spec (§13 milestones). Contracts/specs are registered for each implemented context.
 
-| Module | Path (planned) | Owns | Spec | Contract |
-|--------|----------------|------|------|----------|
-| Contract language (grammar + parser + validator) | `src/parser`, `src/validator` | expression grammar, AST, semantic checks, structured error contract | [docs/specs/contract-language.md](specs/contract-language.md) | [draft](contracts/contract-language.contract.yaml) |
+| Module | Path | Owns | Spec | Contract |
+|--------|------|------|------|----------|
+| Contract language (grammar + parser + validator) | `src/core/parser`, `src/core/validator` | expression grammar, AST, semantic checks, structured error contract | [docs/specs/contract-language.md](specs/contract-language.md) | [draft](contracts/contract-language.contract.yaml) |
 | Loader / context | `src/loader` | unified versioned context, version gates, scoped extraction helper | [docs/specs/workspace-context.md](specs/workspace-context.md) | [draft](contracts/workspace-context.contract.yaml) |
-| Manifest extractor | `src/extractor` | source → `manifests.json`, structural `sourceHash` | [docs/specs/manifest-extraction.md](specs/manifest-extraction.md) | [draft](contracts/manifest-extraction.contract.yaml) |
+| Manifest extractor | `src/extractors` | source → `manifests.json`, structural `sourceHash` | [docs/specs/manifest-extraction.md](specs/manifest-extraction.md) | [draft](contracts/manifest-extraction.contract.yaml) |
 | Deterministic generator | `src/generator` | test-case IR → test files, `generated/coverage.json` | [docs/specs/deterministic-generation.md](specs/deterministic-generation.md) | [draft](contracts/deterministic-generation.contract.yaml) |
 | CLI | `src/cli` | command surface (`init`, `extract-manifests`, `validate`, `check`, `generate`, `review`), machine-readable structured output + exit codes for external agents | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/versailles.contract.yaml) |
 
@@ -52,7 +54,7 @@ Each module maps to a [bounded context](domains/index.md); the shared vocabulary
 
 ## Run / Build / Test
 
-`versailles init` scaffold and tests are implemented. Remaining pipeline modules are built per build-spec §13.
+The v1 pipeline is implemented: parser/validator (`src/core`), joint loader (`src/loader`), TypeScript manifest extractor (`src/extractors`), deterministic generator + vitest emitter (`src/generator`), and the six-command machine-readable CLI (`src/cli` + `bin/versailles`). Tests cover each module (unit + property). The human review flow (`versailles review`) is routed but lands in a later phase.
 
 ```bash
 # docs + contract validation

@@ -4,7 +4,7 @@
 **Lifecycle:** draft
 **Owner:** associate-head-coach
 **Threshold:** data (the field manifest is `manifests.json`, the grounding layer everything downstream reads), public-api (the extractor plugin seam and the `versailles extract-manifests` command surface)
-**Linked contract:** `docs/contracts/manifest-extraction.contract.yaml` *(pending)*
+**Linked contract:** `docs/contracts/manifest-extraction.contract.yaml`
 **Canonical source:** `~/.opencode/skills/spec-builder/references/spec.template.md`
 
 ---

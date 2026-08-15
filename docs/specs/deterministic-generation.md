@@ -4,7 +4,7 @@
 **Lifecycle:** draft
 **Owner:** associate-head-coach
 **Threshold:** data (generated test files + `generated/coverage.json` are pipeline artifacts), public-api (the emitter plugin seam and the generated test surface), state (the `generated/` directory is tool-owned state, regenerated full-file; regeneration is an irreversible, idempotent transition)
-**Linked contract:** `docs/contracts/deterministic-generation.contract.yaml` *(pending)*
+**Linked contract:** `docs/contracts/deterministic-generation.contract.yaml`
 **Canonical source:** `~/.opencode/skills/spec-builder/references/spec.template.md`
 
 ---

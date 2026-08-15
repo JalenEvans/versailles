@@ -4,7 +4,7 @@
 **Lifecycle:** draft
 **Owner:** associate-head-coach
 **Threshold:** public-api (the expression grammar, AST node contract, and structured error contract are consumed by external agents, review UI, and CI), data (the parsed AST and validation results gate what enters `contracts.json`)
-**Linked contract:** `docs/contracts/contract-language.contract.yaml` *(pending)*
+**Linked contract:** `docs/contracts/contract-language.contract.yaml`
 **Canonical source:** `~/.opencode/skills/spec-builder/references/spec.template.md`
 
 ---

@@ -4,7 +4,7 @@
 **Lifecycle:** draft
 **Owner:** associate-head-coach
 **Threshold:** data (the `.versailles/` file set is the tool's versioned data layer; `config.schema.json` gates it), public-api (the `VersaillesContext` object, scoped extraction helper, and `versailles check` exit codes are consumed by every other component, the review UI, CI, and external agents)
-**Linked contract:** `docs/contracts/workspace-context.contract.yaml` *(pending)*
+**Linked contract:** `docs/contracts/workspace-context.contract.yaml`
 **Canonical source:** `~/.opencode/skills/spec-builder/references/spec.template.md`
 
 ---
