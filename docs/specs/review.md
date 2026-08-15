@@ -4,7 +4,7 @@
 **Lifecycle:** draft
 **Owner:** associate-head-coach
 **Threshold:** data (approval mutates `contracts.json`, the tool's data layer), state (staged → approved is an irreversible state transition; rejection must write nothing)
-**Linked contract:** `docs/contracts/review.contract.yaml` *(pending)*
+**Linked contract:** `docs/contracts/review.contract.yaml`
 **Canonical source:** `~/.opencode/skills/spec-builder/references/spec.template.md`
 
 ---

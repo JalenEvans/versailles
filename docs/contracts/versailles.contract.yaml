@@ -1,0 +1,172 @@
+# Contract: versailles
+# Owner: general-manager
+# Gate: contract_gate — no implementation starts without a registered contract
+# Validated by: scripts/validate-contracts.sh
+# Canonical source: ~/.opencode/skills/contract-builder/references/contract.template.yaml
+
+schema_version: 1
+context: versailles
+
+owns:
+  - "The CLI command surface (build-spec §12): init, extract-manifests, validate, check, generate, review <component> [operation] — the exact set of subcommands an external agent can invoke, with no `author` subcommand (ADR-0010)"
+  - "Command routing and argument parsing: mapping argv to the six subcommands, positional/flag validation (including review <component> [operation]), and usage-error exit paths"
+  - "The deterministic machine-readable output surface (build-spec §10): stable JSON output shape { ok: boolean, errors: [...], warnings: [...], exitCode: number } with structured errors — never unstructured throws"
+  - "Stable exit-code semantics at the process boundary: 0 success/no staleness, 1 validation/parse errors present, 2 blocking staleness — mechanically computed by workspace-context's check_staleness and surfaced here (build-spec §8)"
+  - "The agent-iteration contract (build-spec §10, ADR-0010): an external LLM/agent authors contract objects, calls validate/check, reads structured errors, fixes, and re-runs — the CLI never prompts, calls, or retries an LLM"
+  - "The gate that blocks generate from running against an invalid context and routes the failure to structured output instead (build-spec §9)"
+
+purpose: |
+  versailles is the machine-readable CLI surface an external LLM/agent controls. It exposes
+  exactly six deterministic subcommands — init, extract-manifests, validate, check, generate,
+  and review <component> [operation] — that parse argv, route to the owning context for each
+  capability, and respond with stable JSON of the shape { ok, errors, warnings, exitCode } plus
+  one of three exit codes (0 clean, 1 parse/validation errors, 2 blocking staleness). The agent
+  iteration contract is the whole point: an external agent authors contract objects, calls
+  validate/check, reads the structured errors, fixes, and re-runs — the CLI itself never
+  prompts, calls, or retries an LLM (ADR-0010). Every failure surface, from unknown commands to
+  blocking staleness, is a structured error, never an unstructured throw, so the tool is
+  deterministic and offline-testable.
+
+invariants:
+  - "Every command path exits with one of 0, 1, or 2 — no other exit codes exist on any path (build-spec §8, §10)."
+  - "Machine output is deterministic: same argv plus same workspace yields byte-identical JSON — no timestamps, randomness, or environment-dependent content (build-spec §10, ADR-0002)."
+  - "The CLI never invokes an LLM: no LLM client, no prompting logic, no retry loop anywhere in the command surface (ADR-0010)."
+  - "No failure path raises an unstructured exception — usage errors, load errors, parse/validation errors, unknown review targets, and staleness all surface as structured JSON."
+  - "validate, check, and generate load the workspace exclusively through the workspace-context shared loader; no command re-implements loading (build-spec §6)."
+  - "Exit code 2 is reserved exclusively for blocking staleness (build-spec §8); usage and validation errors never use it."
+
+operations:
+  route_command:
+    requires:
+      - "argv is the raw command-line argument vector (process.argv minus node and script)"
+    ensures:
+      - "The first positional argument routes to exactly one of: init | extract-manifests | validate | check | generate | review"
+      - "An unknown first positional returns a structured usage error with exit code 1 — never a raw throw and never exit code 2"
+      - "review accepts exactly one required positional (component) plus an optional second positional (operation); any other argument shape is a structured usage error with exit code 1"
+      - "Commands other than review accept no unexpected positional arguments; unexpected positionals are a structured usage error with exit code 1"
+    examples:
+      - input: "route_command(['check'])"
+        output: "routes to the check handler"
+      - input: "route_command(['author', 'OrderService'])"
+        output: "structured usage error { ok: false, errors: [{ code: 'UNKNOWN_COMMAND', ... }], warnings: [], exitCode: 1 } — no author subcommand exists (ADR-0010)"
+      - input: "route_command(['review', 'OrderService', 'placeOrder'])"
+        output: "routes to the review handler with component OrderService, operation placeOrder"
+  run_validate:
+    requires:
+      - "the workspace is loadable (a load failure itself surfaces as a structured error, never a throw)"
+    ensures:
+      - "Runs the parser and semantic validator across all of contracts.json via the shared loader and prints a structured report of the shape { ok, errors, warnings, exitCode }"
+      - "Exits 0 when the workspace is valid (no parse or validation errors) and 1 when hard errors are present (build-spec §10, §12)"
+    examples:
+      - input: "run_validate() against a workspace with a parse error"
+        output: "{ ok: false, errors: [ParseError...], warnings: [], exitCode: 1 }"
+  run_check:
+    requires:
+      - "the workspace is loadable"
+    ensures:
+      - "Delegates the staleness computation to workspace-context's check_staleness and surfaces its result as the process exit code: 0 clean, 1 parse/validation errors, 2 blocking staleness when blockOnStale is true, 0 with a warning report when staleness is non-blocking (build-spec §8)"
+      - "The structured report includes the stale IDs when blocking staleness is detected"
+    examples:
+      - input: "run_check() with stale hashes and blockOnStale true"
+        output: "{ ok: false, errors: [{ code: 'STALE', ids: [...] }], warnings: [], exitCode: 2 }"
+      - input: "run_check() with stale hashes and blockOnStale false"
+        output: "{ ok: true, errors: [], warnings: [{ code: 'STALE', ids: [...] }], exitCode: 0 }"
+  run_generate:
+    requires:
+      - "the workspace is loadable"
+    ensures:
+      - "Runs the deterministic generator only against a context where isValid is true; on success exits 0 and delegates emission to deterministic-generation (build-spec §9)"
+      - "When isValid is false, writes no test files, surfaces the structured errors with exit code 1, and never runs generation (build-spec §9, §10)"
+    examples:
+      - input: "run_generate() against an invalid context"
+        output: "{ ok: false, errors: [validation errors...], warnings: [], exitCode: 1 }; generated/ untouched"
+  run_init:
+    requires:
+      - "the target directory is writable"
+    ensures:
+      - "Scaffolds .versailles/ with empty/default files (config.json, contracts.json, manifests.json, predicates.json) and exits 0 on success (build-spec §2, §12)"
+      - "A failure to scaffold returns a structured error with exit code 1 — never a raw throw"
+    examples:
+      - input: "run_init() in an empty project"
+        output: ".versailles/ scaffolded with default files; exit 0"
+  run_extract_manifests:
+    requires:
+      - "the workspace is loadable"
+    ensures:
+      - "Routes to manifest-extraction's extract_manifests_command behavior and surfaces its result as structured output (build-spec §7, §12)"
+      - "A failure returns a structured error with exit code 1; success returns ok with exit code 0"
+    examples:
+      - input: "run_extract_manifests() with an unwritable manifests.json"
+        output: "{ ok: false, errors: [structured error...], warnings: [], exitCode: 1 }"
+  run_review:
+    requires:
+      - "the workspace is loadable"
+      - "component names a component in contracts.json; operation optionally names one of its operations (validated via workspace-context scoped extraction)"
+    ensures:
+      - "Routes to the review context's scoped review flow for the requested component/operation and exits 0 when the flow launches (build-spec §11, §12)"
+      - "An unknown component/operation surfaces a structured NOT_FOUND error with exit code 1, never a throw"
+    examples:
+      - input: "run_review('UnknownComponent')"
+        output: "{ ok: false, errors: [{ code: 'NOT_FOUND', ... }], warnings: [], exitCode: 1 }"
+  emit_machine_output:
+    requires:
+      - "result is a structured result object of the shape { ok: boolean, errors: [...], warnings: [...], exitCode: number }"
+    ensures:
+      - "Serializes the result as deterministic JSON (stable key order, no timestamps or environment-dependent content) on stdout"
+      - "Sets the process exit code to result.exitCode, which is always one of 0, 1, or 2"
+      - "Never prints unstructured stack traces or non-JSON noise to stdout where an agent parses machine output"
+    examples:
+      - input: "emit_machine_output({ ok: false, errors: [e], warnings: [], exitCode: 1 })"
+        output: "stable JSON on stdout; process exits 1"
+
+must:
+  - "Expose exactly the build-spec §12 command surface: init, extract-manifests, validate, check, generate, review <component> [operation]; no author subcommand exists (ADR-0010)."
+  - "Route argv deterministically to the six subcommands and reject unknown commands or malformed arguments with a structured usage error and exit code 1 — never a raw stack trace and never exit code 2."
+  - "Produce the stable machine-readable output shape { ok: boolean, errors: [...], warnings: [...], exitCode: number } on every command and serialize it as deterministic JSON (build-spec §10)."
+  - "Return every failure — usage errors, load errors, parse/validation errors, unknown review targets, and blocking staleness — as structured errors, never unstructured throws (build-spec §10, ADR-0010)."
+  - "Surface the exit code computed by workspace-context's check_staleness at the process boundary: 0 clean, 1 parse/validation errors, 2 blocking staleness when blockOnStale is true, and 0 with a warning report when staleness is non-blocking (build-spec §8)."
+  - "Serve the agent-iteration loop: an external agent authors contract objects, calls validate/check, reads the structured errors, fixes, and re-runs; the CLI's response is fully determined by argv plus workspace (build-spec §10)."
+  - "Gate generate on context.isValid — refuse to generate and write no test files when invalid, surfacing structured errors with exit code 1 (build-spec §9)."
+  - "Load the workspace exclusively through the workspace-context shared loader in every command that needs it; no command re-implements loading (build-spec §6)."
+  - "Keep every command deterministic and offline-testable: no LLM client, no prompting, no network dependency, no retry loop anywhere in the surface (ADR-0010)."
+
+must_not:
+  - "Must not invoke an LLM anywhere in the command surface — no LLM client, no prompt templates, no retry loop that calls an LLM; the CLI is driven by agents, never drives one (ADR-0010)."
+  - "Must not expose an author subcommand or any in-tool LLM authoring loop (ADR-0010 supersedes the authoring-loop aspect of ADR-0002)."
+  - "Must not throw unstructured exceptions on any path — malformed arguments, unknown commands, load failures, parse/validation errors, unknown review targets, and staleness all surface as structured JSON errors (build-spec §10)."
+  - "Must not exit with a code outside {0, 1, 2}, and must not use 2 for anything other than blocking staleness (build-spec §8)."
+  - "Must not emit nondeterministic output — no timestamps, randomness, or environment-dependent content in machine-readable output (build-spec §10, ADR-0002)."
+  - "Must not run generate against an invalid context and must not write test files when generation is blocked (build-spec §9)."
+  - "Must not re-implement loading, staleness computation, manifest extraction, or generation mechanics — those are owned by workspace-context, manifest-extraction, and deterministic-generation respectively; this context routes and surfaces (build-spec §6)."
+  - "Must not print unstructured stack traces or non-JSON noise to stdout where an agent parses the machine output."
+
+can:
+  - "May print human-readable diagnostics or progress to stderr, provided stdout remains stable machine-readable JSON."
+  - "May accept flags that forward to owned contexts (for example --prune for extract-manifests), validated at the CLI boundary."
+  - "May include per-command usage hints inside structured usage errors (for example the review <component> [operation] signature)."
+  - "May expose a pretty-print or verbosity flag as long as the default output shape and exit codes stay stable."
+
+limits:
+  - "No in-tool LLM authoring, prompting, or retry loop — authoring is an external agent workflow that drives this surface (ADR-0010)."
+  - "No staleness computation mechanics — workspace-context's check_staleness computes hash comparisons and exit codes; this context surfaces them (build-spec §8)."
+  - "No grammar, parsing, or semantic validation internals — contract-language owns those; this context consumes results via the shared loader."
+  - "No manifest extraction from source and no sourceHash computation — manifest-extraction owns those; extract-manifests routes to it."
+  - "No test-case planning or test-file emission — deterministic-generation owns those; generate gates on isValid and surfaces results."
+  - "No review view rendering, approval, or merge — review owns those; review routes to it."
+  - "No test execution or running of generated tests."
+
+asserts:
+  - "assert: every command path exits with one of 0, 1, or 2."
+  - "assert: running the same argv twice against the same workspace produces byte-identical stdout JSON."
+  - "assert: an unknown command or malformed argument exits 1 with a structured usage error, never a raw throw."
+  - "assert: validate/check on a workspace with parse or validation errors exits 1; check on blocking staleness exits 2; clean exits 0; non-blocking staleness exits 0 with a warning."
+  - "assert: generate against an invalid context writes zero files under generated/ and exits 1."
+  - "assert: no code path in the CLI invokes an LLM (no LLM call sites in the tool, per ADR-0010 confirmation)."
+  - "assert: the command surface contains exactly the six build-spec §12 subcommands and no author subcommand."
+
+---
+## Changelog
+
+| Date | Author | Change |
+|------|--------|--------|
+| 2026-08-14 | general-manager | Initial contract from docs/specs/versailles.md; build-spec §6, §8, §9, §10, §12; ADR-0002/0010. Cross-references workspace-context for staleness exit-code mechanics; no duplication of its check_staleness ownership |
