@@ -19,8 +19,8 @@ Sources of authority: [build-spec.md](build-spec.md) (territory), accepted [deci
 | operation | A named function/method on a component, with params, preconditions, postconditions, effects, and its own `sourceHash`. | contract-language |
 | AST | The canonical parse-tree node types produced by the contract parser (build-spec §4.3). Parser output contract; also the future input for SMT-backed generation (v2). | contract-language |
 | structured error | A machine-readable error object (`contractId`, `field`, `position`, `found`, `expected`, `message` for parse; `contractId`, `code`, `field`, `detail` for validation). Downstream consumers (external LLM/agent, review UI, CI) render or re-inject it programmatically. The parser/validator **never** throw unstructured exceptions. | contract-language |
-| predicate | A named, registered, verified-pure function callable from contract expressions; stored in `predicates.json` with params, paramTypes, returnType, sourceRef, sourceHash, `verifiedPure`. | contract-language |
-| verifiedPure | The registration flag asserting a predicate has no side effects and always terminates. The semantic validator hard-errors on `verifiedPure: false` or missing — unverified predicates cannot be referenced in contracts (ADR-0006). | contract-language |
+| predicate | A named, registered, verified-pure function callable from contract expressions; stored in `predicates.json` with params, paramTypes, returnType, sourceRef, sourceHash, `verifiedPure`. | predicate-registry |
+| verifiedPure | The registration flag asserting a predicate has no side effects and always terminates. Manually asserted at registration-time lint/review (ADR-0006, build-spec §14 default). The semantic validator hard-errors on `verifiedPure: false` or missing — unverified predicates cannot be referenced in contracts. | predicate-registry |
 | manifest / field manifest | The per-component record of field name → typeRef, derived from source by static analysis and stored in `manifests.json`. Never hand-authored, never LLM-authored blind (ADR-0005). | manifest-extraction |
 | typeRef | The grammar for field and param types: `string \| number \| boolean \| <ComponentName> \| list<typeRef> \| optional<typeRef> \| enum<v1,v2,...>`. Field references resolve transitively through the flat manifest map. | manifest-extraction |
 | low-confidence field | A manifest field whose type was inferred rather than declared (typical of dynamically-typed languages). Produces a non-blocking validator warning, never a hard error (ADR-0004). | manifest-extraction |
@@ -65,7 +65,7 @@ Events here are records of deterministic state transitions in the pipeline (the 
 | `contractDeclined` | A reviewer did not approve; no merge commit is created, so the staged object never enters the audit trail. | review |
 | `generationRun` | The deterministic generator wrote full-file test output under `generated/` and refreshed `generated/coverage.json`. | deterministic-generation |
 | `stalenessDetected` | `versailles check` recomputed a `sourceHash` and found drift; blocking behavior follows `config.staleness.blockOnStale`. | manifest-extraction / contract-language (via check) |
-| `predicateRegistered` | A named predicate was added to `predicates.json` with `verifiedPure` set (registration-time purity review). | contract-language |
+| `predicateRegistered` | A named predicate was added to `predicates.json` with `verifiedPure` set (registration-time purity review). | predicate-registry |
 
 ## CLI commands (the application-layer surface)
 
