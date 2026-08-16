@@ -15,9 +15,8 @@ import { extractManifests } from "../src/extractors/index.js";
  * throws), build-spec §10 (stable JSON, agent-iteration), ADR-0002
  * (determinism) and ADR-0010 (no LLM / never a raw throw).
  *
- * The Red phase applies identically: src/cli/index.ts does not exist on this
- * branch yet, so the dynamic import in beforeAll rejects and every test here
- * fails with ERR_MODULE_NOT_FOUND — the expected Red state.
+ * src/cli/index.ts is implemented on this branch; the dynamic import in
+ * beforeAll resolves and these properties pin its machine-readable contract.
  *
  * ── Properties ────────────────────────────────────────────────────────────
  *

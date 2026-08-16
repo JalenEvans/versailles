@@ -7,15 +7,16 @@
 ## What this context does
 
 Versailles is the **machine-readable CLI surface** an external LLM/agent controls. It exposes
-six deterministic subcommands — `init`, `extract-manifests`, `validate`, `check`, `generate`,
-and `review <component> [operation]` — that parse arguments, route to the owning context for
+nine deterministic subcommands — `init`, `extract-manifests`, `validate`, `check`, `generate`,
+`review <component> [operation]`, `register-predicate`, `verify-purity`, and `remind-unverified` —
+that parse arguments, route to the owning context for
 each capability, and respond with stable JSON plus a stable exit code. The agent writes
 contract objects, calls `validate`/`check`, reads the structured errors, fixes, and re-runs;
 the CLI itself never prompts, calls, or retries an LLM.
 
 ## What it guarantees (must)
 
-- Exactly the six commands above — **no `author` subcommand** exists (ADR-0010).
+- Exactly the nine commands above — **no `author` subcommand** exists (ADR-0010).
 - Every command answers with the stable shape `{ ok, errors, warnings, exitCode }` as
   deterministic JSON — same input, same output, byte for byte.
 - Every failure — bad arguments, unknown commands, load errors, validation errors, unknown

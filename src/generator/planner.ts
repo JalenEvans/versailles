@@ -218,7 +218,10 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 			// postcondition to assert; traces must stay non-empty).
 			if (postconditions.length > 0) {
 				const validParams = buildValidParams(operation, preconditions, context);
-				const preState = buildPreState(manifestFields, invariants, context);
+				const preState = buildPreState(manifestFields, invariants, context, [
+					...postconditions,
+					...invariants,
+				]);
 				const postIds = postconditions.map((post) => post.id);
 				cases.push({
 					id: nextId("postcondition-satisfaction"),
@@ -234,7 +237,10 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 			// without invariants).
 			if (invariants.length > 0) {
 				const validParams = buildValidParams(operation, preconditions, context);
-				const preState = buildPreState(manifestFields, invariants, context);
+				const preState = buildPreState(manifestFields, invariants, context, [
+					...postconditions,
+					...invariants,
+				]);
 				// Center W2a: pick call inputs whose DERIVED post-state still
 				// satisfies every invariant (e.g. amount <= balance for
 				// `old(balance) - amount == balance` with `balance >= 0`) —
@@ -519,7 +525,10 @@ function planExpectedRejection(
 		return null;
 	}
 	const target = numericParams[0];
-	const preState = buildPreState(manifestFields, invariants, context);
+	const preState = buildPreState(manifestFields, invariants, context, [
+		...postconditions,
+		...invariants,
+	]);
 	const baseParams = buildValidParams(operation, preconditions, context);
 
 	for (let value = 1; value <= EXPECTED_REJECTION_SWEEP_MAX; value++) {
@@ -557,18 +566,31 @@ function planExpectedRejection(
 
 /**
  * Builds the pre-call component state from the manifest (deterministic default
- * per type), then deterministically bumps numeric fields until every invariant
- * evaluates true (capped so the builder always terminates). Invariants are
- * evaluated against the state itself (invariants reference manifest fields).
+ * per type), capturing ONLY the manifest fields the case's relevant clauses
+ * actually reference (the operation's postconditions + the component's
+ * invariants) so `old(field)` resolves and the emitted args carry just the
+ * fields that matter — never every manifest field. Numeric fields are then
+ * deterministically bumped until every invariant evaluates true (capped so
+ * the builder always terminates).
  */
 function buildPreState(
 	manifestFields: Record<string, string>,
 	invariants: ContractClause[],
 	context: VersaillesContext,
+	relevantClauses: ContractClause[],
 ): Record<string, unknown> {
+	const relevant = new Set<string>();
+	for (const clause of relevantClauses) {
+		const ast = context.parsedContracts[clause.id];
+		if (ast !== undefined) {
+			collectFieldRefs(ast, relevant);
+		}
+	}
 	const state: Record<string, unknown> = {};
 	for (const [field, typeRef] of Object.entries(manifestFields)) {
-		state[field] = defaultValue(typeRef);
+		if (relevant.has(field)) {
+			state[field] = defaultValue(typeRef);
+		}
 	}
 	for (let round = 0; round < PRE_STATE_ADJUST_ROUNDS; round++) {
 		if (allInvariantsHold(state, invariants, context)) {

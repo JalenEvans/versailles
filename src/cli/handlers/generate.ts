@@ -1,6 +1,7 @@
 /**
  * generate handler (build-spec §9, §12) — runs the deterministic generator
- * (planTestCases → emitSuite) and writes full-file .test.ts output under
+ * (planTestCases → emitSuite) and writes full-file output (vitest *.test.ts,
+ * xUnit *.Tests.cs, pytest test_*.py per ADR-0009) under
  * config.generatedDir. Gated on context.isValid: an invalid context writes
  * ZERO files and surfaces structured errors with exit 1 (contract invariant 1,
  * build-spec §9). The rejection idiom comes from config.rejection.idiom
@@ -49,7 +50,7 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 
 	try {
 		const suite = planTestCases(context);
-		const files = emitSuite(suite, context.config.testFramework as "vitest", {
+		const files = emitSuite(suite, context.config.testFramework, {
 			generatedDir: context.config.generatedDir,
 		});
 		for (const file of files) {

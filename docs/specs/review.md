@@ -57,6 +57,12 @@ Human review is the human-in-the-loop gate between staged contract objects and a
 - **When** the rejection path executes
 - **Then** nothing is written to `contracts.json` and no merge commit is created — the staged object never enters the audit trail (glossary: `contractDeclined`)
 
+### Review targets are confined to `.versailles/staged/`
+
+- **Given** a `versailles review` invocation whose component/operation argument contains `..`, `/`, or `\`
+- **When** the review flow starts
+- **Then** the target is refused with a structured `INVALID_TARGET` error before any staged read or merge — staged objects must stay inside `.versailles/staged/`, and a traversal target can never be viewed, approved, or merged
+
 ### The audit trail is git, and git state distinguishes staged vs. merged
 
 - **Given** an approved contract or a contract object present in the workspace
@@ -94,3 +100,4 @@ Human review is the human-in-the-loop gate between staged contract objects and a
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §11; ADR-0003/0010 |
 | 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
+| 2026-08-16 | associate-head-coach | Added traversal-target confinement behavior (INVALID_TARGET guard) — shipped with the review flow (PR feat/review-ecosystem) |

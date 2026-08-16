@@ -18,14 +18,9 @@ import { extractManifests } from "../src/extractors/index.js";
  * build-spec §8 (staleness/exit codes), §10 (machine-readable output),
  * §12 (command table), ADR-0002 (determinism) and ADR-0010 (no LLM).
  *
- * ══ RED-PHASE NOTE ════════════════════════════════════════════════════════
- * This file defines the module surface the Power Forward must implement at
- * src/cli/index.ts. That module does NOT exist on this branch yet (only
- * src/cli/init.ts does), and src/generator/ is only a .gitkeep on this branch
- * (the generator lives on feat/generator-core and will be integrated). The
- * dynamic import below therefore rejects with ERR_MODULE_NOT_FOUND today —
- * that failure, propagated through the beforeAll hook, is the EXPECTED Red
- * state. Once the module lands, these tests pin its behavior.
+ * src/cli/index.ts and the generator core (src/generator/) are implemented on
+ * this branch; the dynamic import in beforeAll resolves and these tests pin
+ * the module surface defined below.
  *
  * ── Module contract (what these tests require from src/cli/index.ts) ──────
  *
@@ -65,7 +60,7 @@ import { extractManifests } from "../src/extractors/index.js";
  * | validate          | { valid: boolean }                                     |
  * | check             | { staleIds: string[] }                                 |
  * | generate          | { files: string[] }  (paths written, relative to cwd)   |
- * | review            | (none — PR 2 returns REVIEW_NOT_AVAILABLE, exit 1)      |
+ * | review            | (view/approve/reject payloads — pinned in tests/review.test.ts) |
  *
  * updated   = components covered by the fresh extraction (added OR refreshed)
  * preserved = components in the previous manifests.json the extraction did not
@@ -96,9 +91,11 @@ import { extractManifests } from "../src/extractors/index.js";
  *    ADR-0007). Routes through src/generator/index.js (planTestCases /
  *    emitSuite / coverageManifest) — the generator surface is pinned in the
  *    dedicated describe below and the PF integrates feat/generator-core.
- * 7. review (PR 2 scope): arg validation happens at the CLI boundary; valid
- *    arg shapes route to the review handler which returns REVIEW_NOT_AVAILABLE
- *    (exit 1) until PR 3 replaces the stub — never UNKNOWN_COMMAND.
+ * 7. review: arg validation happens at the CLI boundary; valid arg shapes
+ *    (component [operation]) route to the review handler. A valid shape with
+ *    NO staged object returns NOT_FOUND (exit 1) — never REVIEW_NOT_AVAILABLE,
+ *    never UNKNOWN_COMMAND. The full flow (scoped view / --approve /
+ *    --reject) is pinned in tests/review.test.ts.
  * 8. Determinism (ADR-0002): same argv + same workspace → byte-identical
  *    JSON (no timestamps / randomness) — no LLM is ever invoked (ADR-0010).
  *
@@ -313,11 +310,9 @@ afterAll(async () => {
 	await rm(tempRoot, { recursive: true, force: true });
 });
 
-// ── Red-phase import ───────────────────────────────────────────────────────
-// src/cli/index.ts does not exist on this branch yet. When it is missing this
-// hook rejects and EVERY test below fails with the module-resolution error —
-// the expected Red state. When the Power Forward lands the module, the hook
-// resolves and the tests pin its behavior.
+// ── Module import ──────────────────────────────────────────────────────────
+// src/cli/index.ts is implemented on this branch; the hook resolves and the
+// tests below pin its behavior.
 type CliErrorShape = {
 	code: string;
 	field?: string;
@@ -928,16 +923,19 @@ describe("runCli generate — deterministic generation (build-spec §9)", () => 
 	});
 });
 
-// ── review (PR 2 scope: routing + arg validation only) ─────────────────────
+// ── review (valid arg routing; no staged object → NOT_FOUND, exit 1 — real flow) ─
 
-describe("runCli review — PR 2 scope (routing + arg validation; flow is PR 3)", () => {
-	it("valid args (component + operation) route to the review handler — REVIEW_NOT_AVAILABLE, exit 1, never UNKNOWN_COMMAND", async () => {
+describe("runCli review — valid arg shapes route to the handler; no staged object → NOT_FOUND, exit 1 (flow pinned in tests/review.test.ts)", () => {
+	it("valid args (component + operation) route to the review handler — no staged object → NOT_FOUND, exit 1, never REVIEW_NOT_AVAILABLE, never UNKNOWN_COMMAND", async () => {
 		const cwd = await seedGeneratorWorkspace("r-two-args");
 		const result = await runCli(["review", ACCOUNT, "withdraw"], { cwd });
 
 		expect(result.ok).toBe(false);
 		expect(result.exitCode).toBe(1);
 		expect(result.errors).toContainEqual(
+			expect.objectContaining({ code: "NOT_FOUND" }),
+		);
+		expect(result.errors).not.toContainEqual(
 			expect.objectContaining({ code: "REVIEW_NOT_AVAILABLE" }),
 		);
 		expect(result.errors).not.toContainEqual(
@@ -945,13 +943,16 @@ describe("runCli review — PR 2 scope (routing + arg validation; flow is PR 3)"
 		);
 	});
 
-	it("valid args (component only) also route to the review handler — REVIEW_NOT_AVAILABLE, exit 1", async () => {
+	it("valid args (component only) also route to the review handler — no staged object → NOT_FOUND, exit 1, never REVIEW_NOT_AVAILABLE", async () => {
 		const cwd = await seedGeneratorWorkspace("r-one-arg");
 		const result = await runCli(["review", ACCOUNT], { cwd });
 
 		expect(result.ok).toBe(false);
 		expect(result.exitCode).toBe(1);
 		expect(result.errors).toContainEqual(
+			expect.objectContaining({ code: "NOT_FOUND" }),
+		);
+		expect(result.errors).not.toContainEqual(
 			expect.objectContaining({ code: "REVIEW_NOT_AVAILABLE" }),
 		);
 	});
@@ -1246,5 +1247,55 @@ describe("runCli generate — writes generated/coverage.json (Center W4, build-s
 			listedInFiles ||
 				output.coverageFile === ".versailles/generated/coverage.json",
 		).toBe(true);
+	});
+});
+
+// ── Predicate registry command routing (build-spec §13 milestone 8) ────────
+// Pins for the milestone-8 commands (docs/contracts/
+// predicate-registry.contract.yaml): register-predicate / verify-purity /
+// remind-unverified must route to structured results — never UNKNOWN_COMMAND,
+// never a throw (ADR-0010). All three route through src/cli/index.ts today.
+// The full behavior of each command (single-entry read-modify-write,
+// sourceHash verification, verifiedPure gate, purity reminder) is pinned in
+// tests/predicate-registry.test.ts.
+
+describe("runCli — predicate registry command routing (predicate-registry.contract.yaml, build-spec §13 milestone 8)", () => {
+	it("routes register-predicate / verify-purity / remind-unverified to structured results — never UNKNOWN_COMMAND, never a throw", async () => {
+		const cwd = await freshWorkspace("pr-route");
+		// Ground the registration fixture source (covered by sourceRoots) so a
+		// valid register-predicate invocation can succeed post-implementation.
+		await writeSource(
+			cwd,
+			"Inventory.ts",
+			`export function isAvailable(amount: number): boolean {
+	return amount >= 0;
+}
+`,
+		);
+		const commands: string[][] = [
+			[
+				"register-predicate",
+				"isAvailable",
+				"--source",
+				"Inventory.isAvailable",
+				"--params",
+				"amount",
+				"--paramTypes",
+				"number",
+			],
+			["verify-purity", "isAvailable"],
+			["remind-unverified"],
+		];
+
+		for (const argv of commands) {
+			const result = await runCli(argv, { cwd });
+			expect(typeof result.ok).toBe("boolean");
+			expect(Array.isArray(result.errors)).toBe(true);
+			expect(Array.isArray(result.warnings)).toBe(true);
+			expect([0, 1, 2]).toContain(result.exitCode);
+			expect(result.errors).not.toContainEqual(
+				expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
+			);
+		}
 	});
 });

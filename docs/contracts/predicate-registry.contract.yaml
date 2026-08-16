@@ -1,0 +1,127 @@
+# Contract: predicate-registry
+# Owner: general-manager
+# Gate: contract_gate — no implementation starts without a registered contract
+# Validated by: scripts/validate-contracts.sh
+# Canonical source: ~/.opencode/skills/contract-builder/references/contract.template.yaml
+
+schema_version: 1
+context: predicate-registry
+
+owns:
+  - "The named predicate registry file predicates.json (build-spec §3.4): version plus a predicates map, each entry { params, paramTypes, returnType, sourceRef, sourceHash, verifiedPure }"
+  - "The registration CLI behavior (build-spec §13 milestone 8), e.g. versailles register-predicate: adds or updates exactly one predicate entry per invocation"
+  - "The registration-time purity gate: verifiedPure is manually asserted via lint/manual review at registration (build-spec §14 default, ADR-0006) — never set by automated analysis"
+  - "The purity-check reminder workflow: surfaces every predicate with verifiedPure missing or false to reviewers so verifiedPure can be set after manual lint (build-spec §13 milestone 8)"
+  - "Predicate sourceRef and sourceHash recording at registration (build-spec §3.4, §8): each entry traces to a real function and its implementation hash, mechanically verified against source"
+  - "Single-entry read-modify-write persistence of predicates.json, recorded in git (ADR-0003 audit-trail discipline)"
+
+purpose: |
+  predicate-registry owns predicates.json, the named predicate registry that contract expressions
+  may call (build-spec §3.4). It provides the registration CLI behavior that adds or updates
+  exactly one predicate entry per invocation and records sourceRef plus sourceHash so every
+  predicate traces to a real function. The registration-time purity gate implements ADR-0006 and
+  the build-spec §14 default: verifiedPure is asserted manually via lint/manual review, never by
+  automated analysis, and the purity-check reminder surfaces unverified predicates to reviewers
+  so verifiedPure can be set after a human's lint. The registry is data for the rest of the
+  pipeline — the joint loader (workspace-context) reads it and the semantic validator
+  (contract-language) enforces that referenced predicates exist and are verified — and the tool
+  never invokes an LLM (ADR-0010).
+
+invariants:
+  - "Every entry in predicates.json conforms to the build-spec §3.4 schema: predicate name → { params: string[], paramTypes: typeRef[], returnType: 'boolean', sourceRef: string, sourceHash: string, verifiedPure: boolean }."
+  - "verifiedPure is true only when a human asserted purity through the registration-time lint/review gate or the post-lint verify_purity path; no automated purity or termination analysis ever sets it (ADR-0006, build-spec §14 default)."
+  - "Every registered predicate traces to a real function: sourceRef resolves and sourceHash matches the function implementation at registration time; nothing is invented (ADR-0005 discipline applied to predicates)."
+  - "Registration and purity updates are single-entry read-modify-writes of predicates.json — never a full-file rewrite — so git history records each change (ADR-0003)."
+  - "predicates.json is always consumed as part of the joint workspace load; this context never re-implements loading (workspace-context owns it) and never re-implements predicate-call validation (contract-language owns it)."
+  - "The tool never invokes an LLM anywhere in predicate-registry tooling (ADR-0010)."
+
+operations:
+  register_predicate:
+    requires:
+      - "predicateName is a valid identifier matching the predicate_call grammar naming (build-spec §4.1 IDENT)"
+      - "entry supplies params (string[]), paramTypes (typeRef[]), returnType ('boolean'), sourceRef (Module.functionName), and sourceHash (hash of the function implementation)"
+      - "sourceRef resolves to a real function under config.sourceRoots and sourceHash matches its current implementation (mechanically verified before write)"
+    ensures:
+      - "predicates.json gains or updates exactly the entry keyed by predicateName — a single-entry read-modify-write, never a full-file rewrite (ADR-0003)"
+      - "verifiedPure is persisted exactly as manually asserted by the registration-time lint/review gate; a new entry is false unless a human asserted purity at registration"
+      - "The stored sourceRef and sourceHash trace the predicate to its real function and implementation"
+      - "The operation returns a structured result and never throws an unstructured exception (ADR-0010)"
+    examples:
+      - input: "register_predicate('isAvailable', { params: [], paramTypes: [], returnType: 'boolean', sourceRef: 'Inventory.isAvailable', sourceHash: '<impl-hash>', verifiedPure: false })"
+        output: "predicates.json now contains the isAvailable entry with verifiedPure false, awaiting manual lint"
+      - input: "register_predicate('isAvailable', { ...same entry..., verifiedPure: true }) after the registrant performed the manual lint at registration"
+        output: "predicates.json entry isAvailable now has verifiedPure true and is referenceable by contracts (contract-language enforces)"
+  verify_purity:
+    requires:
+      - "predicateName exists in predicates.json"
+      - "a human performed the manual lint/review of the predicate's source (surfaced by the purity-check reminder)"
+      - "the lint confirmed the function has no side effects and always terminates"
+    ensures:
+      - "verifiedPure becomes true for exactly that entry — a single-entry read-modify-write, recorded in git (ADR-0003)"
+      - "sourceRef and sourceHash are unchanged by the verification"
+      - "No automated purity or termination analysis ran; the flip records a human decision (ADR-0006, build-spec §14 default)"
+    examples:
+      - input: "verify_purity('isAvailable') after a reviewer linted Inventory.isAvailable and found it pure"
+        output: "isAvailable.verifiedPure is now true; the change is a distinct git commit"
+  remind_unverified:
+    requires:
+      - "a loaded workspace context (via the workspace-context shared loader)"
+    ensures:
+      - "Returns every predicate entry with verifiedPure missing or false, each with its sourceRef, for surfacing to reviewers"
+      - "Never writes verifiedPure — the reminder only reports; verification happens through verify_purity after manual lint"
+      - "Returns a structured result and never throws (ADR-0010)"
+    examples:
+      - input: "remind_unverified(context) where isAvailable has verifiedPure false and isInStock has verifiedPure true"
+        output: "the isAvailable entry (with sourceRef) is reported; isInStock is not"
+
+must:
+  - "Maintain predicates.json exactly per the build-spec §3.4 schema: version plus a predicates map, each entry { params, paramTypes, returnType, sourceRef, sourceHash, verifiedPure }."
+  - "Provide the registration CLI behavior (e.g. versailles register-predicate) that adds or updates exactly one predicate entry per invocation, keyed by predicate name (build-spec §13 milestone 8)."
+  - "Record sourceRef (Module.functionName) and sourceHash (hash of the function implementation) on every entry, mechanically verified against source before writing (build-spec §3.4, ADR-0005 discipline)."
+  - "Set verifiedPure only through the manual lint/review gate: a human asserts purity at registration time (build-spec §14 default, ADR-0006); the tool itself never performs purity or termination analysis."
+  - "Persist registry writes as single-entry read-modify-write of the named key — never a full-file rewrite — so git history records each registration and verification (ADR-0003)."
+  - "Expose the purity-check reminder that surfaces every predicate with verifiedPure missing or false to reviewers, so verifiedPure can be set after manual lint (build-spec §13 milestone 8)."
+  - "Return structured results from every registry operation and never throw unstructured exceptions (ADR-0010)."
+  - "Load predicates.json through the workspace-context shared loader whenever reading; never re-implement loading (build-spec §6)."
+
+must_not:
+  - "Must not perform automated purity or termination analysis to set verifiedPure — the flag is a manual registration-time gate (ADR-0006, build-spec §14 default)."
+  - "Must not default verifiedPure to true, or set it to true without a human's manual lint/review through the registration gate or verify_purity."
+  - "Must not rewrite predicates.json wholesale — writes are single-entry read-modify-writes."
+  - "Must not remove a predicate entry as a side effect of registering or verifying another entry."
+  - "Must not write an entry whose sourceRef or sourceHash are not mechanically verified against actual source (nothing invented)."
+  - "Must not parse or semantically validate contract expressions or predicate calls — that is contract-language's semantic validator (build-spec §5.1), reached through the joint loader (workspace-context)."
+  - "Must not implement the review approval or reject flow — review owns that; the purity-check reminder only surfaces unverified predicates for human lint."
+  - "Must not invoke an LLM anywhere in predicate-registry tooling (ADR-0010)."
+
+can:
+  - "May surface the purity-check reminder through the review flow's presentation, provided review still owns approval and reject."
+  - "May recompute and rewrite a predicate's sourceHash in place when its function implementation changes, as part of an update."
+  - "May offer an inspection or listing view of registered predicates to aid reviewers and external agents."
+  - "May include human-friendly hints in structured registration errors."
+
+limits:
+  - "No parsing, AST construction, or semantic validation of predicate_calls in contract expressions — contract-language owns those; this context only stores and maintains the registry data."
+  - "No hard cross-referencing validation (a referenced predicate must exist with verifiedPure === true) — that is contract-language's semantic validator check, operating on the registry data this context maintains."
+  - "No joint loading of the .versailles/ file set — workspace-context owns the loader; registry tooling reads through it."
+  - "No review approval, reject, or merge behavior — review owns that; the purity reminder may surface through review's presentation only."
+  - "No manifest derivation from source — manifest-extraction owns that; predicate sourceHash reuses static-analysis seams without becoming manifest derivation."
+  - "No automated purity or termination analysis (ADR-0006, build-spec §14 default)."
+  - "No staleness-check orchestration or exit-code semantics — workspace-context's check_staleness consumes the stored predicate sourceHash; this context only records it at registration."
+  - "No LLM client, prompt templates, or in-tool LLM invocation (ADR-0010)."
+
+asserts:
+  - "assert: every entry in predicates.json has exactly the build-spec §3.4 fields with the declared types (params: string[], paramTypes: typeRef[], returnType: 'boolean', sourceRef: string, sourceHash: string, verifiedPure: boolean)."
+  - "assert: register_predicate changes exactly one key of predicates.json — the git diff of the registration commit touches only that predicate entry."
+  - "assert: verifiedPure is never true for a newly created entry unless a human asserted it at registration; no code path auto-sets it."
+  - "assert: remind_unverified returns exactly the entries with verifiedPure missing or false and never writes verifiedPure."
+  - "assert: verify_purity flips verifiedPure to true only for an existing entry after the manual lint gate; the entry's sourceRef and sourceHash are unchanged."
+  - "assert: a registered predicate's sourceHash matches the function implementation at registration time (mechanically verified before write)."
+  - "assert: no code path in predicate-registry parses contract expressions or invokes an LLM."
+
+---
+## Changelog
+
+| Date | Author | Change |
+|------|--------|--------|
+| 2026-08-14 | general-manager | Initial contract from docs/specs/predicate-registry.md; build-spec §3.4, §13 milestone 8, §14; ADR-0003/0006/0010 |

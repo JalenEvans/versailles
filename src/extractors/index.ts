@@ -6,13 +6,16 @@
  * ExtractorPlugin seam (ADR-0008), selected by config.language; the
  * TypeScript plugin is the v1 target (ADR-0009).
  */
-import { computeSourceHash } from "./hash.js";
+import { computeSourceHash, fnv1aHex } from "./hash.js";
 import { mergeManifests } from "./merge.js";
 import type { ExtractorResult } from "./types.js";
-import { typescriptExtractor } from "./typescript.js";
+import { resolveExportedFunction, typescriptExtractor } from "./typescript.js";
+import type { ResolvedFunction } from "./typescript.js";
 
-export { computeSourceHash } from "./hash.js";
+export { computeSourceHash, fnv1aHex } from "./hash.js";
 export { mergeManifests } from "./merge.js";
+export { resolveExportedFunction } from "./typescript.js";
+export type { ResolvedFunction } from "./typescript.js";
 export type {
 	Confidence,
 	ExtractorPlugin,

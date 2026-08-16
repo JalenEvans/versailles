@@ -9,8 +9,8 @@
 Deterministic generation is the **core value proposition** of Versailles: a pure, deterministic
 compiler from approved contracts to test files. Same context in → byte-identical test suite
 out, every run — no randomness, no timestamps, no LLM. It plans a framework-agnostic test-case
-IR and lets per-framework emitters (vitest first) render it into real test syntax inside the
-tool-owned `generated/` directory.
+IR and lets per-framework emitters (vitest, xUnit, pytest) render it into real test syntax inside the
+  tool-owned `generated/` directory.
 
 ## What it guarantees (must)
 
@@ -36,5 +36,5 @@ tool-owned `generated/` directory.
 ## Grounding
 
 [build-spec §9](../build-spec.md) · ADR-0002 (deterministic generation) · ADR-0007
-(configurable rejection idiom) · ADR-0008 (emitter seam) · ADR-0009 (vitest first) ·
+(configurable rejection idiom) · ADR-0008 (emitter seam) · ADR-0009 (framework matrix) ·
 ADR-0010 (no in-tool LLM)

@@ -402,7 +402,7 @@ For each operation:
 
 ### 9.4 Output emitters
 
-- Pluggable per `config.testFramework` (pytest, xunit, etc. — v1 target: three frameworks; typescript + vitest first).
+- Pluggable per `config.testFramework` — the v1 matrix (ADR-0009) is three shipped emitters behind the same seam: vitest (`*.test.ts`), xUnit (`*.Tests.cs`), pytest (`test_*.py`).
 - Emitter responsibility: take the generator's framework-agnostic test-case IR (input
   values, expected outcome, assertion list, traceability comment) and render it to actual
   test-file syntax.
@@ -461,11 +461,14 @@ The CLI is a tool an external LLM/agent can *control* — the tool itself never 
 | `versailles validate` | Run parser + semantic validator across all of `contracts.json`, print structured report |
 | `versailles check` | CI-mode: validate + staleness check, proper exit codes |
 | `versailles generate` | Run deterministic test generator, write to `generated/` |
-| `versailles review <component> [operation]` | Launch scoped review flow for a staged/pending contract |
+| `versailles review <component> [operation]` | Launch scoped review flow for a staged/pending contract (`--approve` merges the single object; `--reject` writes nothing) |
+| `versailles register-predicate <name> --source <Module.functionName>` | Register/update one predicate entry with mechanically verified `sourceRef`/`sourceHash`; `--verifiedPure` is the human registration gate |
+| `versailles verify-purity <name>` | Flip `verifiedPure` true for a registered predicate after manual lint (never recomputes `sourceRef`/`sourceHash`) |
+| `versailles remind-unverified` | Report predicates with `verifiedPure` missing/false; never writes |
 
 ---
 
-## 13. Build milestones (recommended order)
+## 13. Build milestones (implementation order; 1–8 shipped, 9 is v2 stretch)
 
 1. **Grammar + parser** — standalone, unit-testable against hand-written `contracts.json`
    fixtures. No dependency on anything else.
@@ -479,8 +482,8 @@ The CLI is a tool an external LLM/agent can *control* — the tool itself never 
 6. **Machine-readable CLI surface for agent control** — structured errors, stable JSON
    output, agent-iteration contract (agent writes contract objects, calls validate/check,
    reads structured errors, fixes, re-runs), grounded on real manifests/predicates.
-7. **Human review flow** (scoped diff view, merge-on-approve).
-8. **Predicate registry tooling** — registration CLI, purity-check reminder workflow.
+7. **Human review flow** (scoped diff view, merge-on-approve) — shipped.
+8. **Predicate registry tooling** — registration CLI, purity-check reminder workflow — shipped.
 9. **SMT-backed generation (v2 stretch)** — only after v1 pipeline is proven end-to-end.
 
 ---

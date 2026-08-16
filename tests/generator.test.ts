@@ -86,7 +86,7 @@ import type {
  * export declare function planTestCases(context: VersaillesContext): PlannedSuite;
  * export declare function emitSuite(
  *   suite: PlannedSuite,
- *   framework: "vitest",
+ *   framework: "vitest" | "xunit" | "pytest",
  *   options?: EmitOptions,
  * ): EmittedFile[];
  * export declare function coverageManifest(suite: PlannedSuite): CoverageManifest;
@@ -117,8 +117,9 @@ import type {
  *    "<component>.<operation>.".
  * 6. Invalid contexts block generation: planTestCases throws when
  *    context.isValid is false (contract invariant 1).
- * 7. Emitter seam (ADR-0008/0009): emitSuite dispatches on framework; only
- *    "vitest" is implemented in this milestone — xunit/pytest throw.
+ * 7. Emitter seam (ADR-0008/0009): emitSuite dispatches on framework across
+ *    the full v1 matrix ("vitest" | "xunit" | "pytest"); an unknown framework
+ *    string still throws at the seam (pinned in tests/emitters.test.ts).
  */
 
 const ACCOUNT = "AccountService";
@@ -820,12 +821,6 @@ describe("emitSuite — vitest emitter (§9.4, ADR-0008)", () => {
 		expect(file).toBeDefined();
 		expect(file?.content).toContain("toBeNull()");
 		expect(file?.content).not.toContain("toThrow()");
-	});
-
-	it("rejects an unimplemented framework at the emitter seam (vitest is the only v1 emitter)", () => {
-		const suite = planTestCases(makeContext());
-		expect(() => emitSuite(suite, "xunit" as never)).toThrow();
-		expect(() => emitSuite(suite, "pytest" as never)).toThrow();
 	});
 
 	it("renders every test call as a valid <component>.<operation>(...) — never a case-id-derived method (Center B1)", () => {
