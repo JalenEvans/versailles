@@ -28,9 +28,9 @@ cross-referencing boundary stays with contract-language. The tool never invokes 
 
 **In scope:**
 - The `predicates.json` registry file (build-spec §3.4): `version` plus a `predicates` map, each entry `{ params, paramTypes, returnType, sourceRef, sourceHash, verifiedPure }`.
-- The registration CLI behavior (build-spec §13 milestone 8, e.g. `versailles register-predicate`): adds or updates exactly one entry per invocation, keyed by predicate name.
-- The registration-time purity gate: `verifiedPure` is manually asserted via lint/manual review at registration (build-spec §14 default, ADR-0006); the post-lint `verify_purity` path flips it to true after the purity-check reminder surfaces the predicate.
-- The purity-check reminder workflow: surfaces every predicate with `verifiedPure` missing or false to reviewers, so `verifiedPure` can be set after manual lint (build-spec §13 milestone 8).
+- The registration CLI behavior (build-spec §13 milestone 8: `versailles register-predicate <name> --source <Module.functionName> [--verifiedPure]`): adds or updates exactly one entry per invocation, keyed by predicate name.
+- The registration-time purity gate: `verifiedPure` is manually asserted via lint/manual review at registration (build-spec §14 default, ADR-0006); the post-lint `versailles verify-purity <name>` path flips it to true after the purity-check reminder surfaces the predicate.
+- The purity-check reminder workflow (`versailles remind-unverified`): surfaces every predicate with `verifiedPure` missing or false to reviewers, so `verifiedPure` can be set after manual lint (build-spec §13 milestone 8).
 - `sourceRef` / `sourceHash` recording: every entry is mechanically verified against actual source before writing.
 - Single-entry read-modify-write persistence of `predicates.json`, recorded in git — the audit trail for registrations (ADR-0003).
 
@@ -53,7 +53,7 @@ cross-referencing boundary stays with contract-language. The tool never invokes 
 ### verifiedPure is set by a human, never by the tool
 
 - **Given** a predicate being registered, or an unverified predicate surfaced by the purity-check reminder
-- **When** the registration-time lint/review gate (or the post-lint `verify_purity` path) runs
+- **When** the registration-time lint/review gate (or the post-lint `versailles verify-purity` path) runs
 - **Then** `verifiedPure` becomes true only through that human decision — no automated purity or termination analysis runs anywhere in the tool (ADR-0006, build-spec §14 default)
 
 ### The purity-check reminder surfaces unverified predicates
@@ -101,3 +101,4 @@ cross-referencing boundary stays with contract-language. The tool never invokes 
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-14 | associate-head-coach | Initial draft from build-spec §3.4, §13 milestone 8, §14; ADR-0003/0006/0010 |
+| 2026-08-16 | associate-head-coach | Made the shipped CLI command names concrete (`register-predicate`, `verify-purity`, `remind-unverified`) — milestone 8 tooling is shipped (PR feat/review-ecosystem) |

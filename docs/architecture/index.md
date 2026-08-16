@@ -39,6 +39,7 @@ How the [bounded contexts](../domains/index.md) interact. The vocabulary is the 
 | manifest-extraction | Grounding edge; source → `manifests.json` | Manifests are derived by static analysis, never hallucinated |
 | deterministic-generation | The compiler; contracts → tests | Generation is a pure function; `generated/` is tool-owned |
 | review | The approval gate | Approval = single-object merge; git is the audit trail |
+| predicate-registry | Registry tooling; maintains `predicates.json` | Registrations are single-entry writes; purity is a human gate |
 
 The external LLM/agent that authors contracts and drives the CLI is **not** a bounded context — it sits outside the tool (ADR-0010).
 
@@ -74,6 +75,9 @@ The command surface binds contexts without owning domain logic (build-spec §12)
 | `versailles check` | workspace-context + contract-language + manifest-extraction | CI-mode; exit `2` = staleness (blocking) |
 | `versailles generate` | deterministic-generation | Requires `isValid: true`; exit `1` if invalid |
 | `versailles review <component> [operation]` | review → workspace-context | Merge = git commit; no auto-approve |
+| `versailles register-predicate <name> --source <Module.functionName>` | predicate-registry | Single-entry write; `sourceRef`/`sourceHash` verified |
+| `versailles verify-purity <name>` | predicate-registry | Human-only purity flip; never recomputes hashes |
+| `versailles remind-unverified` | predicate-registry | Reports unverified predicates; never writes |
 
 **Rejected commands** are first-class behavior: an invalid context (parse/validation errors), a stale context while blocking, or a version mismatch makes the command reject with structured errors and a distinct exit code — never a silent partial run (see [features/command-rejection.md](../features/command-rejection.md)).
 

@@ -10,6 +10,7 @@ User-visible capabilities mapped from the [build spec](../build-spec.md). Each c
 | Staleness check (CI lint) | `versailles check` | workspace-context, contract-language, manifest-extraction | §8 | [staleness-check.md](staleness-check.md) |
 | Agent-driven contract authoring | no `author` command — an external agent authors drafts and drives `validate` / `check` on them | cross-cutting (CLI), contract-language, workspace-context | §10 | [llm-authoring.md](llm-authoring.md) |
 | Human review & approval | `versailles review <component> [operation]` | review, workspace-context | §11 | [human-review.md](human-review.md) |
+| Predicate registry tooling | `versailles register-predicate <name> --source <Module.functionName>`, `verify-purity <name>`, `remind-unverified` | predicate-registry, workspace-context | §3.4, §13 m8 | [predicate-registry.md](predicate-registry.md) |
 | Rejected-command output | any command on an invalid/stale/version-mismatched context | cross-cutting (CLI) | §4.4, §5.2, §8, §12 | [command-rejection.md](command-rejection.md) |
 | Manifest extraction | `versailles extract-manifests` | manifest-extraction, workspace-context | §7 | [manifest-extraction.md](manifest-extraction.md) |
 | Workspace init | `versailles init` | workspace-context | §12 | (scaffolds `.versailles/`; see [workspace-context](../domains/workspace-context.md)) |

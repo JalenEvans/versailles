@@ -8,8 +8,8 @@ schema_version: 1
 context: versailles
 
 owns:
-  - "The CLI command surface (build-spec §12): init, extract-manifests, validate, check, generate, review <component> [operation] — the exact set of subcommands an external agent can invoke, with no `author` subcommand (ADR-0010)"
-  - "Command routing and argument parsing: mapping argv to the six subcommands, positional/flag validation (including review <component> [operation]), and usage-error exit paths"
+  - "The CLI command surface (build-spec §12): init, extract-manifests, validate, check, generate, review <component> [operation] [--approve|--reject], register-predicate <name> --source <Module.functionName>, verify-purity <name>, remind-unverified — the exact set of subcommands an external agent can invoke, with no `author` subcommand (ADR-0010)"
+  - "Command routing and argument parsing: mapping argv to the nine subcommands, positional/flag validation (including review <component> [operation] with --approve/--reject and register-predicate's flag set), and usage-error exit paths"
   - "The deterministic machine-readable output surface (build-spec §10): stable JSON output shape { ok: boolean, errors: [...], warnings: [...], exitCode: number } with structured errors — never unstructured throws"
   - "Stable exit-code semantics at the process boundary: 0 success/no staleness, 1 validation/parse errors present, 2 blocking staleness — mechanically computed by workspace-context's check_staleness and surfaced here (build-spec §8)"
   - "The agent-iteration contract (build-spec §10, ADR-0010): an external LLM/agent authors contract objects, calls validate/check, reads structured errors, fixes, and re-runs — the CLI never prompts, calls, or retries an LLM"
@@ -17,8 +17,9 @@ owns:
 
 purpose: |
   versailles is the machine-readable CLI surface an external LLM/agent controls. It exposes
-  exactly six deterministic subcommands — init, extract-manifests, validate, check, generate,
-  and review <component> [operation] — that parse argv, route to the owning context for each
+  exactly nine deterministic subcommands — init, extract-manifests, validate, check, generate,
+  review <component> [operation], register-predicate <name> --source <Module.functionName>,
+  verify-purity <name>, remind-unverified — that parse argv, route to the owning context for each
   capability, and respond with stable JSON of the shape { ok, errors, warnings, exitCode } plus
   one of three exit codes (0 clean, 1 parse/validation errors, 2 blocking staleness). The agent
   iteration contract is the whole point: an external agent authors contract objects, calls
@@ -40,10 +41,10 @@ operations:
     requires:
       - "argv is the raw command-line argument vector (process.argv minus node and script)"
     ensures:
-      - "The first positional argument routes to exactly one of: init | extract-manifests | validate | check | generate | review"
+      - "The first positional argument routes to exactly one of: init | extract-manifests | validate | check | generate | review | register-predicate | verify-purity | remind-unverified"
       - "An unknown first positional returns a structured usage error with exit code 1 — never a raw throw and never exit code 2"
       - "review accepts exactly one required positional (component) plus an optional second positional (operation); any other argument shape is a structured usage error with exit code 1"
-      - "Commands other than review accept no unexpected positional arguments; unexpected positionals are a structured usage error with exit code 1"
+      - "Commands other than review, register-predicate, and verify-purity accept no unexpected positional arguments; unexpected positionals are a structured usage error with exit code 1"
     examples:
       - input: "route_command(['check'])"
         output: "routes to the check handler"
@@ -120,8 +121,8 @@ operations:
         output: "stable JSON on stdout; process exits 1"
 
 must:
-  - "Expose exactly the build-spec §12 command surface: init, extract-manifests, validate, check, generate, review <component> [operation]; no author subcommand exists (ADR-0010)."
-  - "Route argv deterministically to the six subcommands and reject unknown commands or malformed arguments with a structured usage error and exit code 1 — never a raw stack trace and never exit code 2."
+  - "Expose exactly the build-spec §12 command surface: init, extract-manifests, validate, check, generate, review <component> [operation], register-predicate <name> --source <Module.functionName>, verify-purity <name>, remind-unverified; no author subcommand exists (ADR-0010)."
+  - "Route argv deterministically to the nine subcommands and reject unknown commands or malformed arguments with a structured usage error and exit code 1 — never a raw stack trace and never exit code 2."
   - "Produce the stable machine-readable output shape { ok: boolean, errors: [...], warnings: [...], exitCode: number } on every command and serialize it as deterministic JSON (build-spec §10)."
   - "Return every failure — usage errors, load errors, parse/validation errors, unknown review targets, and blocking staleness — as structured errors, never unstructured throws (build-spec §10, ADR-0010)."
   - "Surface the exit code computed by workspace-context's check_staleness at the process boundary: 0 clean, 1 parse/validation errors, 2 blocking staleness when blockOnStale is true, and 0 with a warning report when staleness is non-blocking (build-spec §8)."
@@ -142,7 +143,7 @@ must_not:
 
 can:
   - "May print human-readable diagnostics or progress to stderr, provided stdout remains stable machine-readable JSON."
-  - "May accept flags that forward to owned contexts (for example --prune for extract-manifests), validated at the CLI boundary."
+  - "May accept flags that forward to owned contexts (for example --prune for extract-manifests, --approve/--reject for review, --verifiedPure for register-predicate), validated at the CLI boundary."
   - "May include per-command usage hints inside structured usage errors (for example the review <component> [operation] signature)."
   - "May expose a pretty-print or verbosity flag as long as the default output shape and exit codes stay stable."
 
@@ -162,7 +163,7 @@ asserts:
   - "assert: validate/check on a workspace with parse or validation errors exits 1; check on blocking staleness exits 2; clean exits 0; non-blocking staleness exits 0 with a warning."
   - "assert: generate against an invalid context writes zero files under generated/ and exits 1."
   - "assert: no code path in the CLI invokes an LLM (no LLM call sites in the tool, per ADR-0010 confirmation)."
-  - "assert: the command surface contains exactly the six build-spec §12 subcommands and no author subcommand."
+  - "assert: the command surface contains exactly the nine build-spec §12 subcommands (init, extract-manifests, validate, check, generate, review, register-predicate, verify-purity, remind-unverified) and no author subcommand."
 
 ---
 ## Changelog
@@ -170,3 +171,4 @@ asserts:
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-14 | general-manager | Initial contract from docs/specs/versailles.md; build-spec §6, §8, §9, §10, §12; ADR-0002/0010. Cross-references workspace-context for staleness exit-code mechanics; no duplication of its check_staleness ownership |
+| 2026-08-16 | general-manager | Extended the command surface from six to nine subcommands — register-predicate, verify-purity, remind-unverified and the review --approve/--reject flags shipped (PR feat/review-ecosystem); build-spec §12 updated in step |

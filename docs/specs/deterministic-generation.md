@@ -11,7 +11,7 @@
 
 ## Behavioral Intent
 
-The generator is the core value proposition of Versailles (ADR-0002): a pure, deterministic compiler from approved contracts to test files — same context in, byte-identical suite out, with no LLM invoked anywhere at generation time or anywhere in the tool (ADR-0010). It builds a framework-agnostic test-case IR covering boundary values, equivalence partitions, precondition-violation cases, postcondition-satisfaction cases, per-component invariant tests, and expected-rejection cases for the postcondition/invariant interaction bug class (build-spec §9.1–§9.2). Rejection assertions — on both §9.1 precondition-violation cases and §9.2 expected-rejection cases — use the rejection idiom configured in `config.json` (default `throws`) (ADR-0007). Every generated test carries a traceability comment, and `generated/coverage.json` maps clause IDs → test IDs so a clause with zero generated tests is detectable (build-spec §9.3). Output is rendered by per-framework emitter plugins (vitest first per ADR-0009) into the tool-owned `generated/` directory via idempotent, full-file regeneration (build-spec §9.4).
+The generator is the core value proposition of Versailles (ADR-0002): a pure, deterministic compiler from approved contracts to test files — same context in, byte-identical suite out, with no LLM invoked anywhere at generation time or anywhere in the tool (ADR-0010). It builds a framework-agnostic test-case IR covering boundary values, equivalence partitions, precondition-violation cases, postcondition-satisfaction cases, per-component invariant tests, and expected-rejection cases for the postcondition/invariant interaction bug class (build-spec §9.1–§9.2). Rejection assertions — on both §9.1 precondition-violation cases and §9.2 expected-rejection cases — use the rejection idiom configured in `config.json` (default `throws`) (ADR-0007). Every generated test carries a traceability comment, and `generated/coverage.json` maps clause IDs → test IDs so a clause with zero generated tests is detectable (build-spec §9.3). Output is rendered by per-framework emitter plugins (vitest, xUnit, pytest per ADR-0009) into the tool-owned `generated/` directory via idempotent, full-file regeneration (build-spec §9.4).
 
 ## Scope
 
@@ -26,14 +26,14 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
   - Expected-rejection cases: inputs that satisfy the operation's postcondition but would violate a component invariant — the operation should refuse to complete.
 - Rejection idiom from config (default `throws`) applied to **both** the §9.1 precondition-violation surface **and** the §9.2 expected-rejection surface (ADR-0007).
 - Traceability: every generated test carries a traceability comment with the contract clause IDs it covers; `generated/coverage.json` maps clause ID → test IDs so zero-coverage clauses are detectable (build-spec §9.3).
-- The emitter plugin seam selected by `config.testFramework`, vitest first (`*.test.ts`) per ADR-0009; emitters render the framework-agnostic IR (input values, expected outcome, assertions, traceability comment) to real test syntax (build-spec §9.4, ADR-0008).
+- The emitter plugin seam selected by `config.testFramework` — vitest (`*.test.ts`), xUnit (`*.Tests.cs`), pytest (`test_*.py`), the full ADR-0009 matrix; emitters render the framework-agnostic IR (input values, expected outcome, assertions, traceability comment) to real test syntax (build-spec §9.4, ADR-0008).
 - Full-file, idempotent regeneration: two runs on the same context produce byte-identical output; `generated/` is fully tool-owned and never hand-edited (build-spec §9.4).
 - No LLM invocation at generation time or anywhere in the tool (ADR-0010).
 
 **Out of scope:**
 - SMT-backed precise input synthesis (v2 stretch, build-spec §9.5) — designed for via the frozen AST, deferred.
 - Running/executing the generated tests — the generator writes files, it does not run them.
-- Emitters for xUnit/pytest within the first implementation milestone — the seam exists for all three (ADR-0009), sequencing makes vitest first.
+- Emitters beyond the ADR-0009 matrix — the seam dispatches the complete set (vitest, xUnit, pytest); additional frameworks are future work.
 - Semantic validation of contracts (contract-language) and manifest derivation (manifest-extraction) — consumed via the context only.
 - Any LLM involvement: no LLM client, no prompting logic, no retry loop (ADR-0010).
 
@@ -89,7 +89,7 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 
 - No SMT-backed witness synthesis for compound boolean preconditions (v2, build-spec §9.5).
 - No test execution or CI running of generated tests — generation writes files only.
-- No framework-specific emitters in the core, and no xUnit/pytest emitters in the first milestone (ADR-0009 sequencing).
+- No framework-specific emitters in the core — all rendering lives behind the emitter seam (ADR-0008), and no emitters beyond the ADR-0009 matrix (vitest, xUnit, pytest).
 - No LLM involvement of any kind inside the tool (ADR-0010).
 - No hand-editing of `generated/` as a supported workflow (build-spec §9.4).
 
@@ -101,3 +101,4 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §9, §2; ADR-0002/0007/0008/0009/0010 |
 | 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
+| 2026-08-16 | associate-head-coach | Superseded "vitest first / no xUnit-pytest in the first milestone" scope — the full ADR-0009 emitter matrix (vitest, xUnit, pytest) is shipped (PR feat/review-ecosystem) |

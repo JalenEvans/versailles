@@ -1,6 +1,6 @@
 # Feature: Human Review & Approval
 
-**Command:** `versailles review <component> [operation]`
+**Command:** `versailles review <component> [operation] [--approve|--reject]`
 **Primary context:** [review](../domains/review.md) (+ workspace-context, contract-language)
 **Vocabulary:** [glossary](../glossary.md) — *staged contract, approved contract, scoped extraction, audit trail*
 
@@ -38,6 +38,7 @@ The human gate between **staged** and **approved** contracts. A reviewer sees on
 
 - **Approval races another authoring change** → single-key read-modify-write must handle a concurrently-updated file (merge discipline; git conflict is the backstop).
 - **Declined contract** → no git artifact; the reviewer's rationale lives in the review channel, not the schema.
+- **Traversal-target refusal** → `review` refuses component/operation names containing `..`, `/`, or `\` with a structured `INVALID_TARGET` error before any staged read or merge — staged objects must stay inside `.versailles/staged/`.
 
 ## Source of authority
 

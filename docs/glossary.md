@@ -76,7 +76,10 @@ Events here are records of deterministic state transitions in the pipeline (the 
 | `versailles validate` | Parse + semantically validate all of `contracts.json`, print the structured report. | contract-language (via workspace-context) |
 | `versailles check` | CI-mode: validate + staleness check with proper exit codes. | workspace-context + contract-language + manifest-extraction |
 | `versailles generate` | Run the deterministic test generator; write to `generated/`. | deterministic-generation |
-| `versailles review <component> [operation]` | Launch the scoped review flow for a staged/pending contract. | review |
+| `versailles review <component> [operation] [--approve|--reject]` | Launch the scoped review flow for a staged/pending contract; `--approve` merges the single object, `--reject` writes nothing (`contractDeclined`). | review |
+| `versailles register-predicate <name> --source <Module.functionName> [--verifiedPure]` | Register/update one predicate entry with mechanically verified `sourceRef`/`sourceHash`; `verifiedPure` only via the human registration gate. | predicate-registry |
+| `versailles verify-purity <name>` | Flip `verifiedPure` true for a registered predicate after manual lint; never recomputes `sourceRef`/`sourceHash`. | predicate-registry |
+| `versailles remind-unverified` | Report the predicates with `verifiedPure` missing/false (with their `sourceRef`); never writes. | predicate-registry |
 
 There is **no** `versailles author` command — contract authoring is an external agent workflow that drives the commands above and reads their machine-readable output (ADR-0010).
 
