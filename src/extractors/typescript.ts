@@ -110,6 +110,18 @@ function isExported(decl: NamedComponentDeclaration): boolean {
 	);
 }
 
+/** Export check for top-level FunctionDeclarations (predicate-registry seam). */
+function isExportedFunction(decl: ts.FunctionDeclaration): boolean {
+	const modifiers = ts.canHaveModifiers(decl)
+		? ts.getModifiers(decl)
+		: undefined;
+	return (
+		modifiers?.some(
+			(modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+		) ?? false
+	);
+}
+
 function isComponentDeclaration(
 	node: ts.Statement,
 ): node is NamedComponentDeclaration {
@@ -351,3 +363,70 @@ export const typescriptExtractor: ExtractorPlugin = {
 	language: "typescript",
 	extract: extractTypeScript,
 };
+
+export type ResolvedFunction =
+	| {
+			ok: true;
+			moduleName: string;
+			functionName: string;
+			/** node.getText() on the resolved FunctionDeclaration: `export`/`function` through the closing brace — no leading trivia, no trailing newline. */
+			sourceText: string;
+			filePath: string;
+	  }
+	| { ok: false };
+
+function moduleNameOf(filePath: string): string {
+	const base = filePath.split(/[\\/]/).pop() ?? filePath;
+	return base.endsWith(".ts") ? base.slice(0, -3) : base;
+}
+
+/**
+ * Predicate-registry static-analysis seam (build-spec §13 milestone 8) —
+ * resolves a `Module.functionName` sourceRef to the exported top-level
+ * FunctionDeclaration under the source roots and returns its exact source
+ * text (node.getText()). Module = file basename without `.ts`; function =
+ * exported top-level function name. This is a shared analysis seam, NOT
+ * manifest derivation — manifest-extraction owns that (contract limits).
+ */
+export function resolveExportedFunction(
+	sourceRoots: string[],
+	moduleName: string,
+	functionName: string,
+): ResolvedFunction {
+	const files = scanTypeScriptFiles(sourceRoots);
+	const program = ts.createProgram({
+		rootNames: files,
+		options: COMPILER_OPTIONS,
+	});
+	// Iterate the program's own source files (mirrors extractTypeScript) and
+	// match the module by file basename without `.ts`.
+	for (const sourceFile of program.getSourceFiles()) {
+		if (!files.includes(sourceFile.fileName)) continue;
+		if (moduleNameOf(sourceFile.fileName) !== moduleName) continue;
+		for (const statement of sourceFile.statements) {
+			if (
+				ts.isFunctionDeclaration(statement) &&
+				statement.name !== undefined &&
+				statement.name.text === functionName &&
+				isExportedFunction(statement)
+			) {
+				return {
+					ok: true,
+					moduleName,
+					functionName,
+					// node.getText() semantics: from `export`/`function` through
+					// the closing brace — getStart skips leading trivia and
+					// getEnd lands after the last token. The parent chain is
+					// not bound here (no type-checker), so getStart(sourceFile)
+					// is passed the file explicitly instead of walking parents.
+					sourceText: sourceFile.text.substring(
+						statement.getStart(sourceFile),
+						statement.getEnd(),
+					),
+					filePath: sourceFile.fileName,
+				};
+			}
+		}
+	}
+	return { ok: false };
+}

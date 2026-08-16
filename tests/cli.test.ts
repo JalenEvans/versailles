@@ -1256,3 +1256,53 @@ describe("runCli generate — writes generated/coverage.json (Center W4, build-s
 		).toBe(true);
 	});
 });
+
+// ── Predicate registry command routing (build-spec §13 milestone 8) ────────
+// Red-phase pins for the milestone-8 commands (docs/contracts/
+// predicate-registry.contract.yaml): register-predicate / verify-purity /
+// remind-unverified must route to structured results — never UNKNOWN_COMMAND,
+// never a throw (ADR-0010). TODAY all three are unknown commands, so every
+// assertion below FAILS — the expected Red state. The full behavior of each
+// command (single-entry read-modify-write, sourceHash verification,
+// verifiedPure gate, purity reminder) is pinned in tests/predicate-registry.test.ts.
+
+describe("runCli — predicate registry command routing (predicate-registry.contract.yaml, build-spec §13 milestone 8)", () => {
+	it("routes register-predicate / verify-purity / remind-unverified to structured results — never UNKNOWN_COMMAND, never a throw", async () => {
+		const cwd = await freshWorkspace("pr-route");
+		// Ground the registration fixture source (covered by sourceRoots) so a
+		// valid register-predicate invocation can succeed post-implementation.
+		await writeSource(
+			cwd,
+			"Inventory.ts",
+			`export function isAvailable(amount: number): boolean {
+	return amount >= 0;
+}
+`,
+		);
+		const commands: string[][] = [
+			[
+				"register-predicate",
+				"isAvailable",
+				"--source",
+				"Inventory.isAvailable",
+				"--params",
+				"amount",
+				"--paramTypes",
+				"number",
+			],
+			["verify-purity", "isAvailable"],
+			["remind-unverified"],
+		];
+
+		for (const argv of commands) {
+			const result = await runCli(argv, { cwd });
+			expect(typeof result.ok).toBe("boolean");
+			expect(Array.isArray(result.errors)).toBe(true);
+			expect(Array.isArray(result.warnings)).toBe(true);
+			expect([0, 1, 2]).toContain(result.exitCode);
+			expect(result.errors).not.toContainEqual(
+				expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
+			);
+		}
+	});
+});
