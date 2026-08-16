@@ -98,4 +98,4 @@ export type EmitOptions = {
 export type CoverageManifest = { coverage: Record<string, string[]> };
 
 /** Frameworks the emitter seam can dispatch to (ADR-0008/0009). */
-export type EmitterFramework = "vitest";
+export type EmitterFramework = "vitest" | "xunit" | "pytest";
