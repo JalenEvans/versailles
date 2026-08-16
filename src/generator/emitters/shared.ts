@@ -39,6 +39,35 @@ export function sanitizeId(id: string): string {
 	return id.replace(/[^A-Za-z0-9_]/g, "_");
 }
 
+/**
+ * Deterministic case-id → unique method/function name map for one generated
+ * file (Center W1). sanitizeId is a lossy projection: two distinct case ids
+ * can collapse to the same identifier (e.g. "Gen.check_out.boundary-0" and
+ * "Gen.check.out.boundary-0" both → "Gen_check_out_boundary_0"), which would
+ * render duplicate method names (a C# compile error) or duplicate function
+ * names (Python silent shadowing). The emitters call this with the file's
+ * case ids in render order: the first occurrence keeps the sanitized base
+ * name and every later collision gets a deterministic numeric suffix
+ * ("_1", "_2", ...). Because the input order is the suite's render order —
+ * itself deterministic (ADR-0002) — the assignment is stable across runs.
+ */
+export function uniqueCaseNames(ids: string[]): Map<string, string> {
+	const assigned = new Map<string, string>();
+	const used = new Set<string>();
+	for (const id of ids) {
+		const base = sanitizeId(id);
+		let name = base;
+		let suffix = 1;
+		while (used.has(name)) {
+			name = `${base}_${suffix}`;
+			suffix += 1;
+		}
+		used.add(name);
+		assigned.set(id, name);
+	}
+	return assigned;
+}
+
 export type ComponentGroup = {
 	operations: OperationCaseGroup[];
 	invariantCases: PlannedCase[];

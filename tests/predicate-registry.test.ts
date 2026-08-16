@@ -20,12 +20,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * a human-only manual lint gate — never auto-set by the tool) and ADR-0010
  * (structured results, never an LLM).
  *
- * ══ RED-PHASE NOTE ════════════════════════════════════════════════════════
- * There is NO registration CLI on this branch: the three commands
- * (register-predicate / verify-purity / remind-unverified) are not in the
- * COMMANDS set of src/cli/index.ts, so every behavioral test below FAILS
- * today with { code: "UNKNOWN_COMMAND" } / USAGE — the expected Red state.
- * The Power Forward implements the milestone-8 tooling to these pins.
+ * The milestone-8 registration CLI is implemented (register-predicate /
+ * verify-purity / remind-unverified all route through src/cli/index.ts); the
+ * tests below pin its fixed behavior so a regression fails here.
  *
  * ── Interface shape (what the PF implements) ───────────────────────────────
  *
@@ -616,6 +613,46 @@ describe("runCli verify-purity — flips verifiedPure true for an existing entry
 	});
 });
 
+// ── Center W4: verify-purity TOCTOU degenerate write (Red-phase regression pin) ─
+// Current: handleVerifyPurity (src/cli/handlers/registerPredicate.ts) checks
+// the entry exists ONCE (via loadWorkspace), then re-reads the file and
+// writes `{ ...current, verifiedPure: true }`. If the re-read entry is
+// missing or not a conforming record, `{ ...undefined, verifiedPure: true }`
+// writes a DEGENERATE `{ verifiedPure: true }` entry — sourceRef/sourceHash
+// dropped. The true TOCTOU race (entry deleted between the two reads) is not
+// reproducible in-process; the reproducible proxy is a PRESENT but
+// non-conforming entry (a record missing the §3.4 required sourceRef /
+// sourceHash fields), which exercises the exact same unsafe write path.
+// FIXED: verify-purity re-checks the entry shape before writing — a missing
+// or non-conforming entry is a structured error, exit 1, predicates.json
+// byte-identical (no degenerate write).
+
+describe("runCli verify-purity — re-checks the entry shape before writing (Center W4)", () => {
+	it("an entry that is present but not a conforming §3.4 record (sourceRef/sourceHash missing) → structured error, exit 1, predicates.json unchanged — never a degenerate write", async () => {
+		const cwd = await seedPredicateWorkspace("pr-verify-malformed");
+		await writeWorkspaceFile(cwd, "predicates.json", {
+			version: "1.0",
+			predicates: {
+				// Present at the first check, but not a conforming entry — the
+				// degenerate `{ verifiedPure: true }` write must NOT happen.
+				bogus: { verifiedPure: false },
+			},
+		});
+		const before = await readPredicatesFile(cwd);
+
+		const result = await runCli(["verify-purity", "bogus"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(
+			result.errors.some((error) => /NOT_FOUND|INVALID|ENTRY/.test(error.code)),
+		).toBe(true);
+		// No write at all: the malformed entry is untouched and no degenerate
+		// `{ verifiedPure: true }` entry appears in the file.
+		expect(await readPredicatesFile(cwd)).toBe(before);
+	});
+});
+
 // ── remind-unverified: the purity-check reminder (build-spec §13 ms 8) ─────
 
 describe("runCli remind-unverified — surfaces only unverified predicates, never writes (predicate-registry.contract.yaml)", () => {
@@ -813,14 +850,13 @@ describe("predicate-registry tooling — no LLM call sites (ADR-0010)", () => {
 				}
 			}
 		} catch {
-			// src/predicates/ absent (currently not implemented) — nothing to scan.
+			// src/predicates/ absent — nothing to scan.
 		}
 
 		// The registration CLI handler lives under src/cli/handlers/ with a
 		// name matching the register-predicate command (the handlers/
 		// convention: review.ts → review, extract.ts → extract-manifests, ...).
-		// RED today: no such handler exists, so the assertion fails — the PF
-		// must create it (e.g. registerPredicate.ts) with no LLM client code.
+		// The scan asserts it exists and carries no LLM client code.
 		const handlersDir = fileURLToPath(
 			new URL("../src/cli/handlers", import.meta.url),
 		);

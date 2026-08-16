@@ -18,12 +18,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * single-object merge commits), ADR-0010 (no in-tool LLM) and the glossary
  * (`contractDeclined`).
  *
- * ══ RED-PHASE NOTE ════════════════════════════════════════════════════════
- * src/cli/handlers/review.ts is currently a routing-only stub that returns
- * REVIEW_NOT_AVAILABLE (exit 1) for every valid arg shape (PR 2 scope), and
- * the CLI boundary in src/cli/index.ts REJECTS all flags for review as USAGE.
- * Every behavior test below therefore FAILS today — the expected Red state.
- * The Power Forward implements the PR 3 review flow to these pins.
+ * The PR 3 review flow is implemented (scoped view, --approve single-object
+ * merge, --reject byte-identical write-nothing); the tests below pin its
+ * fixed behavior so a regression fails here.
  *
  * ── Interface shape (what the PF implements) ───────────────────────────────
  *
@@ -38,9 +35,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  *
  * `--approve` / `--reject` are mutually exclusive and validated at the CLI
  * boundary (the established flag pattern: extract-manifests accepts --prune;
- * docs/contracts/versailles.contract.yaml `can` clause). Today the boundary
- * rejects ALL flags for review as USAGE — the PF must extend the review case
- * to accept exactly these two flags and still reject any other flag.
+ * docs/contracts/versailles.contract.yaml `can` clause). The boundary accepts
+ * exactly these two flags and rejects any other flag as USAGE.
  *
  * ── Staging convention (how staged objects arrive) ─────────────────────────
  *
@@ -719,6 +715,75 @@ describe("runCli review --reject — writes nothing (glossary: contractDeclined)
 
 		// contract assert: "after a reject operation, contracts.json content is
 		// byte-identical to its prior state."
+		expect(await readContractsFile(cwd)).toBe(before);
+	});
+});
+
+// ── Center W3: staged-file path traversal (Red-phase regression pin) ───────
+// Current: loadStagedObject (src/cli/handlers/review.ts) joins the raw
+// component/operation arg into `.versailles/staged/<name>.json` with NO
+// validation, so `review ../outside` reads `.versailles/outside.json` (a file
+// OUTSIDE staged/) and `--approve` merges the staged object under the junk
+// key "../outside". FIXED: any component/operation arg containing `..`, `/`,
+// or `\` is refused with a structured error (code family INVALID|TARGET),
+// exit 1, before any staged read or merge — contracts.json stays byte-identical.
+
+async function seedTraversalWorkspace(name: string): Promise<string> {
+	const cwd = await freshWorkspace(name);
+	// TRAP: a file OUTSIDE .versailles/staged/ that the traversal bug would
+	// read (the current join resolves staged/../outside.json → outside.json).
+	await writeWorkspaceFile(cwd, "outside.json", {
+		invariants: [],
+		operations: {},
+	});
+	return cwd;
+}
+
+describe("runCli review — staged-file path traversal is refused (Center W3)", () => {
+	it.each([
+		["../outside", "dot-dot component escapes staged/"],
+		["a/b", "slash in component escapes staged/"],
+		["..\\outside", "backslash in component"],
+	])(
+		"review view of %s (%s) → ok false, exit 1, structured /INVALID|TARGET/ error — never reads outside staged/",
+		async (component) => {
+			const cwd = await seedTraversalWorkspace("rv-traversal-view");
+			const result = await runCli(["review", component], { cwd });
+
+			expect(result.ok).toBe(false);
+			expect(result.exitCode).toBe(1);
+			expect(
+				result.errors.some((error) => /INVALID|TARGET/.test(error.code)),
+			).toBe(true);
+		},
+	);
+
+	it("review ../outside --approve → ok false, exit 1, /INVALID|TARGET/, contracts.json byte-identical — no junk merge key", async () => {
+		const cwd = await seedTraversalWorkspace("rv-traversal-approve");
+		const before = await readContractsFile(cwd);
+
+		const result = await runCli(["review", "../outside", "--approve"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(
+			result.errors.some((error) => /INVALID|TARGET/.test(error.code)),
+		).toBe(true);
+		// Nothing was merged — the junk key "../outside" must never appear.
+		expect(await readContractsFile(cwd)).toBe(before);
+	});
+
+	it("review ../outside --reject → ok false, exit 1, /INVALID|TARGET/ — never a declined success for an escaped target", async () => {
+		const cwd = await seedTraversalWorkspace("rv-traversal-reject");
+		const before = await readContractsFile(cwd);
+
+		const result = await runCli(["review", "../outside", "--reject"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(
+			result.errors.some((error) => /INVALID|TARGET/.test(error.code)),
+		).toBe(true);
 		expect(await readContractsFile(cwd)).toBe(before);
 	});
 });

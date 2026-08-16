@@ -22,20 +22,18 @@ import type {
 } from "../src/loader/workspace.js";
 
 /**
- * xUnit and pytest emitters (ADR-0008/0009, build-spec §9.4) — RED phase
- * regression battery for the two missing v1 emitters.
+ * xUnit and pytest emitters (ADR-0008/0009, build-spec §9.4) — regression
+ * battery for the complete v1 emitter matrix.
  *
- * Today emitSuite(suite, framework) only implements "vitest" and throws
- * `Emitter for framework "xunit"/"pytest" is not implemented` at the seam
- * (src/generator/index.ts). ADR-0009 pins the v1 matrix C#→xUnit (`*.Tests.cs`)
- * and Python→pytest (`test_*.py`); config.schema.json already accepts
- * `testFramework: "xunit" | "pytest"` and src/cli/handlers/generate.ts already
- * routes `context.config.testFramework` straight into emitSuite. The only
- * missing piece is the emitters themselves — this file freezes their fixed
- * behavior so the Power Forward can implement against a machine-checkable
- * contract. The suite IR is shared and framework-agnostic (ADR-0008); only the
- * rendering differs. The vitest emitter (src/generator/emitters/vitest.ts) is
- * the template — every decision below mirrors its existing semantics.
+ * emitSuite(suite, framework) dispatches across vitest | xunit | pytest
+ * (src/generator/index.ts, ADR-0009). ADR-0009 pins the v1 matrix C#→xUnit
+ * (`*.Tests.cs`) and Python→pytest (`test_*.py`); config.schema.json accepts
+ * `testFramework: "xunit" | "pytest"` and src/cli/handlers/generate.ts routes
+ * `context.config.testFramework` straight into emitSuite. This file freezes
+ * the emitters' fixed behavior so regressions fail here. The suite IR is
+ * shared and framework-agnostic (ADR-0008); only the rendering differs. The
+ * vitest emitter (src/generator/emitters/vitest.ts) is the template — every
+ * decision below mirrors its existing semantics.
  *
  * ── Fixed-behavior contract (what the xunit/pytest emitters MUST render) ───
  *
@@ -821,6 +819,139 @@ describe("emitSuite — output path and module path configuration (Center W4)", 
 		expect(accountPy?.content).not.toContain(
 			"from components.AccountService import AccountService",
 		);
+	});
+});
+
+// ── Center review W1/W2 regressions: pin the FIXED behavior (Red phase) ────
+//
+// W1 — sanitizeId collisions must never produce duplicate method/function
+// names. Current: sanitizeId (src/generator/emitters/shared.ts) maps BOTH
+// "Gen.check_out.boundary-0" and "Gen.check.out.boundary-0" →
+// "Gen_check_out_boundary_0", so a suite carrying both ids renders duplicate
+// `public void Gen_check_out_boundary_0()` methods (a C# compile error) and
+// duplicate `def test_Gen_check_out_boundary_0():` functions (Python silent
+// shadowing). FIXED: the emitters disambiguate — the first occurrence keeps
+// the sanitized name; a later colliding id gets a deterministic numeric
+// suffix — so every rendered method/function name is unique per file. The
+// tests pin uniqueness + determinism (ADR-0002), not the exact suffix scheme.
+//
+// W2 — a zero-input accept case must render VALID C#. Current: an operation
+// with zero inputs renders `var result = Gen.noop(new {  });` — an empty
+// anonymous object literal is a C# compile error. FIXED: zero inputs render a
+// zero-arg call `var result = Gen.noop();` (the emitter's call shape is always
+// `<Component>.<operation>(<args>)`; no inputs means no arguments — `new Gen()`
+// would invent a constructor invocation that does not match the method-call
+// contract). pytest's zero-input dict literal `Gen.noop({})` is valid Python
+// and needs no change — the W2 pin is xunit-only.
+
+function collidingIdSuite(): PlannedSuite {
+	return {
+		clauseIds: ["Gen.check.pre0"],
+		operations: [
+			{
+				component: "Gen",
+				operation: "check",
+				cases: [
+					{
+						id: "Gen.check_out.boundary-0",
+						kind: "boundary",
+						description: "collision A",
+						inputs: { amount: 9 },
+						expects: { outcome: "reject", rejectionIdiom: "throws" },
+						traces: ["Gen.check.pre0"],
+					},
+				],
+			},
+			{
+				component: "Gen",
+				operation: "check",
+				cases: [
+					{
+						id: "Gen.check.out.boundary-0",
+						kind: "boundary",
+						description: "collision B",
+						inputs: { amount: 10 },
+						expects: { outcome: "accept" },
+						traces: ["Gen.check.pre0"],
+					},
+				],
+			},
+		],
+		invariantCases: [],
+	};
+}
+
+function zeroInputSuite(): PlannedSuite {
+	return {
+		clauseIds: ["Gen.noop.inv0"],
+		operations: [
+			{
+				component: "Gen",
+				operation: "noop",
+				cases: [
+					{
+						id: "Gen.noop.boundary-0",
+						kind: "boundary",
+						description: "zero-input accept",
+						inputs: {},
+						expects: { outcome: "accept" },
+						traces: ["Gen.noop.inv0"],
+					},
+				],
+			},
+		],
+		invariantCases: [],
+	};
+}
+
+describe("emitSuite — case-id sanitization collisions never duplicate method/function names (Center W1)", () => {
+	it("xunit renders two DISTINCT method names for ids that sanitize to the same identifier — no duplicate public void lines", () => {
+		const suite = collidingIdSuite();
+
+		const first = emitSuite(suite, "xunit");
+		const second = emitSuite(suite, "xunit");
+		const gen = first.find((file) => file.path.endsWith("Gen.Tests.cs"));
+		expect(gen).toBeDefined();
+
+		// Every rendered method name is unique — the disambiguated second id
+		// must differ from the first (today both are Gen_check_out_boundary_0).
+		const methodNames = [
+			...(gen?.content.matchAll(/public void (\w+)\(\)/g) ?? []),
+		].map((match) => match[1]);
+		expect(methodNames).toHaveLength(2);
+		expect(new Set(methodNames).size).toBe(2);
+		// The first occurrence keeps the base sanitized name (deterministic
+		// disambiguation — later collisions get a numeric suffix).
+		expect(methodNames[0]).toBe("Gen_check_out_boundary_0");
+
+		// Disambiguation is deterministic (ADR-0002): two runs byte-identical.
+		expect(second.map((file) => file.content)).toEqual(
+			first.map((file) => file.content),
+		);
+	});
+
+	it("pytest renders two DISTINCT def test_* function names for colliding ids — no silent shadowing", () => {
+		const files = emitSuite(collidingIdSuite(), "pytest");
+		const gen = files.find((file) => file.path.endsWith("test_Gen.py"));
+		expect(gen).toBeDefined();
+
+		const fnNames = [...(gen?.content.matchAll(/def (test_\w+)\(/g) ?? [])].map(
+			(match) => match[1],
+		);
+		expect(fnNames).toHaveLength(2);
+		expect(new Set(fnNames).size).toBe(2);
+	});
+});
+
+describe("emitSuite — zero-input accept cases render valid xUnit (Center W2)", () => {
+	it("a zero-input accept case emits `var result = Gen.noop();` — never an empty anonymous object literal", () => {
+		const files = emitSuite(zeroInputSuite(), "xunit");
+		const gen = files.find((file) => file.path.endsWith("Gen.Tests.cs"));
+		expect(gen).toBeDefined();
+
+		// The zero-arg call is valid C# — `new {  }` is a compile error.
+		expect(gen?.content).toContain("var result = Gen.noop();");
+		expect(gen?.content).not.toMatch(/new\s*\{\s*\}/);
 	});
 });
 

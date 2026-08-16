@@ -24,6 +24,7 @@ import {
 	groupByComponent,
 	operationOf,
 	sanitizeId,
+	uniqueCaseNames,
 } from "./shared.js";
 import type { ComponentGroup } from "./shared.js";
 
@@ -95,10 +96,33 @@ function renderComponentFile(
 	lines.push(`public class ${component}Tests`);
 	lines.push("{");
 
+	// Deterministic method-name assignment (Center W1): case ids that
+	// sanitize to the same identifier must render distinct method names —
+	// first occurrence keeps the base name, later collisions get a numeric
+	// suffix (ADR-0002).
+	const caseIds: string[] = [];
+	for (const operation of group.operations) {
+		for (const case_ of operation.cases) {
+			caseIds.push(case_.id);
+		}
+	}
+	for (const case_ of group.invariantCases) {
+		caseIds.push(case_.id);
+	}
+	const methodNames = uniqueCaseNames(caseIds);
+
 	for (const operation of group.operations) {
 		assertIdentifier(operation.operation, "operation name");
 		for (const case_ of operation.cases) {
-			lines.push(...renderCase(case_, component, operation.operation, "    "));
+			lines.push(
+				...renderCase(
+					case_,
+					component,
+					operation.operation,
+					"    ",
+					methodNames.get(case_.id) ?? sanitizeId(case_.id),
+				),
+			);
 			lines.push("");
 		}
 	}
@@ -106,7 +130,15 @@ function renderComponentFile(
 	for (const case_ of group.invariantCases) {
 		const operation = operationOf(case_);
 		assertIdentifier(operation, "operation name");
-		lines.push(...renderCase(case_, component, operation, "    "));
+		lines.push(
+			...renderCase(
+				case_,
+				component,
+				operation,
+				"    ",
+				methodNames.get(case_.id) ?? sanitizeId(case_.id),
+			),
+		);
 		lines.push("");
 	}
 
@@ -119,9 +151,9 @@ function renderCase(
 	component: string,
 	operation: string,
 	indent: string,
+	methodName: string,
 ): string[] {
 	const title = `${case_.id} — ${case_.description}`;
-	const methodName = sanitizeId(case_.id);
 	const lines: string[] = [];
 	lines.push(`${indent}// ${title}`);
 
@@ -143,9 +175,15 @@ function renderCase(
 
 	lines.push(`${indent}{`);
 	const body = `${indent}    `;
-	const call = isPartition
-		? `${component}.${operation}(${renderNamedObject(entries)})`
-		: `${component}.${operation}(${renderObjectLiteral(case_.inputs)})`;
+	// Zero inputs render a zero-arg call — `new {  }` is invalid C# (Center
+	// W2). The call shape is always `<Component>.<operation>(<args>)`; no
+	// inputs means no arguments.
+	const call =
+		entries.length === 0
+			? `${component}.${operation}()`
+			: isPartition
+				? `${component}.${operation}(${renderNamedObject(entries)})`
+				: `${component}.${operation}(${renderObjectLiteral(case_.inputs)})`;
 
 	if (case_.expects.outcome === "reject") {
 		const idiom = case_.expects.rejectionIdiom ?? "throws";

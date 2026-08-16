@@ -42,6 +42,32 @@ function isMissingFileError(error: unknown): boolean {
 	return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
+/**
+ * Staged-file path safety (Center W3): component/operation args are joined
+ * straight into `.versailles/staged/<name>.json`, so a `..`, `/`, or `\` in
+ * either arg would read (and — with --approve — merge under a junk key) a file
+ * OUTSIDE staged/. Such targets are refused with a structured error before any
+ * staged read or merge.
+ */
+function isTraversalTarget(name: string): boolean {
+	return name.includes("..") || name.includes("/") || name.includes("\\");
+}
+
+function invalidTargetResult(target: string): CliResult {
+	return {
+		ok: false,
+		errors: [
+			{
+				code: "INVALID_TARGET",
+				field: target,
+				detail: `Refusing review target "${target}" — component/operation names may not contain "..", "/", or "\\" (staged objects must stay inside .versailles/staged/)`,
+			},
+		],
+		warnings: [],
+		exitCode: 1,
+	};
+}
+
 function targetKey(component: string, operation?: string): string {
 	return operation === undefined ? component : `${component}.${operation}`;
 }
@@ -144,6 +170,15 @@ export async function handleReview(
 	flag: ReviewFlag = null,
 ): Promise<CliResult> {
 	const workspaceDir = join(cwd, ".versailles");
+
+	// Center W3: refuse traversal targets before ANY staged read or merge —
+	// applies to the view, approve, and reject paths alike.
+	const badArg = [component, operation].find(
+		(arg) => arg !== undefined && isTraversalTarget(arg),
+	);
+	if (badArg !== undefined) {
+		return invalidTargetResult(badArg);
+	}
 
 	if (flag === "reject") {
 		const staged = await loadStagedObject(workspaceDir, component, operation);

@@ -59,6 +59,29 @@ function predicateFailure(
 }
 
 /**
+ * §3.4 conformance check for a registered predicate entry: the five fields
+ * the schema requires (params / paramTypes arrays, returnType / sourceRef /
+ * sourceHash strings). verifiedPure may be absent — the reminder treats
+ * missing the same as false, and verify-purity re-checks this shape before
+ * flipping it (Center W4).
+ */
+function isConformingPredicateEntry(
+	value: unknown,
+): value is Record<string, unknown> {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	return (
+		Array.isArray(record.params) &&
+		Array.isArray(record.paramTypes) &&
+		typeof record.returnType === "string" &&
+		typeof record.sourceRef === "string" &&
+		typeof record.sourceHash === "string"
+	);
+}
+
+/**
  * Reads predicates.json raw and returns its parsed top-level object plus the
  * predicates map (defaulting an absent key to {} so a bare { "version": "1.0" }
  * store is writable — init.ts seeds the same shape).
@@ -192,12 +215,29 @@ export async function handleVerifyPurity(
 		);
 	}
 
+	let updated: Record<string, unknown>;
 	try {
 		// Single-entry read-modify-write: flip ONLY verifiedPure — sourceRef /
 		// sourceHash are never recomputed or rewritten (verify_purity.ensures).
+		// Center W4: re-check the re-read entry before writing. The first check
+		// (via loadWorkspace) is a separate read; if the entry is missing or
+		// not a conforming §3.4 record at write time, `{ ...current,
+		// verifiedPure: true }` would write a DEGENERATE entry that drops
+		// sourceRef/sourceHash. Missing/non-conforming is a structured error —
+		// predicates.json stays byte-identical, never a degenerate write.
 		const { parsed, predicates: map } = await readPredicatesRaw(workspaceDir);
-		const current = map[name] as Record<string, unknown>;
-		map[name] = { ...current, verifiedPure: true };
+		const current = map[name];
+		if (current === undefined || !isConformingPredicateEntry(current)) {
+			return predicateFailure(
+				current === undefined ? "NOT_FOUND" : "INVALID_ENTRY",
+				name,
+				current === undefined
+					? `Predicate "${name}" is not registered in predicates.json`
+					: `Predicate "${name}" is not a conforming §3.4 entry (requires params, paramTypes, returnType, sourceRef, sourceHash)`,
+			);
+		}
+		updated = { ...current, verifiedPure: true };
+		map[name] = updated;
 		parsed.predicates = map;
 		await writeJsonFile(workspaceDir, "predicates.json", parsed);
 	} catch (error) {
@@ -213,7 +253,7 @@ export async function handleVerifyPurity(
 		errors: [],
 		warnings: [],
 		exitCode: 0,
-		output: { verified: name, entry: { ...entry, verifiedPure: true } },
+		output: { verified: name, entry: updated },
 	};
 }
 

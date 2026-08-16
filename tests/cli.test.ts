@@ -18,14 +18,9 @@ import { extractManifests } from "../src/extractors/index.js";
  * build-spec §8 (staleness/exit codes), §10 (machine-readable output),
  * §12 (command table), ADR-0002 (determinism) and ADR-0010 (no LLM).
  *
- * ══ RED-PHASE NOTE ════════════════════════════════════════════════════════
- * This file defines the module surface the Power Forward must implement at
- * src/cli/index.ts. That module does NOT exist on this branch yet (only
- * src/cli/init.ts does), and src/generator/ is only a .gitkeep on this branch
- * (the generator lives on feat/generator-core and will be integrated). The
- * dynamic import below therefore rejects with ERR_MODULE_NOT_FOUND today —
- * that failure, propagated through the beforeAll hook, is the EXPECTED Red
- * state. Once the module lands, these tests pin its behavior.
+ * src/cli/index.ts and the generator core (src/generator/) are implemented on
+ * this branch; the dynamic import in beforeAll resolves and these tests pin
+ * the module surface defined below.
  *
  * ── Module contract (what these tests require from src/cli/index.ts) ──────
  *
@@ -315,11 +310,9 @@ afterAll(async () => {
 	await rm(tempRoot, { recursive: true, force: true });
 });
 
-// ── Red-phase import ───────────────────────────────────────────────────────
-// src/cli/index.ts does not exist on this branch yet. When it is missing this
-// hook rejects and EVERY test below fails with the module-resolution error —
-// the expected Red state. When the Power Forward lands the module, the hook
-// resolves and the tests pin its behavior.
+// ── Module import ──────────────────────────────────────────────────────────
+// src/cli/index.ts is implemented on this branch; the hook resolves and the
+// tests below pin its behavior.
 type CliErrorShape = {
 	code: string;
 	field?: string;
@@ -1258,13 +1251,13 @@ describe("runCli generate — writes generated/coverage.json (Center W4, build-s
 });
 
 // ── Predicate registry command routing (build-spec §13 milestone 8) ────────
-// Red-phase pins for the milestone-8 commands (docs/contracts/
+// Pins for the milestone-8 commands (docs/contracts/
 // predicate-registry.contract.yaml): register-predicate / verify-purity /
 // remind-unverified must route to structured results — never UNKNOWN_COMMAND,
-// never a throw (ADR-0010). TODAY all three are unknown commands, so every
-// assertion below FAILS — the expected Red state. The full behavior of each
-// command (single-entry read-modify-write, sourceHash verification,
-// verifiedPure gate, purity reminder) is pinned in tests/predicate-registry.test.ts.
+// never a throw (ADR-0010). All three route through src/cli/index.ts today.
+// The full behavior of each command (single-entry read-modify-write,
+// sourceHash verification, verifiedPure gate, purity reminder) is pinned in
+// tests/predicate-registry.test.ts.
 
 describe("runCli — predicate registry command routing (predicate-registry.contract.yaml, build-spec §13 milestone 8)", () => {
 	it("routes register-predicate / verify-purity / remind-unverified to structured results — never UNKNOWN_COMMAND, never a throw", async () => {
