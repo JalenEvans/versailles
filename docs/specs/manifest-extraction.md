@@ -11,7 +11,7 @@
 
 ## Behavioral Intent
 
-Manifest extraction derives the grounding layer for the whole pipeline — `manifests.json` (build-spec §3.3) — from real source code via per-language extractor plugins (ADR-0008), with TypeScript first using `ts.createProgram` + the type checker (ADR-0005, ADR-0009). It applies the `typeRef` grammar (generics → `list<T>`, literal unions → `enum<...>`, nested/related types added transitively to the flat map) and computes structural `sourceHash` values from sorted field name+type pairs only, so body-only edits never trigger false staleness (build-spec §7). Extraction is static-analysis-first and permissive: fields whose types can only be inferred are flagged low-confidence and warn rather than block (ADR-0004). Manifests are derived artifacts — an external agent may author or update manifests via the CLI, but the tool itself never invokes an LLM (ADR-0010, ADR-0005).
+Manifest extraction derives the grounding layer for the whole pipeline — `manifests.json` (build-spec §3.3) — from real source code via per-language extractor plugins (ADR-0008), with TypeScript first using `ts.createProgram` + the type checker (ADR-0005, ADR-0009). It applies the `typeRef` grammar (generics → `list<T>`, literal unions → `enum<...>`, nested/related types added transitively to the flat map) and computes structural `sourceHash` values from the sorted field name+type pairs plus sorted method-signature records — never method bodies — so body-only edits never trigger false staleness (build-spec §7). Each entry records per-component method metadata (method name, static/instance, ordered param names, return type where determinable) and the `sourcePath` of the file it was extracted from, so downstream emitters can render shape-aware calls against real modules (build-spec §3.3, §7). Extraction is static-analysis-first and permissive: fields whose types can only be inferred are flagged low-confidence and warn rather than block (ADR-0004). Manifests are derived artifacts — an external agent may author or update manifests via the CLI, but the tool itself never invokes an LLM (ADR-0010, ADR-0005).
 
 ## Scope
 
@@ -19,7 +19,9 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 - The extractor plugin seam selected by `config.language`, with no language-specific code in the core (ADR-0008).
 - The TypeScript extractor via the TypeScript compiler API (`ts.createProgram`, type checker) — the first target per ADR-0009, resolving field types to the `typeRef` grammar.
 - `typeRef` grammar application (build-spec §3.3): `string | number | boolean | <ComponentName> | list<typeRef> | optional<typeRef> | enum<v1,v2,...>`; TS generics → `list<T>`; unions of literal types → `enum<...>`; nested/related types added to the flat manifest map transitively so `order.items[].sku` resolves via a `OrderItem` entry in the same map.
-- Structural `sourceHash` computation: hash of sorted field name+type pairs only, never the full source file (build-spec §7, ADR-0005).
+- Structural `sourceHash` computation: hash of the sorted field name+type pairs plus sorted method-signature records, never the full source file and never method bodies (build-spec §7, ADR-0005).
+- Per-component method metadata recording: method name, static/instance, ordered param names, and return type where determinable, for every resolvable method (build-spec §7).
+- `sourcePath` persistence through the `manifests.json` store: every covered entry carries the source path it was extracted from so the loader and generator can derive real module import paths (build-spec §3.3, §7).
 - Permissive typing policy: inferred/low-confidence fields emit a non-blocking warning and never produce a hard error (ADR-0004).
 - `versailles extract-manifests` behavior: update entries for covered components, preserve entries for components not covered by the current scan, and remove only via the explicit `--prune` flag — never implicitly (build-spec §7).
 - Scanning only within `config.sourceRoots`.
@@ -31,6 +33,7 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 - Extractors for C# and Python within the first implementation milestone — the seam exists for all three (ADR-0009 matrix), but sequencing makes TypeScript first.
 - Predicate registry tooling, even where it reuses static-analysis seams (build-spec §13 milestone 8 is a later step).
 - Any LLM-driven extraction inside the tool — LLM assistance exists only as an external-agent loop, mechanically verified against source before `manifests.json` is written (ADR-0005 clarification, ADR-0010).
+- No method-body analysis — only method signatures (name, static/instance, params, return type) are recorded; bodies never enter the manifest or the hash.
 
 ## Behavior
 
@@ -42,15 +45,27 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 
 ### Body-only edits do not change the structural hash
 
-- **Given** a manifest entry whose `sourceHash` was computed from a component's field set + types
-- **When** only method bodies change (the field set and types are unchanged)
+- **Given** a manifest entry whose `sourceHash` was computed from a component's field set + method signatures
+- **When** only method bodies change (the field set and method signatures are unchanged)
 - **Then** recomputing the `sourceHash` yields the stored value — no false staleness (build-spec §7)
 
 ### Structural edits change the hash and are detectable
 
 - **Given** a manifest entry with a stored `sourceHash`
-- **When** a field is added, removed, or retyped
+- **When** a field is added, removed, or retyped, or a method signature changes (name, static/instance, params, return type)
 - **Then** the recomputed `sourceHash` differs from the stored one, and the drift is detectable by `versailles check` (build-spec §8)
+
+### Method metadata is recorded with call-shape fidelity
+
+- **Given** a TypeScript component with instance and static methods (e.g. `placeOrder(x)` instance, `create(...)` static), covered by `config.sourceRoots`
+- **When** `versailles extract-manifests` runs
+- **Then** the manifest entry records each method's name, static/instance flag, ordered param names, and return type where determinable (build-spec §7) — so the generator can render shape-aware calls
+
+### sourcePath persists through the store
+
+- **Given** a component covered by the current scan
+- **When** `versailles extract-manifests` writes/updates `manifests.json`
+- **Then** the entry carries the `sourcePath` of the file it was extracted from — never an empty string for covered entries; legacy entries lacking one are preserved as-is (build-spec §3.3)
 
 ### Inferred types warn, they never block
 
@@ -73,11 +88,13 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 ## Constraints
 
 - `must_not` treat manifests as a hand-authored source of truth — they are derived artifacts produced by static analysis (build-spec §3.3, ADR-0005).
-- `must_not` compute `sourceHash` over the full source file — structural shape only (sorted field name+type pairs) so unrelated body edits don't trigger false staleness (build-spec §7, ADR-0005).
+- `must_not` compute `sourceHash` over the full source file or method bodies — structural shape only (sorted field name+type pairs + sorted method-signature records) so unrelated body edits don't trigger false staleness (build-spec §7, ADR-0005).
 - `must_not` prune manifest entries implicitly — removal happens only via the explicit `--prune` flag (build-spec §7).
 - `must_not` scan outside `config.sourceRoots` (glossary: source root).
 - `must_not` invoke an LLM anywhere in extraction — no LLM client, no prompting logic, no retry loop (ADR-0010); any LLM-assisted path must include a mechanical verification gate against real source before writing (ADR-0005).
 - `must_not` let a low-confidence/inferred field cause a hard type-compatibility error — that tier warns but never blocks (ADR-0004).
+- `must_not` write a covered manifest entry with an empty `sourcePath` — a missing path is a legacy-entry condition, never a silent empty string (build-spec §3.3).
+- `must_not` silently drop unresolvable method signatures — they follow the permissive policy and surface a warning (ADR-0004).
 - `must_not` place language-specific extraction code in the core — all extraction lives behind the `ExtractorPlugin` seam (ADR-0008).
 
 ## Non-Goals
@@ -95,3 +112,4 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §3.3, §7; ADR-0004/0005/0008/0009/0010 |
 | 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
+| 2026-08-17 | general-manager | Mirrored contract changes (PR fix/generator-emitter-runnability): method metadata recording, sourcePath persistence, sourceHash covers sorted field pairs + sorted method-signature records (method bodies still excluded) — backs VERSAILLES-20/21 |

@@ -11,7 +11,7 @@
 
 ## Behavioral Intent
 
-The generator is the core value proposition of Versailles (ADR-0002): a pure, deterministic compiler from approved contracts to test files — same context in, byte-identical suite out, with no LLM invoked anywhere at generation time or anywhere in the tool (ADR-0010). It builds a framework-agnostic test-case IR covering boundary values, equivalence partitions, precondition-violation cases, postcondition-satisfaction cases, per-component invariant tests, and expected-rejection cases for the postcondition/invariant interaction bug class (build-spec §9.1–§9.2). Rejection assertions — on both §9.1 precondition-violation cases and §9.2 expected-rejection cases — use the rejection idiom configured in `config.json` (default `throws`) (ADR-0007). Every generated test carries a traceability comment, and `generated/coverage.json` maps clause IDs → test IDs so a clause with zero generated tests is detectable (build-spec §9.3). Output is rendered by per-framework emitter plugins (vitest, xUnit, pytest per ADR-0009) into the tool-owned `generated/` directory via idempotent, full-file regeneration (build-spec §9.4).
+The generator is the core value proposition of Versailles (ADR-0002): a pure, deterministic compiler from approved contracts to test files — same context in, byte-identical suite out, with no LLM invoked anywhere at generation time or anywhere in the tool (ADR-0010). It builds a framework-agnostic test-case IR covering boundary values, equivalence partitions, precondition-violation cases, postcondition-satisfaction cases, per-component invariant tests, and expected-rejection cases for the postcondition/invariant interaction bug class (build-spec §9.1–§9.2). Predicate-call preconditions (e.g. `isPositive(amount)`) are planned too: at least one deterministic violation case per predicate call, or an explicit non-silent warning — never a silent zero — and valid-input synthesis is predicate-aware, so a registered predicate guard never receives a value it rejects (build-spec §9.1). Emitters render shape-aware calls from manifest method metadata (instance → `new <Component>().<op>(...)`, static → `<Component>.<op>(...)`, void-return acceptance without return assertions) and import components via `sourcePath`-derived module paths (build-spec §9.4). Rejection assertions — on both §9.1 precondition-violation cases and §9.2 expected-rejection cases — use the rejection idiom configured in `config.json` (default `throws`) (ADR-0007). Every generated test carries a traceability comment, and `generated/coverage.json` maps clause IDs → test IDs so a clause with zero generated tests is detectable (build-spec §9.3). Output is rendered by per-framework emitter plugins (vitest, xUnit, pytest per ADR-0009) into the tool-owned `generated/` directory via idempotent, full-file regeneration (build-spec §9.4).
 
 ## Scope
 
@@ -21,12 +21,15 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
   - Boundary values: for every numeric comparison in preconditions, cases at the boundary, boundary−1, and boundary+1.
   - Equivalence partitions: for every `in` clause or enum-typed field, one case per partition member plus one case outside the set.
   - Precondition-violation cases: for each precondition clause individually, an input satisfying all *other* clauses but falsifying this one; assert rejection.
+  - Predicate-call precondition coverage: at least one violation case per predicate-call precondition, synthesized deterministically from the registered predicate's `paramTypes` and registry example hints; a genuinely unplannable predicate call surfaces an explicit non-silent warning — never a silent zero.
+  - Predicate-aware valid-input synthesis: a param guarded by a registered predicate always receives a value the predicate accepts (deterministic, registry-hint-derived), never an input the operation would reject.
   - Postcondition-satisfaction cases: valid inputs asserted against every postcondition, with `old(field)` resolved against captured pre-call state.
   - Per-component invariant tests: valid pre-state satisfying all invariants, call with valid inputs, assert every invariant post-call.
   - Expected-rejection cases: inputs that satisfy the operation's postcondition but would violate a component invariant — the operation should refuse to complete.
 - Rejection idiom from config (default `throws`) applied to **both** the §9.1 precondition-violation surface **and** the §9.2 expected-rejection surface (ADR-0007).
 - Traceability: every generated test carries a traceability comment with the contract clause IDs it covers; `generated/coverage.json` maps clause ID → test IDs so zero-coverage clauses are detectable (build-spec §9.3).
 - The emitter plugin seam selected by `config.testFramework` — vitest (`*.test.ts`), xUnit (`*.Tests.cs`), pytest (`test_*.py`), the full ADR-0009 matrix; emitters render the framework-agnostic IR (input values, expected outcome, assertions, traceability comment) to real test syntax (build-spec §9.4, ADR-0008).
+- Shape-aware emission: calls render from manifest method metadata — instance methods via `new <Component>().<op>(...)`, static methods via `<Component>.<op>(...)`, params passed positionally in declared order, void-return accept cases without return-value assertions — and module import paths derive from manifest `sourcePath` with a deterministic default fallback (build-spec §9.4).
 - Full-file, idempotent regeneration: two runs on the same context produce byte-identical output; `generated/` is fully tool-owned and never hand-edited (build-spec §9.4).
 - No LLM invocation at generation time or anywhere in the tool (ADR-0010).
 
@@ -63,6 +66,24 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 - **When** the generator emits §9.1 violation cases and §9.2 postcondition/invariant interaction (expected-rejection) cases
 - **Then** for each precondition clause there is an input satisfying all other clauses but falsifying this one, and both violation and expected-rejection tests assert rejection using the configured rejection idiom — configurable, default `throws` (ADR-0007, build-spec §9.1–§9.2)
 
+### Predicate-call preconditions get violation coverage or an explicit warning
+
+- **Given** an operation with a predicate-call precondition (e.g. `isPositive(amount)`) whose predicate is registered with `paramTypes` and (optionally) example hints
+- **When** the generator plans operation cases
+- **Then** at least one violation case is synthesized deterministically for that predicate call — or, when no violation input is derivable, an explicit non-silent warning is surfaced; zero cases are never emitted silently (build-spec §9.1)
+
+### Valid-input synthesis is predicate-aware
+
+- **Given** an operation with a predicate-guarded param (e.g. `isPositive(amount)`)
+- **When** the generator synthesizes valid inputs for satisfaction/invariant cases
+- **Then** the param receives a value the registered predicate accepts (e.g. a positive amount, never `0` for `isPositive`), derived deterministically from registry example hints or `paramTypes`-aware defaults (build-spec §9.1)
+
+### Emitted calls match the extracted method shape
+
+- **Given** manifest method metadata recording `placeOrder` as an instance method with positional params `[x]` and a void return, `create` as a static method, and `sourcePath` entries for their components
+- **When** the emitter renders generated tests
+- **Then** instance calls render `new OrderService().placeOrder(x)`, static calls render `OrderService.create(...)`, params pass positionally in declared order, void accept cases carry no return-value assertion, and imports derive from `sourcePath` module paths (deterministic default when absent) (build-spec §9.4)
+
 ### Postcondition-satisfaction resolves `old(...)`; invariants are preserved
 
 - **Given** an operation with postconditions (possibly referencing `old(field)`) and a component with invariants
@@ -84,10 +105,13 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 - `must_not` treat hand-edited `generated/` content as source or preserve it — the directory is fully tool-owned and full-file regenerated (build-spec §9.4).
 - `must_not` emit a coverage manifest that hides gaps — every clause maps to its generated test IDs; zero-coverage clauses remain detectable (build-spec §9.3).
 - The generator `must_not` be nondeterministic — same context in, byte-identical suite out, no randomness, no timestamps, no LLM (ADR-0002).
+- The generator `must_not` emit zero tests for a predicate-call precondition silently — a genuinely unplannable predicate call surfaces an explicit non-silent warning (build-spec §9.1).
+- The generator `must_not` emit a "valid" input that a registered predicate in the operation's preconditions would reject — predicate-aware synthesis must satisfy registered predicates (build-spec §9.1).
+- The generator `must_not` render calls that mismatch the extracted method metadata — static calls on instance methods, options-object argument lists where positional params are declared, or return-value assertions on void operations (build-spec §9.4).
 
 ## Non-Goals
 
-- No SMT-backed witness synthesis for compound boolean preconditions (v2, build-spec §9.5).
+- No SMT-backed witness synthesis for compound boolean preconditions or predicate calls (v2, build-spec §9.5) — v1 predicate planning uses deterministic heuristics over registry `paramTypes` + example hints.
 - No test execution or CI running of generated tests — generation writes files only.
 - No framework-specific emitters in the core — all rendering lives behind the emitter seam (ADR-0008), and no emitters beyond the ADR-0009 matrix (vitest, xUnit, pytest).
 - No LLM involvement of any kind inside the tool (ADR-0010).
@@ -102,3 +126,4 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §9, §2; ADR-0002/0007/0008/0009/0010 |
 | 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
 | 2026-08-16 | associate-head-coach | Superseded "vitest first / no xUnit-pytest in the first milestone" scope — the full ADR-0009 emitter matrix (vitest, xUnit, pytest) is shipped (PR feat/review-ecosystem) |
+| 2026-08-17 | general-manager | Mirrored contract changes (PR fix/generator-emitter-runnability): predicate-call preconditions get violation coverage or an explicit warning (never silent zero), predicate-aware valid-input synthesis, and shape-aware emission from manifest method metadata + sourcePath module paths — backs VERSAILLES-20/22/23 |
