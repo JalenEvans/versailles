@@ -6,7 +6,16 @@
  * validated VersaillesContext) and the emitter plugins (a pure function of the
  * IR). No framework strings live here — only the rejection idiom NAME
  * passthrough (ADR-0007), which emitters translate into real assertion syntax.
+ *
+ * PlannedSuite.warnings is a suite-level planning warning channel
+ * (VERSAILLES-22 F3, deterministic-generation.contract.yaml): a predicate-call
+ * precondition the planner genuinely cannot falsify surfaces a non-silent
+ * PREDICATE_UNPLANNABLE warning here instead of silently emitting zero cases.
+ * Same { code, field, detail } shape as LoaderWarning (ADR-0004 tier) — the
+ * generate handler merges these into CliResult.warnings (non-blocking, exit 0).
+ * Emitters ignore the field entirely.
  */
+import type { LoaderWarning } from "../loader/workspace.js";
 
 /** §9.1–§9.2 case kinds. */
 export type CaseKind =
@@ -75,12 +84,21 @@ export type OperationCaseGroup = {
 /**
  * A planned suite. `clauseIds` carries the FULL source clause set so the
  * coverage manifest can expose zero-coverage clauses as empty arrays.
+ * `warnings` (VERSAILLES-22 F3) carries non-blocking planning warnings — e.g.
+ * PREDICATE_UNPLANNABLE for a predicate-call precondition the planner cannot
+ * falsify — so a coverage gap is never silent. The generate handler merges
+ * these into CliResult.warnings (same ADR-0004 tier as validationWarnings).
  */
 export type PlannedSuite = {
 	operations: OperationCaseGroup[];
 	/** §9.2 invariant + expected-rejection cases. */
 	invariantCases: PlannedCase[];
 	clauseIds: string[];
+	/**
+	 * Suite-level planning warnings ({ code, field, detail } — the
+	 * LoaderWarning shape). Absent/empty when planning is fully plannable.
+	 */
+	warnings?: LoaderWarning[];
 };
 
 /** A full-file output unit — ready for idempotent full-file regeneration. */

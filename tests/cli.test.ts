@@ -923,6 +923,73 @@ describe("runCli generate — deterministic generation (build-spec §9)", () => 
 	});
 });
 
+describe("runCli generate — non-silent unplannable predicate warnings (VERSAILLES-22 F3, deterministic-generation.contract.yaml)", () => {
+	it("a genuinely unplannable predicate clause surfaces PREDICATE_UNPLANNABLE in warnings — never a silent zero, exit 0", async () => {
+		const cwd = await freshWorkspace("g-predicate-unplannable");
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				OrderService: {
+					invariants: [],
+					operations: {
+						setSubtotal: {
+							id: "OrderService.setSubtotal",
+							// A non-primitive paramType the v1 falsifying-input
+							// heuristic cannot reason about.
+							params: [{ name: "items", type: "list<number>" }],
+							preconditions: [
+								{
+									id: "OrderService.setSubtotal.pre0",
+									expr: "isNonEmpty(items)",
+								},
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "setsubtotal-list-hash",
+						},
+					},
+				},
+			},
+		});
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order",
+					fields: { subtotal: "number" },
+				},
+			},
+		});
+		await writeWorkspaceFile(cwd, "predicates.json", {
+			version: "1.0",
+			predicates: {
+				isNonEmpty: {
+					params: ["items"],
+					paramTypes: ["list<number>"],
+					returnType: "boolean",
+					sourceRef: "List.isNonEmpty",
+					sourceHash: "p-nonempty",
+					verifiedPure: true,
+				},
+			},
+		});
+
+		const result = await runCli(["generate"], { cwd });
+
+		// Generation still succeeds (exit 0) — the warning tier is
+		// non-blocking, exactly like validationWarnings (ADR-0004).
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+		expect(result.warnings).toContainEqual(
+			expect.objectContaining({
+				code: "PREDICATE_UNPLANNABLE",
+				field: "OrderService.setSubtotal.pre0",
+			}),
+		);
+	});
+});
+
 // ── review (valid arg routing; no staged object → NOT_FOUND, exit 1 — real flow) ─
 
 describe("runCli review — valid arg shapes route to the handler; no staged object → NOT_FOUND, exit 1 (flow pinned in tests/review.test.ts)", () => {

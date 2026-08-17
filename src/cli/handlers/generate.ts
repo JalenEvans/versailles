@@ -84,7 +84,12 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 		return {
 			ok: true,
 			errors: [],
-			warnings: contextWarnings(context),
+			// Suite-level planning warnings (VERSAILLES-22 F3) ride the same
+			// non-blocking tier as loader/extractor warnings (ADR-0004): a
+			// PREDICATE_UNPLANNABLE warning surfaces here with exit 0 — the
+			// coverage gap is visible, never silent. LoaderWarning is
+			// structurally compatible with CliError ({ code, field, detail }).
+			warnings: [...contextWarnings(context), ...(suite.warnings ?? [])],
 			exitCode: 0,
 			output: {
 				files: [...files.map((file) => file.path), coveragePath],

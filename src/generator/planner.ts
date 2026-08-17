@@ -17,6 +17,11 @@
  * - Precondition-violation cases: for clauses that cannot double as a
  *   boundary/partition reject (e.g. `x != null`), a dedicated case whose input
  *   falsifies the clause; outcome reject with the configured idiom.
+ * - Predicate-call preconditions: a top-level predicate call (e.g.
+ *   `isPositive(amount)`) gets one deterministic violation case synthesized
+ *   from the registered predicate's paramTypes, or a non-silent
+ *   PREDICATE_UNPLANNABLE suite warning when genuinely unplannable — never a
+ *   silent zero (deterministic-generation.contract.yaml, VERSAILLES-22 F3).
  * - Postcondition-satisfaction cases: valid inputs asserted against every
  *   postcondition, with the captured pre-call state stored in `inputs` under
  *   the manifest field names so `old(field)` resolves.
@@ -33,8 +38,10 @@ import type { Node } from "../core/parser.js";
 import type {
 	ContractClause,
 	ContractOperation,
+	LoaderWarning,
 	VersaillesContext,
 } from "../loader/workspace.js";
+import type { PredicateEntry } from "../predicates/registry.js";
 import type {
 	AssertionDescriptor,
 	CaseKind,
@@ -49,6 +56,7 @@ type NumericOp = ">" | ">=" | "<" | "<=";
 type ClauseShape =
 	| { kind: "numeric"; variable: string; op: NumericOp; boundary: number }
 	| { kind: "in"; variable: string; members: unknown[] }
+	| { kind: "predicateCall" }
 	| { kind: "other" };
 
 type EvalEnv = {
@@ -69,6 +77,16 @@ const PRE_STATE_NUMBER = 50;
 const EXPECTED_REJECTION_SWEEP_MAX = 300;
 /** Pre-state adjustment cap so the builder always terminates. */
 const PRE_STATE_ADJUST_ROUNDS = 10;
+/**
+ * Deterministic numeric counter-example for predicate falsification
+ * (VERSAILLES-22 F3, build-spec §9.1): number → -1. Chosen over 0 because 0
+ * SATISFIES isNonNegative-style predicates (n >= 0), so it would not falsify
+ * them; -1 deterministically falsifies positive, non-negative, even,
+ * greater-than-threshold, and similar numeric predicates the v1 heuristic must
+ * reject. No registry example-hint field exists yet, so paramTypes alone drive
+ * the synthesis (a `can`, not a `must`, per the contract).
+ */
+const PREDICATE_FALSIFY_NUMBER = -1;
 
 /**
  * Valid JS identifier (Center W1): component / operation / param names flow
@@ -130,6 +148,10 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 	const operations: OperationCaseGroup[] = [];
 	const invariantCases: PlannedCase[] = [];
 	const clauseIds: string[] = [];
+	// Suite-level planning warnings (VERSAILLES-22 F3): a genuinely
+	// unplannable predicate-call precondition lands here instead of silently
+	// producing zero cases. LoaderWarning shape, ADR-0004 non-blocking tier.
+	const warnings: LoaderWarning[] = [];
 
 	for (const [componentName, component] of Object.entries(
 		context.contracts.contracts,
@@ -184,6 +206,19 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 					planBoundaryCases(shape, pre.id, cases, nextId, idiom);
 				} else if (shape.kind === "in") {
 					planPartitionCases(shape, pre.id, cases, nextId, idiom);
+				} else if (shape.kind === "predicateCall") {
+					// classifyClause returns "predicateCall" exactly when
+					// ast.type === "predicateCall", so the cast is safe and
+					// narrows the Node union for the synthesizer.
+					planPredicateViolationCase(
+						ast as Extract<Node, { type: "predicateCall" }>,
+						pre.id,
+						cases,
+						nextId,
+						idiom,
+						warnings,
+						context,
+					);
 				} else {
 					planGenericViolationCase(ast, pre.id, cases, nextId, idiom);
 				}
@@ -305,7 +340,7 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 		}
 	}
 
-	return { operations, invariantCases, clauseIds };
+	return { operations, invariantCases, clauseIds, warnings };
 }
 
 /**
@@ -460,7 +495,9 @@ function planEnumPartitionCases(
  * §9.1 precondition-violation for clauses that cannot double as a
  * boundary/partition reject (e.g. `newTier != null`). Synthesizes a
  * deterministic falsifying input; clauses we cannot falsify are skipped
- * (v1 heuristic — no SMT solver, build-spec §9.5).
+ * (v1 heuristic — no SMT solver, build-spec §9.5). Top-level predicate-call
+ * clauses NEVER reach here (they are routed to planPredicateViolationCase, so
+ * their coverage gap is never silent).
  */
 function planGenericViolationCase(
 	ast: Node,
@@ -481,6 +518,91 @@ function planGenericViolationCase(
 		expects: { outcome: "reject", rejectionIdiom: idiom },
 		traces: [clauseId],
 	});
+}
+
+/**
+ * §9.1 predicate-call violation synthesis (deterministic-generation.contract.yaml
+ * + build-spec §9.1, VERSAILLES-22 F3): a precondition whose AST is a
+ * predicate call (e.g. `isPositive(amount)`) must produce at least one
+ * deterministic violation case, or an explicit non-silent PREDICATE_UNPLANNABLE
+ * warning — never a silent zero. The falsifying input is synthesized purely
+ * from the registered predicate's paramTypes (no randomness, ADR-0002); the
+ * case is a normal §9.1 violation case (kind "precondition-violation", traces
+ * the clause id, outcome reject with the configured rejection idiom, ADR-0007).
+ */
+function planPredicateViolationCase(
+	ast: Extract<Node, { type: "predicateCall" }>,
+	clauseId: string,
+	cases: PlannedCase[],
+	nextId: (kind: CaseKind) => string,
+	idiom: string,
+	warnings: LoaderWarning[],
+	context: VersaillesContext,
+): void {
+	const entry = context.predicates?.predicates?.[ast.name];
+	if (entry === undefined) {
+		warnings.push({
+			code: "PREDICATE_UNPLANNABLE",
+			field: clauseId,
+			detail: `Predicate "${ast.name}" is not registered in predicates.json — no falsifying input can be derived for ${clauseId}`,
+		});
+		return;
+	}
+	const falsifier = predicateFalsifyingInput(ast, entry);
+	if (falsifier === null) {
+		warnings.push({
+			code: "PREDICATE_UNPLANNABLE",
+			field: clauseId,
+			detail: `Cannot deterministically falsify predicate call "${ast.name}" for ${clauseId} — the v1 heuristic requires the first argument to be a single-segment field reference with a primitive paramType (number, boolean, or string)`,
+		});
+		return;
+	}
+	cases.push({
+		id: nextId("precondition-violation"),
+		kind: "precondition-violation",
+		description: `violates ${clauseId} (predicate ${ast.name} falsified via ${falsifier.argName})`,
+		inputs: { [falsifier.argName]: falsifier.value },
+		expects: { outcome: "reject", rejectionIdiom: idiom },
+		traces: [clauseId],
+	});
+}
+
+/** A deterministic falsifying input for one predicate call argument. */
+type PredicateFalsifier = { argName: string; value: unknown };
+
+/**
+ * The v1 falsification heuristic (build-spec §9.5 keeps SMT out of v1 scope):
+ * the predicate's FIRST argument is the guarded value — its single-segment
+ * fieldRef name becomes the inputs key, and the predicate's first paramType
+ * determines the deterministic counter-example (number → -1, boolean → false,
+ * string → ""). Returns null when genuinely unplannable: no args, a
+ * non-fieldRef or multi-segment first argument, or a paramType the heuristic
+ * cannot reason about (e.g. "list<number>", optional/component/enum types).
+ */
+function predicateFalsifyingInput(
+	ast: Extract<Node, { type: "predicateCall" }>,
+	entry: PredicateEntry,
+): PredicateFalsifier | null {
+	const firstArg = ast.args[0];
+	if (
+		firstArg === undefined ||
+		firstArg.type !== "fieldRef" ||
+		firstArg.path.length !== 1 ||
+		typeof firstArg.path[0] !== "string"
+	) {
+		return null;
+	}
+	const paramType = entry.paramTypes[0]?.trim() ?? "";
+	if (paramType === "number") {
+		return { argName: firstArg.path[0], value: PREDICATE_FALSIFY_NUMBER };
+	}
+	if (paramType === "boolean") {
+		return { argName: firstArg.path[0], value: false };
+	}
+	if (paramType === "string") {
+		return { argName: firstArg.path[0], value: "" };
+	}
+	return null;
 }
 
 /**
@@ -1027,6 +1149,9 @@ function evaluate(node: Node, env: EvalEnv): unknown {
 
 /** Classifies a clause AST into the shapes the planner can act on. */
 function classifyClause(ast: Node): ClauseShape {
+	if (ast.type === "predicateCall") {
+		return { kind: "predicateCall" };
+	}
 	if (ast.type !== "compare") {
 		return { kind: "other" };
 	}
