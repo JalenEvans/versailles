@@ -68,9 +68,13 @@ export async function handleExtractManifests(
 	const extracted = extractManifests(roots);
 	const warnings = extractorWarnings(extracted.warnings);
 
-	// The loader store format ({ sourceHash, fields: Record }) differs from the
-	// extractor ManifestMap ({ fields: FieldEntry[], sourcePath, confidence });
-	// convert the stored manifests so mergeManifests can operate on one shape.
+	// The loader store format ({ sourceHash, fields: Record, sourcePath? })
+	// differs from the extractor ManifestMap ({ fields: FieldEntry[],
+	// sourcePath, confidence }); convert the stored manifests so
+	// mergeManifests can operate on one shape. sourcePath is carried through
+	// from the store (VERSAILLES-21 F2): a preserved legacy entry without one
+	// converts to "" internally and is omitted from the store write — never an
+	// invented or empty persisted path.
 	const existing: ManifestMap = {};
 	for (const [component, entry] of Object.entries(stored)) {
 		existing[component] = {
@@ -81,7 +85,7 @@ export async function handleExtractManifests(
 				confidence: "high",
 			})),
 			sourceHash: entry.sourceHash,
-			sourcePath: "",
+			sourcePath: entry.sourcePath ?? "",
 			confidence: "high",
 		};
 	}
@@ -107,15 +111,26 @@ export async function handleExtractManifests(
 
 	const mergedStore: Record<
 		string,
-		{ sourceHash: string; fields: Record<string, string> }
+		{ sourceHash: string; fields: Record<string, string>; sourcePath?: string }
 	> = {};
 	for (const [component, entry] of Object.entries(merged)) {
-		mergedStore[component] = {
+		const storeEntry: {
+			sourceHash: string;
+			fields: Record<string, string>;
+			sourcePath?: string;
+		} = {
 			sourceHash: entry.sourceHash,
 			fields: Object.fromEntries(
 				entry.fields.map((field) => [field.name, field.typeRef]),
 			),
 		};
+		// Covered entries carry the extractor's real sourcePath; preserved
+		// legacy entries without one convert to "" and stay out of the store
+		// (contract: never an empty or invented persisted sourcePath).
+		if (entry.sourcePath.length > 0) {
+			storeEntry.sourcePath = entry.sourcePath;
+		}
+		mergedStore[component] = storeEntry;
 	}
 	await writeJsonFile(workspaceDir, "manifests.json", {
 		version: "1.0",

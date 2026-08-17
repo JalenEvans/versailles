@@ -9,14 +9,14 @@
  * reject case. Deterministic: same context in, byte-identical files out.
  */
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 import {
 	coverageManifest,
 	emitSuite,
 	planTestCases,
 } from "../../generator/index.js";
-import { loadWorkspace } from "../../loader/workspace.js";
+import { type ManifestsFile, loadWorkspace } from "../../loader/workspace.js";
 import { contextErrors, contextWarnings, messageOf } from "../context.js";
 import type { CliResult } from "../types.js";
 
@@ -52,6 +52,11 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 		const suite = planTestCases(context);
 		const files = emitSuite(suite, context.config.testFramework, {
 			generatedDir: context.config.generatedDir,
+			modulePaths: deriveModulePaths(
+				cwd,
+				context.config.generatedDir,
+				context.manifests,
+			),
 		});
 		for (const file of files) {
 			const target = join(cwd, file.path);
@@ -95,4 +100,38 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 			output: { files: [] },
 		};
 	}
+}
+
+/**
+ * Derives per-component emitter module paths from the loaded manifests store
+ * (VERSAILLES-21 F2, deterministic-generation.contract.yaml §9.4): a covered
+ * entry's sourcePath is root-relative (e.g. "src/order.ts"), and the generated
+ * file lives under <cwd>/<generatedDir>/<Component>.test.ts — so the import
+ * specifier is the node:path-relative path from the generated file's directory
+ * to the source file, with POSIX separators and an explicit ./ prefix when the
+ * target is not in a parent directory. The sourcePath extension is preserved
+ * (the vitest convention already emits .ts imports; the legacy default
+ * "../../src/<Component>.js" only applies when sourcePath is absent). Entries
+ * lacking sourcePath (legacy) contribute no override — the emitter falls back
+ * to its deterministic default, never an empty-string import.
+ */
+function deriveModulePaths(
+	cwd: string,
+	generatedDir: string,
+	manifests: ManifestsFile | null,
+): Record<string, string> {
+	const modulePaths: Record<string, string> = {};
+	for (const [component, entry] of Object.entries(manifests?.manifests ?? {})) {
+		if (typeof entry.sourcePath !== "string" || entry.sourcePath.length === 0) {
+			continue;
+		}
+		const from = join(cwd, generatedDir);
+		const to = join(cwd, entry.sourcePath);
+		let rel = relative(from, to).split(sep).join("/");
+		if (!rel.startsWith(".")) {
+			rel = `./${rel}`;
+		}
+		modulePaths[component] = rel;
+	}
+	return modulePaths;
 }

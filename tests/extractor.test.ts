@@ -604,3 +604,31 @@ describe("extractManifests — determinism (ADR-0002)", () => {
 		expect(second.warnings).toEqual(first.warnings);
 	});
 });
+
+/**
+ * sourcePath persistence (VERSAILLES-21 F2, manifest-extraction.contract.yaml
+ * 2026-08-17): every covered manifest entry carries the sourcePath of the file
+ * it was extracted from — never an empty string — so the store write
+ * (src/cli/handlers/extract.ts) and the generate handler can propagate real
+ * module import paths. The extractor already records sourcePath (the bug is
+ * downstream: the store conversion drops it); this pins the chain head so a
+ * regression here fails at the source.
+ */
+describe("extractManifests — sourcePath per covered component (VERSAILLES-21 F2)", () => {
+	it("records a non-empty sourcePath relative to the source root for every covered component", async () => {
+		const dir = await fixtureDir("sp1-sourcepath");
+		await writeFixture(dir, "account.ts", ACCOUNT_SOURCE);
+		// A nested file: the path must stay relative to the root with posix
+		// separators (sourcePathOf), matching how the emitter will resolve it.
+		await writeFixture(dir, "src/models/customer.ts", CUSTOMER_SOURCE);
+
+		const result = extractManifests([dir]);
+
+		expect(result.manifests.Account.sourcePath).toBe("account.ts");
+		expect(result.manifests.Customer.sourcePath).toBe("src/models/customer.ts");
+		// Never an empty string for a covered component.
+		for (const entry of Object.values(result.manifests)) {
+			expect(entry.sourcePath.length).toBeGreaterThan(0);
+		}
+	});
+});

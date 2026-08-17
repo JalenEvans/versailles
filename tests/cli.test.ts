@@ -1299,3 +1299,171 @@ describe("runCli — predicate registry command routing (predicate-registry.cont
 		}
 	});
 });
+
+// ── VERSAILLES-21 F2: sourcePath flow extractor → store → loader → generate ──
+//
+// The TypeScript extractor records ManifestEntry.sourcePath, but the extract
+// handler's store conversion drops it (writes sourcePath: "" and never writes
+// it back to manifests.json), so the vitest emitter falls back to the derived
+// "../../src/<Component>.js" import path that does NOT match real source files
+// (wrong case AND wrong extension). Contract-gated fix direction
+// (manifest-extraction.contract.yaml + workspace-context.contract.yaml +
+// deterministic-generation.contract.yaml, 2026-08-17): sourcePath must flow
+// extractor → manifests.json store → loader → generate handler → emitter
+// modulePaths, with a deterministic default fallback when absent. These tests
+// pin the fixed behavior — each covered entry carries its real sourcePath, and
+// generated vitest files import from the real source path.
+
+// ── F2.1: extract-manifests persists sourcePath through the store ──────────
+// Current: the existing-store conversion (src/cli/handlers/extract.ts) maps
+// stored entries to ManifestEntry with sourcePath: "", and the store write
+// round-trips only { sourceHash, fields } — so covered entries on disk never
+// carry sourcePath. Fixed: covered entries (added OR refreshed) carry the real
+// root-relative sourcePath, and legacy uncovered entries stay as-is (never an
+// invented or empty sourcePath).
+
+describe("runCli extract-manifests — sourcePath persists through the store (VERSAILLES-21 F2)", () => {
+	const ORDER_SERVICE_SOURCE = `export class OrderService {
+	id: number;
+	total: number;
+}
+`;
+	const ORDER_ITEM_SOURCE = `export class OrderItem {
+	sku: string;
+	qty: number;
+}
+`;
+
+	it("writes the real sourcePath on covered manifest entries — never '' and never missing", async () => {
+		const cwd = await freshWorkspace("x-sourcepath");
+		await writeSource(cwd, "OrderService.ts", ORDER_SERVICE_SOURCE);
+		await writeSource(cwd, "OrderItem.ts", ORDER_ITEM_SOURCE);
+		// A stale covered entry (refreshed path must gain sourcePath) + a
+		// legacy uncovered entry (preserved path must not invent one).
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "deadbeef",
+					fields: { id: "number", total: "number" },
+				},
+				LegacyComponent: {
+					sourceHash: "legacy-hash",
+					fields: { note: "string" },
+				},
+			},
+		});
+
+		const result = await runCli(["extract-manifests"], { cwd });
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		const stored = JSON.parse(
+			await readFile(join(cwd, ".versailles", "manifests.json"), "utf8"),
+		) as {
+			manifests: Record<
+				string,
+				{
+					sourceHash: string;
+					fields: Record<string, string>;
+					sourcePath?: string;
+				}
+			>;
+		};
+
+		// Covered entries (refreshed AND added) carry the REAL root-relative
+		// source path — never the '' the store conversion writes today.
+		expect(stored.manifests.OrderService.sourcePath).toBe("OrderService.ts");
+		expect(stored.manifests.OrderItem.sourcePath).toBe("OrderItem.ts");
+		expect(stored.manifests.OrderService.sourcePath?.length).toBeGreaterThan(0);
+		// Legacy uncovered entries are preserved as-is — no invented path.
+		expect(stored.manifests.LegacyComponent.sourcePath).toBeUndefined();
+	});
+});
+
+// ── F2.2: generate derives emitter modulePaths from manifest sourcePath ────
+// Current: the generate handler passes only { generatedDir } to emitSuite, so
+// the vitest emitter falls back to "../../src/<Component>.js" (wrong case +
+// wrong extension for e.g. src/order.ts → Order). Fixed: the handler derives
+// modulePaths from context.manifests sourcePath entries and passes them through
+// emitSuite options; entries lacking sourcePath (legacy) keep the deterministic
+// default — never an empty-string import.
+
+async function seedGeneratorWorkspaceWithSourcePaths(
+	name: string,
+): Promise<string> {
+	const cwd = await seedGeneratorWorkspace(name);
+	await writeWorkspaceFile(cwd, "manifests.json", {
+		version: "1.0",
+		manifests: {
+			AccountService: {
+				sourceHash: "man-account",
+				fields: { balance: "number", status: "string" },
+				sourcePath: "AccountService.ts",
+			},
+			CustomerService: {
+				sourceHash: "man-customer",
+				fields: {},
+				sourcePath: "CustomerService.ts",
+			},
+		},
+	});
+	return cwd;
+}
+
+describe("runCli generate — vitest module paths derive from manifest sourcePath (VERSAILLES-21 F2)", () => {
+	it("imports components from sourcePath-derived module paths — real case + real extension, never the wrong default", async () => {
+		const cwd = await seedGeneratorWorkspaceWithSourcePaths("g-sourcepath");
+		const result = await runCli(["generate"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		const content = await readFile(
+			join(cwd, ".versailles", "generated", "AccountService.test.ts"),
+			"utf8",
+		);
+		// The import specifier must reference the real source file (correct
+		// case + .ts extension) — the manifest sourcePath flows into
+		// emitSuite options.modulePaths. Today the emitter renders the
+		// derived default "../../src/AccountService.js" (wrong extension).
+		expect(content).toMatch(
+			/import \{ AccountService \} from "[^"]*AccountService\.ts"/,
+		);
+		expect(content).not.toContain('from "../../src/AccountService.js"');
+	});
+
+	it("falls back to the deterministic default import when a manifest entry lacks sourcePath (legacy) — never an empty import", async () => {
+		const cwd = await seedGeneratorWorkspace("g-sourcepath-legacy");
+		// Only AccountService carries sourcePath; CustomerService is a legacy
+		// entry without one and must fall back to the deterministic default.
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				AccountService: {
+					sourceHash: "man-account",
+					fields: { balance: "number", status: "string" },
+					sourcePath: "AccountService.ts",
+				},
+				CustomerService: {
+					sourceHash: "man-customer",
+					fields: {},
+				},
+			},
+		});
+
+		const result = await runCli(["generate"], { cwd });
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		const content = await readFile(
+			join(cwd, ".versailles", "generated", "CustomerService.test.ts"),
+			"utf8",
+		);
+		// Deterministic default (the existing emitter fallback), never "".
+		expect(content).toContain(
+			'import { CustomerService } from "../../src/CustomerService.js";',
+		);
+		expect(content).not.toMatch(/from ""/);
+	});
+});

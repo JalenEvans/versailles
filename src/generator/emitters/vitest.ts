@@ -104,8 +104,14 @@ function renderComponentFile(
 	);
 	lines.push('import { describe, expect, it } from "vitest";');
 	lines.push("");
+	// modulePaths override wins when present and non-empty; an absent (legacy)
+	// or empty entry falls back to the deterministic default — an empty-string
+	// import must never be emitted (deterministic-generation.contract.yaml).
+	const override = modulePaths[component];
 	const modulePath =
-		modulePaths[component] ?? `${DEFAULT_MODULE_PREFIX}${component}.js`;
+		typeof override === "string" && override.length > 0
+			? override
+			: `${DEFAULT_MODULE_PREFIX}${component}.js`;
 	lines.push(`import { ${component} } from "${modulePath}";`);
 	lines.push("");
 
