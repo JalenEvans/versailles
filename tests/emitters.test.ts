@@ -10,6 +10,7 @@ import { emitSuite, planTestCases } from "../src/generator/index.js";
 import type {
 	EmittedFile,
 	EmitterFramework,
+	PlannedCase,
 	PlannedSuite,
 } from "../src/generator/index.js";
 import type {
@@ -1071,3 +1072,211 @@ const contextArb: fc.Arbitrary<VersaillesContext> = fc
 			`status in [${members.map((member) => `"${member}"`).join(", ")}]`,
 		),
 	);
+
+// ── Shape-aware vitest calls from manifest method metadata (VERSAILLES-20 F1) ─
+//
+// The vitest emitter always renders `Component.operation({...inputs})` — a
+// static call with an options-object — which breaks against the most common TS
+// shape: instance methods with positional params (e.g. `class Order {
+// addItem(sku: string): void }` → `Order.addItem({ sku: "" })` →
+// TypeError: Order.addItem is not a function). Void-returning operations also
+// get a failing `expect(result).toBeDefined()`.
+//
+// FIXED (deterministic-generation.contract.yaml 2026-08-17, build-spec §9.4):
+// emitters render calls from manifest method metadata — instance → `new
+// <Component>().<op>(...positional params)`, static → `<Component>.<op>(...
+// positional params)`, params in declared order, and void-return accept cases
+// carry NO return-value assertion.
+//
+// The metadata seam is the emitSuite options object (mirroring the existing
+// modulePaths option — both are per-component overrides threaded through the
+// emitter seam; the planner/emitter boundary stays the framework-agnostic IR):
+//
+//   emitSuite(suite, "vitest", {
+//     methods: { Order: { addItem: { static: false, params: ["sku"], returnType: "void" } } },
+//   })
+//
+// The option is OPTIONAL: with no methods metadata the emitter keeps today's
+// legacy options-object static call (backward compatible — existing pins in
+// tests/generator.test.ts and the E test below stay green).
+
+function singleOperationSuite(
+	component: string,
+	operation: string,
+	cases: PlannedCase[],
+): PlannedSuite {
+	return {
+		clauseIds: cases.flatMap((case_) => case_.traces),
+		operations: [{ component, operation, cases }],
+		invariantCases: [],
+	};
+}
+
+/** The Phase 1 failure: `class Order { addItem(sku: string): void }`. */
+function orderSuite(): PlannedSuite {
+	return singleOperationSuite("Order", "addItem", [
+		{
+			id: "Order.addItem.boundary-0",
+			kind: "boundary",
+			description: "accept with a sku",
+			inputs: { sku: "ABC" },
+			expects: { outcome: "accept" },
+			traces: ["Order.addItem.pre0"],
+		},
+		{
+			id: "Order.addItem.boundary-1",
+			kind: "boundary",
+			description: "reject with an empty sku",
+			inputs: { sku: "" },
+			expects: { outcome: "reject", rejectionIdiom: "throws" },
+			traces: ["Order.addItem.pre0"],
+		},
+	]);
+}
+
+const ORDER_METHODS = {
+	Order: {
+		addItem: { static: false, params: ["sku"], returnType: "void" },
+	},
+};
+
+describe("emitSuite — shape-aware vitest calls from method metadata (VERSAILLES-20 F1, §9.4)", () => {
+	it("renders an instance method as new Order().addItem(...) — positional params, never Order.addItem({ sku: ... })", () => {
+		const files = emitSuite(orderSuite(), "vitest", {
+			methods: ORDER_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// The accept case constructs the instance and passes the param
+		// positionally — the exact Phase 1 failure shape.
+		expect(order?.content).toContain('new Order().addItem("ABC")');
+		// No static call on the instance method, for accept OR reject cases.
+		expect(order?.content).not.toContain("Order.addItem(");
+		// No options-object argument — positional params only.
+		expect(order?.content).not.toContain('{ sku: "ABC" }');
+		// Reject cases render the same shape-aware call inside the idiom.
+		expect(order?.content).toContain(
+			'expect(() => new Order().addItem("")).toThrow()',
+		);
+	});
+
+	it("renders a static method as Component.op(...) with positional params — never an options object", () => {
+		const suite = singleOperationSuite("Order", "staticOp", [
+			{
+				id: "Order.staticOp.boundary-0",
+				kind: "boundary",
+				description: "static accept",
+				inputs: { n: 2 },
+				expects: { outcome: "accept" },
+				traces: ["Order.staticOp.pre0"],
+			},
+		]);
+		const files = emitSuite(suite, "vitest", {
+			methods: {
+				Order: {
+					staticOp: { static: true, params: ["n"], returnType: "number" },
+				},
+			},
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		expect(order?.content).toContain("Order.staticOp(2)");
+		expect(order?.content).not.toContain("Order.staticOp({");
+		expect(order?.content).not.toContain("{ n: 2 }");
+	});
+
+	it("passes params positionally in the DECLARED order, not the inputs-object order", () => {
+		// The inputs object is deliberately reversed relative to the declared
+		// params, so only metadata-driven ordering can render this call.
+		const suite = singleOperationSuite("Cart", "setSubtotal", [
+			{
+				id: "Cart.setSubtotal.boundary-0",
+				kind: "boundary",
+				description: "accept with amount and label",
+				inputs: { label: "gross", amount: 5 },
+				expects: { outcome: "accept" },
+				traces: ["Cart.setSubtotal.pre0"],
+			},
+		]);
+		const files = emitSuite(suite, "vitest", {
+			methods: {
+				Cart: {
+					setSubtotal: {
+						static: false,
+						params: ["amount", "label"],
+						returnType: "number",
+					},
+				},
+			},
+		});
+		const cart = files.find((file) => file.path.endsWith("Cart.test.ts"));
+		expect(cart).toBeDefined();
+
+		expect(cart?.content).toContain('new Cart().setSubtotal(5, "gross")');
+		expect(cart?.content).not.toContain('new Cart().setSubtotal("gross", 5)');
+		expect(cart?.content).not.toContain("setSubtotal({");
+	});
+
+	it("passes only the declared params — captured pre-call state never leaks into the call", () => {
+		// Postcondition/invariant cases carry captured pre-state fields (e.g.
+		// balance) inside inputs alongside the params; the call must take the
+		// declared params only (metadata params: ["amount"]).
+		const suite = singleOperationSuite("Ledger", "withdraw", [
+			{
+				id: "Ledger.withdraw.postcondition-satisfaction-0",
+				kind: "postcondition-satisfaction",
+				description: "accept with captured pre-state",
+				inputs: { amount: 55, balance: 50 },
+				expects: { outcome: "accept" },
+				traces: ["Ledger.withdraw.post0"],
+			},
+		]);
+		const files = emitSuite(suite, "vitest", {
+			methods: {
+				Ledger: {
+					withdraw: {
+						static: false,
+						params: ["amount"],
+						returnType: "number",
+					},
+				},
+			},
+		});
+		const ledger = files.find((file) => file.path.endsWith("Ledger.test.ts"));
+		expect(ledger).toBeDefined();
+
+		expect(ledger?.content).toContain("new Ledger().withdraw(55)");
+		// balance is pre-state, not a param — it must never appear as an arg.
+		expect(ledger?.content).not.toContain("new Ledger().withdraw(55, 50)");
+		// Non-void accept cases still assert the result (only void skips it).
+		expect(ledger?.content).toContain("expect(result).toBeDefined()");
+	});
+
+	it("renders a void accept case WITHOUT a return-value assertion", () => {
+		const files = emitSuite(orderSuite(), "vitest", {
+			methods: ORDER_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// addItem returns void — the accept case must call it without
+		// `expect(result).toBeDefined()` (which fails on undefined).
+		expect(order?.content).not.toContain("expect(result)");
+		// The call itself is still emitted (the accept case is not empty).
+		expect(order?.content).toContain('new Order().addItem("ABC")');
+	});
+
+	it("keeps the legacy options-object static call when NO methods metadata is present (backward compatible)", () => {
+		// No `methods` option → today's behavior stays: static component call
+		// with an options-object and a toBeDefined assertion. Existing pins
+		// (tests/generator.test.ts vitest describes) depend on this default.
+		const files = emitSuite(orderSuite(), "vitest");
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		expect(order?.content).toContain('Order.addItem({ sku: "ABC" })');
+		expect(order?.content).toContain("expect(result).toBeDefined()");
+	});
+});

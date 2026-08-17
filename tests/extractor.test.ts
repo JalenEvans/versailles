@@ -27,8 +27,9 @@ import type {
  * checker): declared field types resolve to the typeRef grammar, generics map
  * to list<T>, literal-only unions map to enum<...>, nested/related types are
  * added transitively to the flat map, and per-entry sourceHash values are
- * computed from the SORTED field name+type pairs only (never the full source
- * file), so body-only edits never trigger false staleness.
+ * computed from the SORTED field name+type pairs plus the sorted method
+ * signature records (never the full source file, never method bodies), so
+ * body-only edits never trigger false staleness.
  *
  * ── Module contract ────────────────────────────────────────────────────────
  *
@@ -37,12 +38,13 @@ import type {
  *
  * ```ts
  * export type FieldEntry = { name: string; typeRef: string; confidence: "high" | "low" };
- * export type ManifestEntry = { component: string; fields: FieldEntry[]; sourceHash: string; sourcePath: string; confidence: "high" | "low" };
+ * export type MethodMetadata = { static: boolean; params: string[]; returnType?: string };
+ * export type ManifestEntry = { component: string; fields: FieldEntry[]; methods: Record<string, MethodMetadata>; sourceHash: string; sourcePath: string; confidence: "high" | "low" };
  * export type ManifestMap = Record<string, ManifestEntry>;
  * export type ExtractorWarning = { code: string; component: string; field: string; detail: string };
  * export type ExtractorResult = { manifests: ManifestMap; warnings: ExtractorWarning[] };
  * export declare function extractManifests(sourceRoots: string[]): ExtractorResult; // SYNCHRONOUS
- * export declare function computeSourceHash(fields: FieldEntry[]): string;
+ * export declare function computeSourceHash(fields: FieldEntry[], methods?: Record<string, MethodMetadata>): string;
  * export declare function mergeManifests(existing: ManifestMap, extracted: ManifestMap, options: { prune: boolean }): ManifestMap; // pure
  * ```
  *
@@ -58,8 +60,9 @@ import type {
  *    surfaces for low-confidence manifest fields (tests/loader.test.ts), so
  *    the extractor's warning tier feeds the validator's warning tier as-is.
  * 4. A component's entry sourceHash equals computeSourceHash over that
- *    entry's fields (sorted name+type pairs) — the extractor delegates to the
- *    pure function; describe 3 pins that tie directly.
+ *    entry's fields plus method signature records (sorted, bodies excluded) —
+ *    the extractor delegates to the pure function; describe 3 pins that tie
+ *    directly.
  * 5. mergeManifests is pure: it returns a NEW ManifestMap and never mutates
  *    either input (the purity test deep-freezes both inputs).
  * 6. extractManifests must never throw on inferable-only fields — a
@@ -418,9 +421,13 @@ describe("extractManifests — structural sourceHash (build-spec §7)", () => {
 		expect(resultA.manifests.Ledger).toBeDefined();
 		expect(resultB.manifests.Ledger).toBeDefined();
 		// The entry hash must equal the pure structural hash of its own field
-		// set — the extractor delegates to computeSourceHash.
+		// set plus method signature records — the extractor delegates to
+		// computeSourceHash.
 		expect(resultA.manifests.Ledger.sourceHash).toBe(
-			computeSourceHash(resultA.manifests.Ledger.fields),
+			computeSourceHash(
+				resultA.manifests.Ledger.fields,
+				resultA.manifests.Ledger.methods,
+			),
 		);
 		// Body-only edits never change the structural shape.
 		expect(resultB.manifests.Ledger.sourceHash).toBe(
@@ -630,5 +637,212 @@ describe("extractManifests — sourcePath per covered component (VERSAILLES-21 F
 		for (const entry of Object.values(result.manifests)) {
 			expect(entry.sourcePath.length).toBeGreaterThan(0);
 		}
+	});
+});
+
+/**
+ * Method metadata recording (VERSAILLES-20 F1, manifest-extraction.contract.yaml
+ * 2026-08-17, build-spec §7): every resolvable method is recorded with its
+ * name, static/instance flag, ordered param names, and return type where
+ * determinable — so the generator can render shape-aware calls (instance via
+ * `new <Component>().<op>(...)`, static via `<Component>.<op>(...)`, positional
+ * params, no return-value assertion on void). The manifest store shape
+ * (workspace.ts ManifestsFile entry) already declares the optional `methods`
+ * field; the extractor is the recording side of that contract.
+ */
+
+// Class with instance + static methods, void + primitive returns, and a
+// transitive sibling (OrderItem) that declares NO methods.
+const ORDER_METHODS_SOURCE = `
+export class Order {
+	id: number;
+	items: OrderItem[];
+
+	addItem(sku: string): void {
+		this.items = [];
+	}
+	setSubtotal(amount: number): void {
+		this.id = amount;
+	}
+	static staticOp(n: number): number {
+		return n * 2;
+	}
+}
+
+export class OrderItem {
+	sku: string;
+	qty: number;
+}
+`;
+
+// Interface method signatures (always instance methods — no static in TS
+// interfaces): the extractor must record them with static: false.
+const SERVICE_METHODS_SOURCE = `
+export interface OrderService {
+	addItem(sku: string): void;
+	applyDiscount(pct: number): number;
+}
+`;
+
+describe("extractManifests — method metadata recording (VERSAILLES-20 F1, build-spec §7)", () => {
+	it("records instance/static flags, ordered param names, and returnType for every class method", async () => {
+		const dir = await fixtureDir("m1-class-methods");
+		await writeFixture(dir, "order.ts", ORDER_METHODS_SOURCE);
+
+		const result = extractManifests([dir]);
+
+		const order = result.manifests.Order;
+		expect(order).toBeDefined();
+		expect(order.methods).toBeDefined();
+
+		// Instance method with a single param and void return.
+		expect(order.methods?.addItem).toEqual({
+			static: false,
+			params: ["sku"],
+			returnType: "void",
+		});
+		// Instance method with a single param and void return.
+		expect(order.methods?.setSubtotal).toEqual({
+			static: false,
+			params: ["amount"],
+			returnType: "void",
+		});
+		// Static method with a primitive return.
+		expect(order.methods?.staticOp).toEqual({
+			static: true,
+			params: ["n"],
+			returnType: "number",
+		});
+
+		// A component with no methods records an empty methods map — the same
+		// always-present shape as `fields`.
+		expect(result.manifests.OrderItem.methods).toEqual({});
+	});
+
+	it("records interface method signatures as instance methods (static: false)", async () => {
+		const dir = await fixtureDir("m2-interface-methods");
+		await writeFixture(dir, "service.ts", SERVICE_METHODS_SOURCE);
+
+		const result = extractManifests([dir]);
+
+		const service = result.manifests.OrderService;
+		expect(service).toBeDefined();
+		expect(service.methods).toEqual({
+			addItem: { static: false, params: ["sku"], returnType: "void" },
+			applyDiscount: { static: false, params: ["pct"], returnType: "number" },
+		});
+	});
+});
+
+/**
+ * sourceHash over method signatures (VERSAILLES-20 F1, build-spec §7, contract
+ * operation compute_source_hash): the structural hash now covers the sorted
+ * field name+type pairs PLUS the sorted method-signature records (method name,
+ * static/instance, ordered params, return type where determinable) — method
+ * BODIES are never included. A signature change (params, static flag, name,
+ * return type) flips the hash so `versailles check` catches stale method
+ * metadata; a body-only edit keeps the hash stable (no false staleness).
+ */
+
+// Identical fields; the ONLY difference is the method signature (params).
+const CALC_SIG_ONE_PARAM = `
+export class Calculator {
+	value: number;
+
+	addItem(sku: string): void {
+		this.value = 1;
+	}
+}
+`;
+
+const CALC_SIG_TWO_PARAMS = `
+export class Calculator {
+	value: number;
+
+	addItem(sku: string, qty: number): void {
+		this.value = 1;
+	}
+}
+`;
+
+// Identical fields AND identical signature; only the method body differs.
+const CALC_BODY_A = `
+export class Calculator {
+	value: number;
+
+	addItem(sku: string): void {
+		this.value = sku.length;
+	}
+}
+`;
+
+const CALC_BODY_B = `
+export class Calculator {
+	value: number;
+
+	addItem(sku: string): void {
+		this.value = 0;
+	}
+}
+`;
+
+// Same fields and params as CALC_SIG_ONE_PARAM but the method is static.
+const CALC_SIG_STATIC = `
+export class Calculator {
+	value: number;
+
+	static addItem(sku: string): void {
+		this.value = 1;
+	}
+}
+`;
+
+describe("extractManifests — sourceHash covers method signatures, never bodies (VERSAILLES-20 F1)", () => {
+	it("produces a different sourceHash when a method signature changes (param added)", async () => {
+		const dirA = await fixtureDir("mh1-one-param");
+		await writeFixture(dirA, "calculator.ts", CALC_SIG_ONE_PARAM);
+		const dirB = await fixtureDir("mh1-two-params");
+		await writeFixture(dirB, "calculator.ts", CALC_SIG_TWO_PARAMS);
+
+		const resultA = extractManifests([dirA]);
+		const resultB = extractManifests([dirB]);
+
+		expect(resultA.manifests.Calculator).toBeDefined();
+		expect(resultB.manifests.Calculator).toBeDefined();
+		// Identical field sets — today (fields-only hash) these are equal; the
+		// signature record must make them differ.
+		expect(resultB.manifests.Calculator.sourceHash).not.toBe(
+			resultA.manifests.Calculator.sourceHash,
+		);
+	});
+
+	it("produces a different sourceHash when the static/instance flag changes", async () => {
+		const dirInstance = await fixtureDir("mh2-instance");
+		await writeFixture(dirInstance, "calculator.ts", CALC_SIG_ONE_PARAM);
+		const dirStatic = await fixtureDir("mh2-static");
+		await writeFixture(dirStatic, "calculator.ts", CALC_SIG_STATIC);
+
+		const resultInstance = extractManifests([dirInstance]);
+		const resultStatic = extractManifests([dirStatic]);
+
+		expect(resultStatic.manifests.Calculator.sourceHash).not.toBe(
+			resultInstance.manifests.Calculator.sourceHash,
+		);
+	});
+
+	it("produces the same sourceHash when only a method body changes (bodies excluded)", async () => {
+		const dirA = await fixtureDir("mh3-body-a");
+		await writeFixture(dirA, "calculator.ts", CALC_BODY_A);
+		const dirB = await fixtureDir("mh3-body-b");
+		await writeFixture(dirB, "calculator.ts", CALC_BODY_B);
+
+		const resultA = extractManifests([dirA]);
+		const resultB = extractManifests([dirB]);
+
+		// Same fields AND same method signature — a body edit must never flip
+		// the structural hash (build-spec §7: no false staleness).
+		expect(resultB.manifests.Calculator.sourceHash).toBe(
+			resultA.manifests.Calculator.sourceHash,
+		);
 	});
 });

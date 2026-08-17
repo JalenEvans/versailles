@@ -16,6 +16,7 @@ import {
 	emitSuite,
 	planTestCases,
 } from "../../generator/index.js";
+import type { EmitOptions } from "../../generator/index.js";
 import { type ManifestsFile, loadWorkspace } from "../../loader/workspace.js";
 import { contextErrors, contextWarnings, messageOf } from "../context.js";
 import type { CliResult } from "../types.js";
@@ -57,6 +58,11 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 				context.config.generatedDir,
 				context.manifests,
 			),
+			// Shape-aware call metadata (VERSAILLES-20 F1): pass each
+			// component's manifest method metadata straight into the emitter.
+			// Absent for legacy entries → the emitter keeps the options-object
+			// static call (backward compatible).
+			methods: deriveMethods(context.manifests),
 		});
 		for (const file of files) {
 			const target = join(cwd, file.path);
@@ -134,4 +140,24 @@ function deriveModulePaths(
 		modulePaths[component] = rel;
 	}
 	return modulePaths;
+}
+
+/**
+ * Per-component method metadata for the emitter seam (VERSAILLES-20 F1): the
+ * manifest store already carries each covered entry's optional `methods`
+ * (method name → { static, params, returnType? }) — the generate handler
+ * maps them onto the emitSuite options shape exactly like modulePaths.
+ * Components without a `methods` key contribute nothing, so the emitter's
+ * legacy default applies for them.
+ */
+function deriveMethods(
+	manifests: ManifestsFile | null,
+): EmitOptions["methods"] {
+	const methods: EmitOptions["methods"] = {};
+	for (const [component, entry] of Object.entries(manifests?.manifests ?? {})) {
+		if (entry.methods !== undefined) {
+			methods[component] = entry.methods;
+		}
+	}
+	return methods;
 }

@@ -68,13 +68,14 @@ export async function handleExtractManifests(
 	const extracted = extractManifests(roots);
 	const warnings = extractorWarnings(extracted.warnings);
 
-	// The loader store format ({ sourceHash, fields: Record, sourcePath? })
-	// differs from the extractor ManifestMap ({ fields: FieldEntry[],
-	// sourcePath, confidence }); convert the stored manifests so
-	// mergeManifests can operate on one shape. sourcePath is carried through
-	// from the store (VERSAILLES-21 F2): a preserved legacy entry without one
-	// converts to "" internally and is omitted from the store write — never an
-	// invented or empty persisted path.
+	// The loader store format ({ sourceHash, fields: Record, sourcePath?,
+	// methods? }) differs from the extractor ManifestMap ({ fields:
+	// FieldEntry[], methods, sourcePath, confidence }); convert the stored
+	// manifests so mergeManifests can operate on one shape. sourcePath and
+	// methods are carried through from the store (VERSAILLES-21 F2 /
+	// VERSAILLES-20 F1): a preserved legacy entry without them converts to ""
+	// / {} internally and is omitted from the store write — never an invented
+	// or empty persisted path.
 	const existing: ManifestMap = {};
 	for (const [component, entry] of Object.entries(stored)) {
 		existing[component] = {
@@ -84,6 +85,7 @@ export async function handleExtractManifests(
 				typeRef,
 				confidence: "high",
 			})),
+			methods: entry.methods ?? {},
 			sourceHash: entry.sourceHash,
 			sourcePath: entry.sourcePath ?? "",
 			confidence: "high",
@@ -111,13 +113,25 @@ export async function handleExtractManifests(
 
 	const mergedStore: Record<
 		string,
-		{ sourceHash: string; fields: Record<string, string>; sourcePath?: string }
+		{
+			sourceHash: string;
+			fields: Record<string, string>;
+			sourcePath?: string;
+			methods?: Record<
+				string,
+				{ static: boolean; params: string[]; returnType?: string }
+			>;
+		}
 	> = {};
 	for (const [component, entry] of Object.entries(merged)) {
 		const storeEntry: {
 			sourceHash: string;
 			fields: Record<string, string>;
 			sourcePath?: string;
+			methods?: Record<
+				string,
+				{ static: boolean; params: string[]; returnType?: string }
+			>;
 		} = {
 			sourceHash: entry.sourceHash,
 			fields: Object.fromEntries(
@@ -129,6 +143,13 @@ export async function handleExtractManifests(
 		// (contract: never an empty or invented persisted sourcePath).
 		if (entry.sourcePath.length > 0) {
 			storeEntry.sourcePath = entry.sourcePath;
+		}
+		// Method metadata (VERSAILLES-20 F1) persists only when non-empty: a
+		// preserved legacy entry without methods stays byte-identical
+		// ({ sourceHash, fields }) and the loader tolerates the absence for
+		// method-less covered entries (methods: {} in the extractor output).
+		if (Object.keys(entry.methods ?? {}).length > 0) {
+			storeEntry.methods = entry.methods;
 		}
 		mergedStore[component] = storeEntry;
 	}

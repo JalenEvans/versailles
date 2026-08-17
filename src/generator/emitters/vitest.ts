@@ -7,6 +7,15 @@
  * file content out. Rejection assertions are rendered from the case's
  * configured idiom ("throws" → expect(() => op(inputs)).toThrow();
  * "returns" → expect(op(inputs)).toBeNull()) — never hardcoded (ADR-0007).
+ *
+ * Call rendering is shape-aware from manifest method metadata
+ * (deterministic-generation.contract.yaml §9.4, VERSAILLES-20 F1): instance
+ * methods render `new <Component>().<op>(<positional>)`, static methods render
+ * `<Component>.<op>(<positional>)` with params in declared order, and
+ * void-return accept cases carry no return-value assertion. Without the
+ * `methods` option (legacy) the historical static options-object call
+ * `<Component>.<op>({ ...inputs })` with a toBeDefined assertion is preserved
+ * byte-identically.
  */
 import type {
 	AssertionDescriptor,
@@ -49,6 +58,7 @@ export function emitVitest(
 ): EmittedFile[] {
 	const generatedDir = options?.generatedDir ?? DEFAULT_GENERATED_DIR;
 	const modulePaths = options?.modulePaths ?? {};
+	const methods = options?.methods;
 	const groups = groupByComponent(suite);
 	const files: EmittedFile[] = [];
 	for (const component of Object.keys(groups)) {
@@ -58,6 +68,7 @@ export function emitVitest(
 			groups[component],
 			suite.clauseIds,
 			modulePaths,
+			methods,
 		);
 		files.push({ path: `${generatedDir}/${component}.test.ts`, content });
 	}
@@ -88,6 +99,7 @@ function renderComponentFile(
 	group: ComponentGroup,
 	clauseIds: string[],
 	modulePaths: Record<string, string>,
+	methods: EmitOptions["methods"],
 ): string {
 	const lines: string[] = [];
 	lines.push(
@@ -119,7 +131,7 @@ function renderComponentFile(
 		assertIdentifier(operation.operation, "operation name");
 		lines.push(`describe("${operation.operation}", () => {`);
 		for (const case_ of operation.cases) {
-			lines.push(...renderCase(case_, component, operation.operation));
+			lines.push(...renderCase(case_, component, operation.operation, methods));
 		}
 		lines.push("});");
 		lines.push("");
@@ -130,7 +142,7 @@ function renderComponentFile(
 		for (const case_ of group.invariantCases) {
 			const operation = operationOf(case_);
 			assertIdentifier(operation, "operation name");
-			lines.push(...renderCase(case_, component, operation));
+			lines.push(...renderCase(case_, component, operation, methods));
 		}
 		lines.push("});");
 		lines.push("");
@@ -161,10 +173,17 @@ function renderCase(
 	case_: PlannedCase,
 	component: string,
 	operation: string,
+	methods: EmitOptions["methods"],
 ): string[] {
 	const title = `${case_.id} — ${case_.description}`;
-	const inputLiteral = renderObjectLiteral(case_.inputs);
-	const call = `${component}.${operation}(${inputLiteral})`;
+	const call = renderCall(case_, component, operation, methods);
+	const meta = methods?.[component]?.[operation];
+	// §9.4 shape awareness: a void-returning operation's accept case must not
+	// assert the return value (expect(result).toBeDefined() fails on
+	// undefined). Only metadata-driven renders skip it — the legacy default
+	// (no methods metadata) keeps the historical toBeDefined assertion.
+	const voidAccept =
+		meta?.returnType === "void" && case_.expects.outcome === "accept";
 	const lines: string[] = [];
 	lines.push(`\tit(${JSON.stringify(title)}, () => {`);
 	if (case_.expects.outcome === "reject") {
@@ -183,15 +202,65 @@ function renderCase(
 		}
 	} else {
 		const assertions = case_.expects.assertions ?? [];
-		lines.push(`\t\tconst result = ${call};`);
-		lines.push("\t\texpect(result).toBeDefined();");
-		for (const assertion of assertions) {
-			lines.push(`\t\t${renderAssertion(assertion)};`);
+		if (voidAccept) {
+			// Bare call — no result binding, no return-value assertion. Real
+			// matcher assertions (which reference `result`) still render when
+			// present, so an invariant on a void operation stays assertable.
+			if (assertions.length > 0) {
+				lines.push(`\t\tconst result = ${call};`);
+				for (const assertion of assertions) {
+					lines.push(`\t\t${renderAssertion(assertion)};`);
+				}
+			} else {
+				lines.push(`\t\t${call};`);
+			}
+		} else {
+			lines.push(`\t\tconst result = ${call};`);
+			lines.push("\t\texpect(result).toBeDefined();");
+			for (const assertion of assertions) {
+				lines.push(`\t\t${renderAssertion(assertion)};`);
+			}
 		}
 	}
 	lines.push("\t});");
 	lines.push("");
 	return lines;
+}
+
+/**
+ * Shape-aware call rendering from manifest method metadata (VERSAILLES-20 F1,
+ * deterministic-generation.contract.yaml §9.4):
+ *
+ * - instance method → `new <Component>().<op>(<positional args>)`
+ * - static method  → `<Component>.<op>(<positional args>)`
+ * - params pass POSITIONALLY in the metadata's declared order, looked up in
+ *   the case inputs by name — a declared param missing from inputs renders
+ *   the deterministic default `undefined`, and captured pre-call state (e.g.
+ *   balance) never leaks into the call because only declared params are read.
+ *
+ * Legacy default (no methods metadata for the component+operation): today's
+ * static options-object call `<Component>.<op>({ ...inputs })` is preserved
+ * byte-identically, keeping existing suites (tests/generator.test.ts and the
+ * backward-compat pin in tests/emitters.test.ts) green.
+ */
+function renderCall(
+	case_: PlannedCase,
+	component: string,
+	operation: string,
+	methods: EmitOptions["methods"],
+): string {
+	const meta = methods?.[component]?.[operation];
+	if (meta === undefined) {
+		return `${component}.${operation}(${renderObjectLiteral(case_.inputs)})`;
+	}
+	const args = meta.params.map((param) => {
+		assertIdentifier(param, "param name");
+		return renderValue(case_.inputs[param]);
+	});
+	const callee = meta.static
+		? `${component}.${operation}`
+		: `new ${component}().${operation}`;
+	return `${callee}(${args.join(", ")})`;
 }
 
 /**

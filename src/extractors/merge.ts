@@ -3,6 +3,11 @@
  * covered entries are updated to reflect the fresh extraction, uncovered
  * entries are preserved unless the caller explicitly prunes — removal is
  * never implicit. Returns a NEW map and never mutates either input.
+ *
+ * Entries are copied WHOLESALE, so per-entry method metadata (VERSAILLES-20
+ * F1) carries through untouched in both directions: extracted entries bring
+ * their freshly-recorded methods, preserved legacy entries keep their stored
+ * shape exactly.
  */
 import type { ManifestMap } from "./types.js";
 

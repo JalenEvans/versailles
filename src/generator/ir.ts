@@ -92,6 +92,21 @@ export type EmitOptions = {
 	generatedDir?: string;
 	/** Per-component import specifier overrides (component → module path). */
 	modulePaths?: Record<string, string>;
+	/**
+	 * Per-component method metadata (component → method name → signature),
+	 * threaded through the emitter seam exactly like modulePaths
+	 * (VERSAILLES-20 F1, deterministic-generation.contract.yaml §9.4). When
+	 * present for a component+operation the emitter renders shape-aware
+	 * calls: instance → `new <Component>().<op>(<positional>)`, static →
+	 * `<Component>.<op>(<positional>)`, params in declared order, and
+	 * void-return accept cases carry no return-value assertion. When absent
+	 * (legacy) the emitter keeps today's static options-object call with a
+	 * toBeDefined assertion — byte-identical to pre-metadata output.
+	 */
+	methods?: Record<
+		string,
+		Record<string, { static: boolean; params: string[]; returnType?: string }>
+	>;
 };
 
 /** Maps every source clause ID → the test IDs tracing it (§9.3). */

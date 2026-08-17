@@ -20,6 +20,12 @@
  * - Nested/related types (e.g. items: OrderItem[]) are added transitively to
  *   the flat manifest map via a worklist, so order.items[].sku resolves
  *   through a sibling OrderItem entry (build-spec §3.3).
+ * - Per-component method metadata is recorded for every resolvable method
+ *   (class methods incl. static, interface method signatures): method name →
+ *   { static, params (declared order), returnType? } (build-spec §7,
+ *   VERSAILLES-20 F1). Accessors (get/set) are NOT methods. returnType is
+ *   resolved to the simple typeRef grammar (void/number/string/boolean) where
+ *   determinable and left undefined otherwise — never a hard error (ADR-0004).
  * - Fields whose type can only be inferred (untyped property initializer) are
  *   flagged low-confidence with a LOW_CONFIDENCE_FIELD warning — never a hard
  *   error (ADR-0004). Methods are never fields.
@@ -43,6 +49,7 @@ import type {
 	ExtractorWarning,
 	FieldEntry,
 	ManifestMap,
+	MethodMetadata,
 } from "./types.js";
 
 /**
@@ -72,6 +79,7 @@ type NamedComponentDeclaration = (
 	name: ts.Identifier;
 };
 type FieldMember = ts.PropertyDeclaration | ts.PropertySignature;
+type MethodMember = ts.MethodDeclaration | ts.MethodSignature;
 
 /** Recursively collects *.ts files under each root (HARD boundary). */
 function scanTypeScriptFiles(sourceRoots: string[]): string[] {
@@ -139,6 +147,61 @@ function isFieldMember(node: ts.Node): node is FieldMember {
 function fieldNameOf(member: FieldMember): string {
 	const name = member.name;
 	return ts.isIdentifier(name) ? name.text : name.getText();
+}
+
+/**
+ * Method signatures are recorded for class methods (instance AND static) and
+ * interface method signatures. Accessors (get/set) are NOT methods for the
+ * manifest purpose — they are data accessors, skipped (fields only).
+ */
+function isMethodMember(node: ts.Node): node is MethodMember {
+	return ts.isMethodDeclaration(node) || ts.isMethodSignature(node);
+}
+
+function methodNameOf(member: MethodMember): string {
+	const name = member.name;
+	return ts.isIdentifier(name) ? name.text : name.getText();
+}
+
+/** Static detection via the modifier list (ts.getModifiers, TS 5.0+). */
+function isStaticMember(member: MethodMember): boolean {
+	const modifiers = ts.canHaveModifiers(member)
+		? ts.getModifiers(member)
+		: undefined;
+	return (
+		modifiers?.some(
+			(modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword,
+		) ?? false
+	);
+}
+
+/** Parameter names in DECLARED order (binding identifiers/text). */
+function paramNamesOf(member: MethodMember): string[] {
+	return member.parameters.map((parameter) => {
+		const name = parameter.name;
+		return ts.isIdentifier(name) ? name.text : name.getText();
+	});
+}
+
+/**
+ * Resolves a method's return type to a typeRef-grammar string where
+ * determinable (build-spec §7): the tests' fixtures need void/number/string/
+ * boolean only, so the renderer stays intentionally minimal. Anything else
+ * (component refs, list<T>, unions, unresolved nodes) records `undefined` —
+ * the permissive never-block policy (ADR-0004) keeps the signature recorded
+ * with params + static flag intact.
+ */
+function resolveReturnType(
+	checker: ts.TypeChecker,
+	member: MethodMember,
+): string | undefined {
+	if (member.type === undefined) return undefined;
+	const type = checker.getTypeFromTypeNode(member.type);
+	if (type.flags & ts.TypeFlags.Void) return "void";
+	if (type.flags & ts.TypeFlags.Boolean) return "boolean";
+	if (type.flags & ts.TypeFlags.String) return "string";
+	if (type.flags & ts.TypeFlags.Number) return "number";
+	return undefined;
 }
 
 function sourcePathOf(
@@ -328,20 +391,33 @@ function extractTypeScript(sourceRoots: string[]): ExtractorResult {
 		processed.add(component);
 
 		const fields: FieldEntry[] = [];
+		const methods: Record<string, MethodMetadata> = {};
 		const refs = new Set<string>();
 		let hasLowConfidence = false;
 
 		for (const member of declaration.members) {
-			if (!isFieldMember(member)) continue;
-			const field = resolveField(checker, member, component, warnings, refs);
-			fields.push(field);
-			if (field.confidence === "low") hasLowConfidence = true;
+			if (isFieldMember(member)) {
+				const field = resolveField(checker, member, component, warnings, refs);
+				fields.push(field);
+				if (field.confidence === "low") hasLowConfidence = true;
+			} else if (isMethodMember(member)) {
+				// Signature record: name, static/instance, ordered params,
+				// return type where determinable. Method BODIES never enter
+				// the manifest or the structural hash (build-spec §7). The
+				// last overload wins deterministically (source order).
+				methods[methodNameOf(member)] = {
+					static: isStaticMember(member),
+					params: paramNamesOf(member),
+					returnType: resolveReturnType(checker, member),
+				};
+			}
 		}
 
 		manifests[component] = {
 			component,
 			fields,
-			sourceHash: computeSourceHash(fields),
+			methods,
+			sourceHash: computeSourceHash(fields, methods),
 			sourcePath: sourcePathOf(declaration, sourceRoots),
 			confidence: hasLowConfidence ? "low" : "high",
 		};
