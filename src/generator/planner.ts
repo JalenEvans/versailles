@@ -27,6 +27,15 @@
  *   value the registered predicate accepts (number → 1), so a predicate guard
  *   never receives an input it rejects on the accept side
  *   (deterministic-generation.contract.yaml, VERSAILLES-23 F4).
+ * - Unplannable operations (VERSAILLES-25): a staged operation whose component
+ *   carries extracted method metadata but that is MISSING from it — no
+ *   matching method metadata and no resolvable source method — is never
+ *   emitted as the legacy static options-object call (dead, unrunnable code).
+ *   Instead it surfaces a non-silent UNPLANNABLE_OPERATION suite warning (the
+ *   same LoaderWarning tier as PREDICATE_UNPLANNABLE, VERSAILLES-22 F3) and
+ *   its cases are skipped while its clause ids stay mapped in coverage.json as
+ *   a detectable zero-coverage gap (build-spec §9.1/§9.3). A component with NO
+ *   methods key stays fully legacy — byte-identical options-object emission.
  * - Postcondition-satisfaction cases: valid inputs asserted against every
  *   postcondition, with the captured pre-call state stored in `inputs` under
  *   the manifest field names so `old(field)` resolves.
@@ -210,6 +219,46 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 				counters[kind] = current + 1;
 				return `${componentName}.${operationName}.${kind}-${current}`;
 			};
+
+			// VERSAILLES-25 (deterministic-generation.contract.yaml §9.1): a
+			// staged operation with no matching method metadata and no
+			// resolvable source method must NOT be emitted as the legacy
+			// static options-object call (`<Component>.<op>({ ...inputs })`) —
+			// that is dead, unrunnable code (TypeError at runtime) with no
+			// signal. The authoritative "no resolvable source method" signal is
+			// the component's extracted methods map (F1): when the map EXISTS
+			// but the staged op is missing from it, warn non-silently (same
+			// LoaderWarning tier as PREDICATE_UNPLANNABLE) and skip the op's
+			// cases. A component with NO methods key stays fully legacy —
+			// "no matching metadata" is vacuously false there, so legacy
+			// suites keep their byte-identical options-object emission.
+			const componentMethods =
+				context.manifests?.manifests[componentName]?.methods;
+			if (
+				componentMethods !== undefined &&
+				componentMethods[operationName] === undefined
+			) {
+				const operationId = `${componentName}.${operationName}`;
+				const present = Object.keys(componentMethods).join(", ");
+				warnings.push({
+					code: "UNPLANNABLE_OPERATION",
+					field: operationId,
+					detail: `Staged operation ${operationId} has no matching method in ${componentName}'s extracted methods metadata (present: ${present || "none"}) — no resolvable source method, so its cases are skipped and no call is emitted`,
+				});
+				// Keep the operation group in the suite with EMPTY cases: the
+				// component's file still renders (the CLI e2e reads it), and
+				// the clause ids collected above stay mapped in coverage.json
+				// as a detectable zero-coverage gap (contract can: skip the
+				// cases, keep the coverage gap visible). The emitter renders
+				// no invocation for an empty-case group — and never the
+				// legacy options-object call.
+				operations.push({
+					component: componentName,
+					operation: operationName,
+					cases,
+				});
+				continue;
+			}
 
 			// §9.1 — per-operation cases.
 			for (const pre of preconditions) {

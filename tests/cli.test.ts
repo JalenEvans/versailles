@@ -991,6 +991,75 @@ describe("runCli generate — non-silent unplannable predicate warnings (VERSAIL
 	});
 });
 
+describe("runCli generate — non-silent UNPLANNABLE_OPERATION warnings for staged ops missing from source (VERSAILLES-25, deterministic-generation.contract.yaml)", () => {
+	it("a staged operation absent from the component's manifest methods metadata surfaces UNPLANNABLE_OPERATION in warnings — never a dead static call, exit 0", async () => {
+		const cwd = await freshWorkspace("g-unplannable-operation");
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				Order: {
+					invariants: [],
+					operations: {
+						setSubtotal: {
+							id: "Order.setSubtotal",
+							params: [{ name: "amount", type: "number" }],
+							preconditions: [
+								{ id: "Order.setSubtotal.pre0", expr: "amount >= 0" },
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "setsubtotal-hash",
+						},
+					},
+				},
+			},
+		});
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				Order: {
+					sourceHash: "man-order",
+					fields: { subtotal: "number" },
+					// The source records Order.setTotal but NOT
+					// Order.setSubtotal — the staged operation has no
+					// matching method metadata and no resolvable source
+					// method (the V-25 E2E-gate case).
+					methods: {
+						setTotal: {
+							static: false,
+							params: ["amount"],
+							returnType: "number",
+						},
+					},
+				},
+			},
+		});
+
+		const result = await runCli(["generate"], { cwd });
+
+		// Generation still succeeds (exit 0) — the warning tier is
+		// non-blocking, exactly like PREDICATE_UNPLANNABLE (ADR-0004).
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+		expect(result.warnings).toContainEqual(
+			expect.objectContaining({
+				code: "UNPLANNABLE_OPERATION",
+				field: "Order.setSubtotal",
+			}),
+		);
+
+		// The generated surface contains NO unrunnable static call for the
+		// warned operation — the V-25 must_not (no `Order.setSubtotal({`.
+		const content = await readFile(
+			join(cwd, ".versailles", "generated", "Order.test.ts"),
+			"utf8",
+		);
+		expect(content).not.toContain("Order.setSubtotal(");
+		expect(content).not.toContain("setSubtotal({");
+	});
+});
+
 // ── review (valid arg routing; no staged object → NOT_FOUND, exit 1 — real flow) ─
 
 describe("runCli review — valid arg shapes route to the handler; no staged object → NOT_FOUND, exit 1 (flow pinned in tests/review.test.ts)", () => {
