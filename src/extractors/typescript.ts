@@ -34,6 +34,12 @@
  *   compiler-generated anonymous symbols) and never throw — no warning.
  * - sourceRoots is a HARD boundary: only *.ts files under the roots are
  *   scanned, indexed, or resolved — never outside, even through imports.
+ * - Each covered entry records a PROJECT-root-relative sourcePath with POSIX
+ *   separators (e.g. "src/order.ts" for <projectRoot>/src/order.ts) so the
+ *   generator's join(cwd, sourcePath) resolves to the real file
+ *   (manifest-extraction.contract.yaml, VERSAILLES-24). The project root is
+ *   the optional extractManifests projectRoot argument (the CLI's cwd); when
+ *   absent it is inferred as the common directory prefix of the source roots.
  *
  * Synchronous: ts.createProgram is synchronous (directory glob expansion is a
  * CLI concern, not the extractor's).
@@ -204,15 +210,47 @@ function resolveReturnType(
 	return undefined;
 }
 
+/**
+ * Longest common directory prefix of the source roots — the best available
+ * project-root estimate when a caller does not pass an explicit projectRoot
+ * (VERSAILLES-24). For the common single-source-root case the root IS the
+ * inferred project root, so results are byte-identical to the pre-fix
+ * behavior; for nested/multi-root layouts the common ancestor keeps every
+ * sourcePath project-root-relative (never source-root-relative, never
+ * absolute). Returns undefined when the roots share no directory prefix
+ * (including the empty sourceRoots list) so the caller can fall back.
+ */
+function inferProjectRoot(sourceRoots: string[]): string | undefined {
+	if (sourceRoots.length === 0) return undefined;
+	let common = sourceRoots[0];
+	for (const root of sourceRoots.slice(1)) {
+		while (root !== common && !root.startsWith(`${common}${sep}`)) {
+			const next = common.lastIndexOf(sep);
+			if (next <= 0) return undefined;
+			common = common.slice(0, next);
+		}
+	}
+	return common;
+}
+
+/**
+ * PROJECT-root-relative sourcePath for a covered component
+ * (manifest-extraction.contract.yaml, VERSAILLES-24): a component at
+ * <projectRoot>/src/order.ts records "src/order.ts" — never source-root-
+ * relative ("order.ts") and never absolute — so deriveModulePaths'
+ * join(cwd, sourcePath) resolves to the real file. The project root is the
+ * explicit projectRoot argument when provided (the CLI's cwd); otherwise it
+ * is inferred as the common directory prefix of the source roots. POSIX
+ * separators always (build-spec §3.3).
+ */
 function sourcePathOf(
 	decl: NamedComponentDeclaration,
 	sourceRoots: string[],
+	projectRoot?: string,
 ): string {
 	const file = decl.getSourceFile().fileName;
-	const root = sourceRoots.find(
-		(candidate) => file.startsWith(`${candidate}${sep}`) || file === candidate,
-	);
-	if (root === undefined) return file;
+	const root = projectRoot ?? inferProjectRoot(sourceRoots);
+	if (root === undefined || root === "") return file;
 	const rel = relative(root, file);
 	return rel === "" ? file : rel.split(sep).join("/");
 }
@@ -345,7 +383,10 @@ function isArrayType(checker: ts.TypeChecker, type: ts.Type): boolean {
 	return checker.getIndexTypeOfType(type, ts.IndexKind.Number) !== undefined;
 }
 
-function extractTypeScript(sourceRoots: string[]): ExtractorResult {
+function extractTypeScript(
+	sourceRoots: string[],
+	projectRoot?: string,
+): ExtractorResult {
 	const files = scanTypeScriptFiles(sourceRoots);
 	const program = ts.createProgram({
 		rootNames: files,
@@ -418,7 +459,7 @@ function extractTypeScript(sourceRoots: string[]): ExtractorResult {
 			fields,
 			methods,
 			sourceHash: computeSourceHash(fields, methods),
-			sourcePath: sourcePathOf(declaration, sourceRoots),
+			sourcePath: sourcePathOf(declaration, sourceRoots, projectRoot),
 			confidence: hasLowConfidence ? "low" : "high",
 		};
 

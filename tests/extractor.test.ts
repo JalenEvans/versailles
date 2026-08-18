@@ -43,16 +43,20 @@ import type {
  * export type ManifestMap = Record<string, ManifestEntry>;
  * export type ExtractorWarning = { code: string; component: string; field: string; detail: string };
  * export type ExtractorResult = { manifests: ManifestMap; warnings: ExtractorWarning[] };
- * export declare function extractManifests(sourceRoots: string[]): ExtractorResult; // SYNCHRONOUS
+ * export declare function extractManifests(sourceRoots: string[], projectRoot?: string): ExtractorResult; // SYNCHRONOUS
  * export declare function computeSourceHash(fields: FieldEntry[], methods?: Record<string, MethodMetadata>): string;
  * export declare function mergeManifests(existing: ManifestMap, extracted: ManifestMap, options: { prune: boolean }): ManifestMap; // pure
  * ```
  *
  * ── Ambiguities resolved by these tests ────────────────────────────────────
  *
- * 1. extractManifests is SYNCHRONOUS and takes source root DIRECTORY paths;
- *    it scans every *.ts file under each root recursively (the boundary test
- *    pins the recursion and the never-outside-root guarantee).
+ * 1. extractManifests is SYNCHRONOUS and takes source root DIRECTORY paths
+ *    (glob expansion is a CLI concern); it scans every *.ts file under each
+ *    root recursively (the boundary test pins the recursion and the
+ *    never-outside-root guarantee). The optional projectRoot (the CLI's cwd)
+ *    anchors sourcePath to the PROJECT root (VERSAILLES-24): a component at
+ *    <projectRoot>/src/order.ts records "src/order.ts", never "order.ts" —
+ *    so the generator's join(cwd, sourcePath) resolves to the real file.
  * 2. Per-field confidence: "high" for type-checker-declared types, "low" for
  *    types that can only be inferred (e.g. an untyped property initializer
  *    `balance = 0`). Entry-level confidence is "low" when any field is low.
@@ -613,25 +617,35 @@ describe("extractManifests — determinism (ADR-0002)", () => {
 });
 
 /**
- * sourcePath persistence (VERSAILLES-21 F2, manifest-extraction.contract.yaml
- * 2026-08-17): every covered manifest entry carries the sourcePath of the file
- * it was extracted from — never an empty string — so the store write
- * (src/cli/handlers/extract.ts) and the generate handler can propagate real
- * module import paths. The extractor already records sourcePath (the bug is
- * downstream: the store conversion drops it); this pins the chain head so a
- * regression here fails at the source.
+ * sourcePath persistence (VERSAILLES-21 F2, VERSAILLES-24,
+ * manifest-extraction.contract.yaml): every covered manifest entry carries the
+ * sourcePath of the file it was extracted from — never an empty string — so
+ * the store write (src/cli/handlers/extract.ts) and the generate handler can
+ * propagate real module import paths.
+ *
+ * VERSAILLES-24 pins the canonical semantic: sourcePath is PROJECT-root-
+ * relative with POSIX separators. A component at <projectRoot>/src/order.ts
+ * records "src/order.ts" — never "order.ts" (source-root-relative) and never
+ * an absolute path — so deriveModulePaths' join(cwd, sourcePath) resolves to
+ * the real file. The extractor receives the project root explicitly (the
+ * CLI's cwd); today's sourcePathOf computes relative(root, file) against the
+ * SOURCE root instead, which is the E2E-gate bug.
  */
-describe("extractManifests — sourcePath per covered component (VERSAILLES-21 F2)", () => {
-	it("records a non-empty sourcePath relative to the source root for every covered component", async () => {
-		const dir = await fixtureDir("sp1-sourcepath");
-		await writeFixture(dir, "account.ts", ACCOUNT_SOURCE);
-		// A nested file: the path must stay relative to the root with posix
-		// separators (sourcePathOf), matching how the emitter will resolve it.
-		await writeFixture(dir, "src/models/customer.ts", CUSTOMER_SOURCE);
+describe("extractManifests — sourcePath per covered component (VERSAILLES-21 F2, VERSAILLES-24)", () => {
+	it("records a non-empty PROJECT-ROOT-relative sourcePath for every covered component — never source-root-relative", async () => {
+		const root = await fixtureDir("sp1-sourcepath");
+		// Project root = root; source root = root/src — the directory the
+		// config sourceRoots "src/**/*.ts" glob expands to. A file at
+		// <root>/src/account.ts must record "src/account.ts" (project-root-
+		// relative), NOT "account.ts" (source-root-relative): the old value
+		// would make join(cwd, sourcePath) point at <root>/account.ts, which
+		// does not exist.
+		await writeFixture(root, "src/account.ts", ACCOUNT_SOURCE);
+		await writeFixture(root, "src/models/customer.ts", CUSTOMER_SOURCE);
 
-		const result = extractManifests([dir]);
+		const result = extractManifests([join(root, "src")], root);
 
-		expect(result.manifests.Account.sourcePath).toBe("account.ts");
+		expect(result.manifests.Account.sourcePath).toBe("src/account.ts");
 		expect(result.manifests.Customer.sourcePath).toBe("src/models/customer.ts");
 		// Never an empty string for a covered component.
 		for (const entry of Object.values(result.manifests)) {

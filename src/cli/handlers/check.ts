@@ -62,7 +62,10 @@ export async function handleCheck(cwd: string): Promise<CliResult> {
 		return zeroRoots;
 	}
 
-	const extracted = extractManifests(roots);
+	// cwd is the project root: recomputed entries' sourcePath is anchored
+	// project-root-relative (VERSAILLES-24) — check only compares structural
+	// hashes, but the extracted entries stay consistent with extract-manifests.
+	const extracted = extractManifests(roots, cwd);
 	const extractionWarnings = extractorWarnings(extracted.warnings);
 
 	const staleIds: string[] = [];

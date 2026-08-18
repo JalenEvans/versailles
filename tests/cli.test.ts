@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
 	mkdir,
 	mkdtemp,
@@ -7,7 +8,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { extractManifests } from "../src/extractors/index.js";
@@ -1438,10 +1439,15 @@ describe("runCli extract-manifests — sourcePath persists through the store (VE
 			>;
 		};
 
-		// Covered entries (refreshed AND added) carry the REAL root-relative
-		// source path — never the '' the store conversion writes today.
-		expect(stored.manifests.OrderService.sourcePath).toBe("OrderService.ts");
-		expect(stored.manifests.OrderItem.sourcePath).toBe("OrderItem.ts");
+		// Covered entries (refreshed AND added) carry the REAL PROJECT-root-
+		// relative source path — never the '' the store conversion writes
+		// today, and never the source-root-relative "OrderService.ts" the
+		// extractor records pre-fix (VERSAILLES-24: sourcePath is anchored to
+		// the project root so join(cwd, sourcePath) resolves to the real file).
+		expect(stored.manifests.OrderService.sourcePath).toBe(
+			"src/OrderService.ts",
+		);
+		expect(stored.manifests.OrderItem.sourcePath).toBe("src/OrderItem.ts");
 		expect(stored.manifests.OrderService.sourcePath?.length).toBeGreaterThan(0);
 		// Legacy uncovered entries are preserved as-is — no invented path.
 		expect(stored.manifests.LegacyComponent.sourcePath).toBeUndefined();
@@ -1454,7 +1460,9 @@ describe("runCli extract-manifests — sourcePath persists through the store (VE
 // wrong extension for e.g. src/order.ts → Order). Fixed: the handler derives
 // modulePaths from context.manifests sourcePath entries and passes them through
 // emitSuite options; entries lacking sourcePath (legacy) keep the deterministic
-// default — never an empty-string import.
+// default — never an empty-string import. The seeded sourcePath values below
+// use the canonical PROJECT-root-relative form (src/AccountService.ts — a
+// covered entry's sourcePath is anchored to the project root, VERSAILLES-24).
 
 async function seedGeneratorWorkspaceWithSourcePaths(
 	name: string,
@@ -1466,12 +1474,12 @@ async function seedGeneratorWorkspaceWithSourcePaths(
 			AccountService: {
 				sourceHash: "man-account",
 				fields: { balance: "number", status: "string" },
-				sourcePath: "AccountService.ts",
+				sourcePath: "src/AccountService.ts",
 			},
 			CustomerService: {
 				sourceHash: "man-customer",
 				fields: {},
-				sourcePath: "CustomerService.ts",
+				sourcePath: "src/CustomerService.ts",
 			},
 		},
 	});
@@ -1510,7 +1518,7 @@ describe("runCli generate — vitest module paths derive from manifest sourcePat
 				AccountService: {
 					sourceHash: "man-account",
 					fields: { balance: "number", status: "string" },
-					sourcePath: "AccountService.ts",
+					sourcePath: "src/AccountService.ts",
 				},
 				CustomerService: {
 					sourceHash: "man-customer",
@@ -1532,5 +1540,92 @@ describe("runCli generate — vitest module paths derive from manifest sourcePat
 			'import { CustomerService } from "../../src/CustomerService.js";',
 		);
 		expect(content).not.toMatch(/from ""/);
+	});
+});
+
+// ── VERSAILLES-24: emitted imports RESOLVE to the real source file ─────────
+// E2E-gate finding: sourcePathOf (src/extractors/typescript.ts) stores
+// SOURCE-ROOT-relative paths ("order.ts" for <root>/src/order.ts), so
+// deriveModulePaths' join(cwd, "order.ts") points at <cwd>/order.ts and the
+// emitted import "../../order.ts" cannot resolve to the real <cwd>/src/order.ts
+// — the generated test fails at module load. Contract-gated fix direction
+// (manifest-extraction.contract.yaml + deterministic-generation.contract.yaml,
+// 2026-08-18, build-spec §3.3/§7/§9.4): extract-manifests stores
+// PROJECT-root-relative sourcePath ("src/order.ts"), so generate emits
+// "../../src/order.ts", which resolves to the real file. This test runs the
+// REAL pipeline (extract-manifests → generate), parses the emitted import,
+// resolves it against the generated file's directory, and asserts the resolved
+// path exists on disk and is the component's source file — resolvability, not
+// merely a matching extension or suffix.
+
+// Real nested source layout under <cwd>/src/ (config sourceRoots
+// "src/**/*.ts" expands to <cwd>/src) with a transitive sibling.
+const V24_ORDER_SOURCE = `export class Order {
+	id: number;
+	items: OrderItem[];
+}
+
+export class OrderItem {
+	sku: string;
+	qty: number;
+}
+`;
+
+function v24OrderContracts(): unknown {
+	return {
+		version: "1.0",
+		contracts: {
+			Order: {
+				invariants: [],
+				operations: {
+					setTotal: {
+						id: "Order.setTotal",
+						params: [{ name: "amount", type: "number" }],
+						preconditions: [{ id: "Order.setTotal.pre0", expr: "amount >= 0" }],
+						postconditions: [],
+						effects: [],
+						sourceHash: "settotal-hash",
+					},
+				},
+			},
+		},
+	};
+}
+
+describe("runCli generate — emitted imports resolve to the real source file (VERSAILLES-24)", () => {
+	it("extract-manifests + generate emit an import that resolves to <root>/src/order.ts on disk", async () => {
+		const cwd = await freshWorkspace("v24-resolvable");
+		await writeSource(cwd, "order.ts", V24_ORDER_SOURCE);
+		await writeWorkspaceFile(cwd, "contracts.json", v24OrderContracts());
+
+		const extract = await runCli(["extract-manifests"], { cwd });
+		expect(extract.ok).toBe(true);
+		expect(extract.exitCode).toBe(0);
+
+		const generate = await runCli(["generate"], { cwd });
+		expect(generate.ok).toBe(true);
+		expect(generate.exitCode).toBe(0);
+
+		const content = await readFile(
+			join(cwd, ".versailles", "generated", "Order.test.ts"),
+			"utf8",
+		);
+		const match = content.match(/import \{ Order \} from "([^"]+)"/);
+		expect(match).not.toBeNull();
+		const specifier = match?.[1] ?? "";
+
+		// POSIX separators on any platform (deriveModulePaths converts with
+		// .split(sep).join("/") — the emitted specifier never carries "\").
+		expect(specifier).not.toContain("\\");
+
+		// Resolvability: resolve the emitted specifier against the generated
+		// file's directory and assert it points at a file that ACTUALLY
+		// EXISTS and is the component's source file (src/order.ts). Today the
+		// extractor records "order.ts", so the specifier is "../../order.ts"
+		// and the resolved <cwd>/order.ts does not exist — the Red pin.
+		const generatedDir = join(cwd, ".versailles", "generated");
+		const resolved = resolve(generatedDir, specifier);
+		expect(existsSync(resolved)).toBe(true);
+		expect(basename(resolved)).toBe("order.ts");
 	});
 });

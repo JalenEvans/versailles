@@ -65,7 +65,10 @@ export async function handleExtractManifests(
 		return zeroRoots;
 	}
 
-	const extracted = extractManifests(roots);
+	// The CLI's cwd is the PROJECT root (the dir containing .versailles/):
+	// sourcePath values are anchored project-root-relative so the generator's
+	// join(cwd, sourcePath) resolves to the real file (VERSAILLES-24).
+	const extracted = extractManifests(roots, cwd);
 	const warnings = extractorWarnings(extracted.warnings);
 
 	// The loader store format ({ sourceHash, fields: Record, sourcePath?,

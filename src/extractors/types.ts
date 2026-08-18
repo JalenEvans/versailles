@@ -66,5 +66,12 @@ export type ExtractorResult = {
  */
 export interface ExtractorPlugin {
 	readonly language: "typescript" | "csharp" | "python";
-	extract(sourceRoots: string[]): ExtractorResult;
+	/**
+	 * @param sourceRoots Directory roots to scan (glob expansion is a CLI
+	 *   concern). Files are scanned recursively under these roots only.
+	 * @param projectRoot Optional project root (the CLI's cwd) anchoring
+	 *   sourcePath values project-root-relative (VERSAILLES-24). When omitted
+	 *   the plugin infers it from the source roots' common directory prefix.
+	 */
+	extract(sourceRoots: string[], projectRoot?: string): ExtractorResult;
 }

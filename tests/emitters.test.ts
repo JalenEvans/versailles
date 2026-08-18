@@ -1,8 +1,13 @@
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import { parseExpression } from "../src/core/parser.js";
 import type { ClauseKind, Node, ParseError } from "../src/core/parser.js";
+import { extractManifests } from "../src/extractors/index.js";
 // The generator core (src/generator/) is implemented; these value imports
 // resolve at runtime. The assertions below pin the xunit/pytest emitter
 // contract the implementation must satisfy.
@@ -1278,5 +1283,87 @@ describe("emitSuite — shape-aware vitest calls from method metadata (VERSAILLE
 
 		expect(order?.content).toContain('Order.addItem({ sku: "ABC" })');
 		expect(order?.content).toContain("expect(result).toBeDefined()");
+	});
+});
+
+/**
+ * VERSAILLES-24 module-path resolvability (deterministic-generation.contract.yaml
+ * §9.4, build-spec §9.4): an emitted import specifier derived from a manifest
+ * sourcePath must RESOLVE to the real source file from the generated file's
+ * directory — not merely share an extension or suffix. The deriveModulePaths
+ * seam (src/cli/handlers/generate.ts) computes
+ * relative(<root>/<generatedDir>, join(<root>, sourcePath)); this test mirrors
+ * that logic against a REAL nested temp-dir layout and proves the specifier
+ * resolves to the file that exists on disk. The sourcePath comes from the REAL
+ * extractor — the buggy side pre-fix (source-root-relative "models/order.ts"
+ * instead of project-root-relative "src/models/order.ts") — so the
+ * resolvability assertion is Red today: the derived specifier
+ * "../../order.ts" resolves to <root>/order.ts, which does not exist.
+ */
+
+// Real nested source layout: <root>/src/models/order.ts (project root = root;
+// source root = root/src, the directory the "src/**/*.ts" glob expands to).
+const V24_ORDER_SOURCE = `export class Order {
+	id: number;
+	items: OrderItem[];
+}
+
+export class OrderItem {
+	sku: string;
+	qty: number;
+}
+`;
+
+describe("emitSuite — module paths derived from project-root-relative sourcePath resolve to real files (VERSAILLES-24)", () => {
+	it("derives a specifier via the deriveModulePaths seam that resolves to the REAL nested source file on disk", async () => {
+		const root = await mkdtemp(join(tmpdir(), "versailles-v24-"));
+		try {
+			await mkdir(join(root, "src", "models"), { recursive: true });
+			const sourceFile = join(root, "src", "models", "order.ts");
+			await writeFile(sourceFile, `${V24_ORDER_SOURCE}\n`, "utf8");
+
+			// Real extraction with the project root: a covered entry's
+			// sourcePath must be project-root-relative ("src/models/order.ts"),
+			// never source-root-relative ("models/order.ts") — Red today.
+			const { manifests } = extractManifests([join(root, "src")], root);
+			expect(manifests.Order.sourcePath).toBe("src/models/order.ts");
+
+			// Mirror deriveModulePaths (src/cli/handlers/generate.ts): the
+			// specifier is node:path relative from <root>/<generatedDir> to
+			// join(<root>, sourcePath), POSIX separators, explicit ./ prefix
+			// when the target is not in a parent directory.
+			const generatedDir = ".versailles/generated";
+			const from = join(root, generatedDir);
+			const to = join(root, manifests.Order.sourcePath);
+			let specifier = relative(from, to).split(sep).join("/");
+			if (!specifier.startsWith(".")) specifier = `./${specifier}`;
+
+			// POSIX separators on any platform (C).
+			expect(specifier).not.toContain("\\");
+
+			// Emit via the modulePaths seam (mirrors generate's emitSuite
+			// options) and assert the specifier appears in the import line.
+			const files = emitSuite(orderSuite(), "vitest", {
+				generatedDir,
+				modulePaths: { Order: specifier },
+			});
+			const order = files.find(
+				(file) => file.path === `${generatedDir}/Order.test.ts`,
+			);
+			expect(order).toBeDefined();
+			expect(order?.content).toContain(`import { Order } from "${specifier}";`);
+
+			// RESOLVABILITY: resolve the emitted specifier against the
+			// generated file's directory — the result must be the real source
+			// file that exists on disk. With today's source-root-relative
+			// sourcePath the specifier is "../../order.ts" and resolves to
+			// <root>/order.ts, which does not exist — Red.
+			const generatedFile = join(root, `${generatedDir}/Order.test.ts`);
+			const resolved = resolve(dirname(generatedFile), specifier);
+			expect(resolved).toBe(sourceFile);
+			expect(existsSync(resolved)).toBe(true);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 });
