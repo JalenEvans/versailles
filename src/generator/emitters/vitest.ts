@@ -133,12 +133,16 @@ function renderComponentFile(
 
 	for (const operation of group.operations) {
 		assertIdentifier(operation.operation, "operation name");
-		lines.push(`describe("${operation.operation}", () => {`);
-		for (const case_ of operation.cases) {
-			lines.push(...renderCase(case_, component, operation.operation, methods));
+		if (operation.cases.length > 0) {
+			lines.push(`describe("${operation.operation}", () => {`);
+			for (const case_ of operation.cases) {
+				lines.push(
+					...renderCase(case_, component, operation.operation, methods),
+				);
+			}
+			lines.push("});");
+			lines.push("");
 		}
-		lines.push("});");
-		lines.push("");
 	}
 
 	if (group.invariantCases.length > 0) {

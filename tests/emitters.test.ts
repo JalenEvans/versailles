@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
@@ -1553,6 +1554,188 @@ describe("emitSuite — module paths derived from project-root-relative sourcePa
 			const resolved = resolve(dirname(generatedFile), specifier);
 			expect(resolved).toBe(sourceFile);
 			expect(existsSync(resolved)).toBe(true);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});
+
+// ── VERSAILLES-27: an operation group with ZERO planned cases emits NO describe ─
+//
+// E2E re-run finding: the V-25 skip path (UNPLANNABLE_OPERATION) keeps the
+// warned operation's group in the suite with an EMPTY cases array (planner.ts
+// keeps the group so the component file still renders and the coverage gap
+// stays mapped in coverage.json), but the vitest emitter renders
+// `describe("<op>", () => { });` UNCONDITIONALLY for every operation group —
+// an empty suite. Vitest 3.2.7 (and 4.1.10) hard-fails empty describes:
+// `Error: No test found in suite setSubtotal` → the whole file fails, exit 1.
+// All other cases pass; only the empty describe fails the file.
+//
+// FIXED (deterministic-generation.contract.yaml 2026-08-18, build-spec §9.4,
+// VERSAILLES-27): the emitter emits NO describe block for an operation whose
+// planned case list is empty — the operation is fully skipped by the planner,
+// so an empty suite is never rendered (the trace header already records the
+// operation's clause ids, §9.3). Sibling operations WITH cases render
+// byte-identically (D), and the invariant describe stays guarded on
+// `length > 0` exactly as today (B).
+
+const V27_EMPTY_OP = "setSubtotal";
+const V27_SIBLING_OP = "setTotal";
+
+/**
+ * A V-25-shaped suite at the emitter seam: the skipped operation's group
+ * survives planning with ZERO cases (planner.ts keeps the group), alongside a
+ * sibling operation with a real case. Mirror of the methodsMissingOpFixture
+ * suite in tests/generator-unplannable-operation.test.ts (which pins the
+ * PLANNED side — this fixture pins the EMITTED side).
+ */
+function emptyOperationGroupSuite(): PlannedSuite {
+	return {
+		clauseIds: [`Order.${V27_EMPTY_OP}.pre0`, `Order.${V27_SIBLING_OP}.pre0`],
+		operations: [
+			{ component: "Order", operation: V27_EMPTY_OP, cases: [] },
+			{
+				component: "Order",
+				operation: V27_SIBLING_OP,
+				cases: [
+					{
+						id: `Order.${V27_SIBLING_OP}.boundary-0`,
+						kind: "boundary",
+						description: "accept with an amount",
+						inputs: { amount: 25 },
+						expects: { outcome: "accept" },
+						traces: [`Order.${V27_SIBLING_OP}.pre0`],
+					},
+				],
+			},
+		],
+		invariantCases: [],
+	};
+}
+
+/** Method metadata for the sibling op only — the skipped op has no source method (V-25). */
+const V27_METHODS = {
+	Order: {
+		setTotal: { static: false, params: ["amount"], returnType: "number" },
+	},
+};
+
+describe("emitSuite — an operation group with ZERO planned cases emits NO describe block for it (VERSAILLES-27, §9.1)", () => {
+	it('emits NO describe block for the empty-case operation — no empty suite, no it.skip placeholder (Red today: the emitter renders describe("setSubtotal", () => {});)', () => {
+		const files = emitSuite(emptyOperationGroupSuite(), "vitest", {
+			methods: V27_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// THE fix: the skipped operation leaves NO describe in the file — the
+		// planner fully skipped it, so an empty suite is never rendered.
+		expect(order?.content).not.toContain('describe("setSubtotal", () => {');
+		// The pinned form is NO describe block (not the it.skip alternative):
+		// the skipped operation contributes NOTHING to the emitted surface.
+		expect(order?.content).not.toContain("it.skip(");
+
+		// The sibling operation WITH cases still emits its describe, unchanged.
+		expect(order?.content).toContain('describe("setTotal", () => {');
+	});
+
+	it("keeps the sibling operation's describe WITH cases byte-identical — only the empty group is omitted (non-regression D)", () => {
+		const files = emitSuite(emptyOperationGroupSuite(), "vitest", {
+			methods: V27_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// The with-cases sibling renders exactly the established F1 shape:
+		// shape-aware instance call + toBeDefined, byte-identical to the same
+		// case rendered in any existing suite (the empty group's presence must
+		// not perturb the sibling's render).
+		expect(order?.content).toContain('describe("setTotal", () => {');
+		expect(order?.content).toContain(
+			'it("Order.setTotal.boundary-0 — accept with an amount", () => {',
+		);
+		expect(order?.content).toContain(
+			"const result = new Order().setTotal(25);",
+		);
+		expect(order?.content).toContain("expect(result).toBeDefined();");
+	});
+
+	it("keeps the invariant describe guarded on length > 0 — empty invariantCases renders no invariants describe, non-empty still does (pin B)", () => {
+		// Empty invariantCases (the V-27 suite) → no `describe("Order invariants")`.
+		const files = emitSuite(emptyOperationGroupSuite(), "vitest", {
+			methods: V27_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+		expect(order?.content).not.toContain('describe("Order invariants"');
+
+		// Non-empty invariantCases → the invariants describe STILL emits (the
+		// existing V-26 guard at vitest.ts:144 stays — this is not a
+		// blanket "skip empty describes" change).
+		const withInvariants = emitSuite(voidInvariantSuite(), "vitest", {
+			methods: ORDER_VOID_METHODS,
+		});
+		const order2 = withInvariants.find((file) =>
+			file.path.endsWith("Order.test.ts"),
+		);
+		expect(order2).toBeDefined();
+		expect(order2?.content).toContain('describe("Order invariants", () => {');
+	});
+});
+
+/**
+ * Real Order source for the V-27 E2E runnability pin. setSubtotal does NOT
+ * exist in source (the V-25 shape: the staged op is missing from the source
+ * method metadata) — the generated file must not reference it at all.
+ */
+const V27_ORDER_SOURCE = `export class Order {
+	setTotal(amount: number): number {
+		return amount * 2;
+	}
+}
+`;
+
+describe("emitSuite — a generated suite containing an EMPTY operation group RUNS GREEN under the real vitest runner (VERSAILLES-27 E2E runnability gate)", () => {
+	it("executes the emitted file (empty op group + sibling with a real case) with the REAL vitest runner — exit 0, never 'No test found in suite' (Red today: vitest 3.2.7 hard-fails the empty describe)", async () => {
+		const root = await mkdtemp(join(tmpdir(), "versailles-v27-"));
+		try {
+			await writeFile(join(root, "order.ts"), `${V27_ORDER_SOURCE}\n`, "utf8");
+
+			const files = emitSuite(emptyOperationGroupSuite(), "vitest", {
+				generatedDir: ".",
+				modulePaths: { Order: "./order" },
+				methods: V27_METHODS,
+			});
+			const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+			expect(order).toBeDefined();
+			await writeFile(
+				join(root, "Order.test.ts"),
+				order?.content ?? "",
+				"utf8",
+			);
+
+			// The REAL vitest runner (vitest.mjs under process.execPath).
+			// bun's own test-runner shim TOLERATES empty describes, so `bun
+			// test` cannot reproduce the V-27 failure; the established command
+			// (package.json "test": "vitest run") must run the generated file
+			// green — no --passWithNoTests, no manual edits.
+			const vitestBin = join(
+				dirname(fileURLToPath(import.meta.url)),
+				"..",
+				"node_modules",
+				"vitest",
+				"vitest.mjs",
+			);
+			const run = spawnSync(process.execPath, [vitestBin, "run"], {
+				cwd: root,
+				encoding: "utf8",
+			});
+			expect(
+				run.status,
+				`generated suite with an empty op group did not run clean:\n${run.stdout}\n${run.stderr}`,
+			).toBe(0);
+			// The reported hard-fail shape is gone — no empty-suite rejection.
+			expect(run.stdout + run.stderr).not.toContain("No test found in suite");
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
