@@ -12,8 +12,12 @@
  * (deterministic-generation.contract.yaml §9.4, VERSAILLES-20 F1): instance
  * methods render `new <Component>().<op>(<positional>)`, static methods render
  * `<Component>.<op>(<positional>)` with params in declared order, and
- * void-return accept cases carry no return-value assertion. Without the
- * `methods` option (legacy) the historical static options-object call
+ * void-return accept cases carry no return-value assertion. Accept/invariant
+ * cases on a void-returning operation WITH assertions bind the component
+ * INSTANCE — `const instance = new <Component>(); instance.<op>(...);
+ * expect(instance.<field>)...` — so assertions target instance state, never
+ * the void return value (VERSAILLES-26). Without the `methods` option
+ * (legacy) the historical static options-object call
  * `<Component>.<op>({ ...inputs })` with a toBeDefined assertion is preserved
  * byte-identically.
  */
@@ -164,9 +168,18 @@ const MATCHER: Record<AssertionDescriptor["op"], string> = {
 	"!=": "not.toEqual",
 };
 
-function renderAssertion(assertion: AssertionDescriptor): string {
+/**
+ * Renders a real vitest matcher on the subject field. The receiver is either
+ * "result" (a non-void operation's return value) or "instance" (a bound
+ * component instance for void-returning operations, VERSAILLES-26) — a void
+ * call's return value is undefined and must never be the assertion subject.
+ */
+function renderAssertion(
+	assertion: AssertionDescriptor,
+	receiver: "result" | "instance",
+): string {
 	const matcher = MATCHER[assertion.op];
-	return `expect(result.${assertion.subject}).${matcher}(${renderValue(assertion.literal)})`;
+	return `expect(${receiver}.${assertion.subject}).${matcher}(${renderValue(assertion.literal)})`;
 }
 
 function renderCase(
@@ -203,22 +216,36 @@ function renderCase(
 	} else {
 		const assertions = case_.expects.assertions ?? [];
 		if (voidAccept) {
-			// Bare call — no result binding, no return-value assertion. Real
-			// matcher assertions (which reference `result`) still render when
-			// present, so an invariant on a void operation stays assertable.
 			if (assertions.length > 0) {
-				lines.push(`\t\tconst result = ${call};`);
+				// VERSAILLES-26: a void-returning operation's return value is
+				// undefined, so `const result = ...; expect(result.<field>)`
+				// throws TypeError at runtime. The case binds the component
+				// INSTANCE and asserts instance state — `const instance = new
+				// <Component>(); instance.<op>(...); expect(instance.<field>)`
+				// (§9.4). For a static void op the call stays on the component
+				// (`<Component>.<op>(...)` — no instance to call on) but the
+				// same rule applies: never bind a result for a void call. The
+				// instance is still constructed so invariant assertions can
+				// target component instance state (documented decision, V-26).
+				lines.push(`\t\tconst instance = new ${component}();`);
+				const callee = meta.static
+					? `${component}.${operation}`
+					: `instance.${operation}`;
+				lines.push(
+					`\t\t${callee}${renderPositionalArgs(case_, component, operation, methods)};`,
+				);
 				for (const assertion of assertions) {
-					lines.push(`\t\t${renderAssertion(assertion)};`);
+					lines.push(`\t\t${renderAssertion(assertion, "instance")};`);
 				}
 			} else {
+				// Bare call — no result binding, no return-value assertion.
 				lines.push(`\t\t${call};`);
 			}
 		} else {
 			lines.push(`\t\tconst result = ${call};`);
 			lines.push("\t\texpect(result).toBeDefined();");
 			for (const assertion of assertions) {
-				lines.push(`\t\t${renderAssertion(assertion)};`);
+				lines.push(`\t\t${renderAssertion(assertion, "result")};`);
 			}
 		}
 	}
@@ -253,14 +280,37 @@ function renderCall(
 	if (meta === undefined) {
 		return `${component}.${operation}(${renderObjectLiteral(case_.inputs)})`;
 	}
+	const callee = meta.static
+		? `${component}.${operation}`
+		: `new ${component}().${operation}`;
+	return `${callee}${renderPositionalArgs(case_, component, operation, methods)}`;
+}
+
+/**
+ * The positional argument list `(<args>)` from the declared metadata params,
+ * in declared order (VERSAILLES-20 F1). Split out of renderCall so the
+ * void-with-assertions path can invoke a bound instance
+ * (`instance.<op>(<args>)`) while reusing the exact same argument computation
+ * (VERSAILLES-26). Callers must guarantee method metadata is present (the
+ * renderCall meta guard, or the voidAccept branch where meta is defined).
+ */
+function renderPositionalArgs(
+	case_: PlannedCase,
+	component: string,
+	operation: string,
+	methods: EmitOptions["methods"],
+): string {
+	const meta = methods?.[component]?.[operation];
+	if (meta === undefined) {
+		throw new Error(
+			`Cannot render positional args for "${component}.${operation}" — no method metadata`,
+		);
+	}
 	const args = meta.params.map((param) => {
 		assertIdentifier(param, "param name");
 		return renderValue(case_.inputs[param]);
 	});
-	const callee = meta.static
-		? `${component}.${operation}`
-		: `new ${component}().${operation}`;
-	return `${callee}(${args.join(", ")})`;
+	return `(${args.join(", ")})`;
 }
 
 /**
