@@ -18,6 +18,9 @@ paramount: nothing is invented. TypeScript is extracted first via the compiler A
 - `sourceHash` is computed from **sorted field name+type pairs only** — editing a method body
   never changes it; adding/removing/retyping a field does.
 - Low-confidence or inferred fields **warn but never block** (permissive typing policy).
+- `sourcePath` is recorded **project-root-relative with POSIX separators** (`src/order.ts`
+  — never source-root-relative `order.ts` and never absolute), so generator module paths
+  resolve to real files (VERSAILLES-24).
 - Entries for components not covered by a scan are preserved; removal happens only via the
   explicit `--prune` flag.
 - Scanning stays within `config.sourceRoots`; all extraction is static analysis, with any

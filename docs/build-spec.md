@@ -155,9 +155,12 @@ Rules:
   `order.items[].sku` resolves by looking up `OrderItem` in the same map).
 - `<typeRef>` grammar: `string | number | boolean | <ComponentName> | list<typeRef> |
   optional<typeRef> | enum<v1,v2,...>`.
-- `sourcePath` is the path of the file the component was extracted from (relative to a
-  source root when derivable, else absolute); covered entries always carry it, legacy
-  entries may lack it and are preserved as-is.
+- `sourcePath` is the **project-root-relative** path of the file the component was extracted
+  from, with POSIX separators — e.g. `src/order.ts` for a file at `<root>/src/order.ts`.
+  It is never source-root-relative (`order.ts`) and never absolute, so the generator's
+  `join(cwd, sourcePath)` derives a module path that resolves to the real file
+  (VERSAILLES-24). Covered entries always carry it; legacy entries may lack it and are
+  preserved as-is.
 - `methods` records per-component method metadata — method name, static/instance,
   ordered param names, return type where determinable — so the generator can render
   shape-aware calls. Method bodies never enter the manifest.
@@ -358,8 +361,10 @@ aggregating parse + loader + semantic errors (ADR-0010).
   generator can render shape-aware calls (instance vs static vs void). Method bodies are
   never recorded.
 - `sourcePath` recording: every covered component entry carries the source file path it
-  was extracted from, persisted through `manifests.json` (§3.3) so the loader and
-  generator can derive real module import paths.
+  was extracted from, expressed **project-root-relative with POSIX separators**
+  (`src/order.ts`, never `order.ts` and never absolute), persisted through
+  `manifests.json` (§3.3) so the loader and generator can derive real module import paths
+  that resolve against the workspace root (VERSAILLES-24).
 - `sourceHash` computation: hash of the **structural shape only** (sorted field
   name+type pairs plus sorted method-signature records), not the full source file and
   never method bodies — so unrelated changes to method bodies don't trigger false
@@ -410,6 +415,11 @@ For each operation:
   predicates — a predicate-guarded param receives a value the predicate accepts
   (deterministic, registry-hint-derived), never a value the operation would reject
   (e.g. `0` for `isPositive`).
+- **Unrenderable operations**: a planned operation with no matching method in the source
+  manifest (no method metadata and no resolvable source method) surfaces a **non-silent
+  non-blocking warning** — `UNPLANNABLE_OPERATION`, same tier as the predicate-call
+  `PREDICATE_UNPLANNABLE` warning: exit 0, warning in `CliResult.warnings` — and the
+  generator never emits the legacy static options-object call for it (VERSAILLES-25).
 - **Postcondition-satisfaction cases**: for valid inputs (satisfying all preconditions),
   generate a case and assert every postcondition clause holds on the result, resolving
   `old(field)` against captured pre-call state.
@@ -443,10 +453,17 @@ For each operation:
 - **Shape-aware calls**: emitters render calls from manifest method metadata (§3.3) —
   instance methods via `new <Component>().<operation>(...)`, static methods via
   `<Component>.<operation>(...)`, params passed positionally in declared order, and no
-  return-value assertion for void-returning operations.
+  return-value assertion for void-returning operations. Accept/invariant cases on
+  void-returning operations bind the component **instance** — `const instance = new
+  <Component>(); instance.<op>(...); expect(instance.<field>)...` — so assertions target
+  instance state, never the void return value (VERSAILLES-26).
 - **Module paths**: emitters derive component import paths from the manifest `sourcePath`
-  entry when present, with a deterministic default fallback when absent — never an
-  empty-string import.
+  entry when present — a project-root-relative path (`src/order.ts`) joined against the
+  workspace root and computed relative to the generated file's directory, so the emitted
+  specifier **resolves to the real source file** from the generated file's directory
+  (resolvability, not just a matching extension or suffix). A deterministic default
+  fallback applies when `sourcePath` is absent — never an empty-string import
+  (VERSAILLES-24).
 - Regeneration is idempotent and full-file (the `generated/` directory is fully
   tool-owned — never hand-edited, always regenerated from `contracts.json`).
 

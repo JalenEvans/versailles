@@ -23,6 +23,14 @@ IR and lets per-framework emitters (vitest, xUnit, pytest) render it into real t
   rejection idiom from `config.json` — **default `throws`, never hardcoded**.
 - Every generated test carries a traceability comment; `generated/coverage.json` maps clause
   IDs → test IDs so a clause with **zero generated tests is detectable**.
+- Emitters render shape-aware calls from method metadata: instance → `new <Component>().<op>(...)`,
+  static → `<Component>.<op>(...)`, and void-return accept/invariant cases bind the component
+  **instance** — assertions target instance state, never the void return value (VERSAILLES-26).
+- Import specifiers derive from project-root-relative `sourcePath` and **resolve to the real
+  source file** from the generated file's directory (VERSAILLES-24).
+- A planned operation with no matching source method surfaces a non-silent, non-blocking
+  `UNPLANNABLE_OPERATION` warning (exit 0, `CliResult.warnings`) and is **never emitted as an
+  unrunnable static call** (VERSAILLES-25).
 - Regeneration is idempotent and full-file; generation only runs when `context.isValid` is
   true — invalid contexts are rejected with structured errors and **no test files written**.
 

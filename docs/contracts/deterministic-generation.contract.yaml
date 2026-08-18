@@ -15,7 +15,9 @@ owns:
   - "Full-file idempotent regeneration of the tool-owned generated/ directory (build-spec §9.4)"
   - "Predicate-aware planning: predicate-call preconditions produce at least one violation case via deterministic synthesis (registered predicate paramTypes + registry example hints), or an explicit non-silent warning when genuinely unplannable (build-spec §9.1)"
   - "Predicate-aware valid-input synthesis: valid params satisfy registered predicates deterministically, never silently generating inputs the operation would reject (build-spec §9.1)"
-  - "Emitter call-shape awareness: shape-aware invocation (instance → new <Component>().<op>(...), static → <Component>.<op>(...), void-return acceptance without return assertions) driven by manifest method metadata, and module import paths derived from manifest sourcePath with a deterministic fallback (build-spec §9.4)"
+  - "Emitter call-shape awareness: shape-aware invocation (instance → new <Component>().<op>(...), static → <Component>.<op>(...), void-return acceptance without return assertions, and accept/invariant assertions on void-returning operations bound to the component INSTANCE — never the void return value) driven by manifest method metadata (build-spec §9.4, VERSAILLES-26)"
+  - "Resolvable emitter module paths: import specifiers derived from the project-root-relative manifest sourcePath (POSIX separators) computed relative to the generated file's directory, so the emitted import resolves to the real source file; deterministic fallback when sourcePath is absent (build-spec §9.4, VERSAILLES-24)"
+  - "Non-silent planning warnings for unrenderable operations: a planned operation with no matching method metadata and no resolvable source method surfaces a non-blocking UNPLANNABLE_OPERATION warning (same tier as PREDICATE_UNPLANNABLE — CliResult.warnings, exit 0) and is never emitted as an unrunnable static call (build-spec §9.1, VERSAILLES-25)"
 
 purpose: |
   deterministic-generation is the core value proposition of Versailles: a pure, deterministic
@@ -44,6 +46,9 @@ invariants:
   - "Every predicate-call precondition yields at least one planned violation case or an explicit, non-silent warning — never a silent zero-case outcome (build-spec §9.1)."
   - "Valid-input synthesis is predicate-aware: a param guarded by a registered predicate always receives a value the predicate accepts when the registry provides the means (paramTypes + example hints); the planner never emits an input the operation is known to reject as a 'valid' input."
   - "Emitted calls match the manifest method metadata: instance methods are invoked on a constructed instance, static methods on the component, params passed positionally in declared order, and void-return accept cases carry no return-value assertion (build-spec §9.4)."
+  - "Accept/invariant cases on void-returning operations assert component instance state — const instance = new <Component>(); instance.<op>(...); expect(instance.<field>)... — never the void return value (build-spec §9.4, VERSAILLES-26)."
+  - "A planned operation with no matching method metadata and no resolvable source method surfaces a non-silent UNPLANNABLE_OPERATION warning in the suite warnings (same non-blocking tier as PREDICATE_UNPLANNABLE — CliResult.warnings, exit 0) and never emits an unrunnable static options-object call for it (build-spec §9.1, VERSAILLES-25)."
+  - "Emitted module import specifiers derived from a manifest sourcePath resolve to the real source file from the generated file's directory — resolvability is required, not merely a matching extension or suffix (build-spec §9.4, VERSAILLES-24)."
 
 operations:
   plan_cases:
@@ -58,6 +63,7 @@ operations:
       - "Valid inputs are predicate-aware: any param appearing in a predicate-call precondition is assigned a value the registered predicate accepts, derived deterministically from registry example hints (falling back to paramTypes-aware defaults) — never a value the predicate rejects"
       - "Postcondition-satisfaction cases assert every postcondition, resolving old(field) against captured pre-call state"
       - "Invariant tests construct a valid pre-state, call with valid inputs, and assert every invariant post-call"
+      - "For every planned operation with no matching method metadata and no resolvable source method, a non-silent UNPLANNABLE_OPERATION warning is emitted and no unrunnable static call is rendered for it"
       - "Expected-rejection cases exist for inputs satisfying postconditions but violating a component invariant (build-spec §9.2)"
     examples:
       - input: "plan_cases(context, component OrderService, operation placeOrder with precondition 'x >= 0')"
@@ -70,8 +76,8 @@ operations:
       - "rejection_idiom is read from config.json, defaulting to throws"
     ensures:
       - "For violation and expected-rejection cases, the emitted assertions use the configured rejection idiom — never a hardcoded throws"
-      - "The emitted call matches the component's manifest method metadata: instance methods render new <Component>().<operation>(<positional args>), static methods render <Component>.<operation>(<positional args>), params pass positionally in declared order, and void-return accept cases carry no return-value assertion"
-      - "Module import specifiers derive from the manifest sourcePath entry when present, falling back to a deterministic default path when absent — never an empty-string import"
+      - "The emitted call matches the component's manifest method metadata: instance methods render new <Component>().<operation>(<positional args>), static methods render <Component>.<operation>(<positional args>), params pass positionally in declared order, void-return accept cases carry no return-value assertion, and accept/invariant cases on void-returning operations bind the component INSTANCE — assertions target instance state (instance.<field>), never the void return value (VERSAILLES-26)"
+      - "Module import specifiers derive from the manifest sourcePath entry when present (project-root-relative, POSIX separators) computed relative to the generated file's directory so they resolve to the real source file; a deterministic default applies when absent — never an empty-string import (VERSAILLES-24)"
       - "The output is rendered exclusively by the emitter plugin selected by config.testFramework (vitest *.test.ts, xUnit *.Tests.cs, pytest test_*.py)"
     examples:
       - input: "emit_case(preconditionViolationCase, rejection_idiom: 'throws')"
@@ -85,7 +91,7 @@ operations:
       - "The generated/ directory is rewritten full-file from contracts.json — tool-owned state, never an input"
       - "Two runs on the same context produce byte-identical output"
       - "generated/coverage.json maps every clause ID to its generated test IDs, leaving zero-coverage clauses detectable"
-      - "Emitted files import components via module paths derived from manifest sourcePath entries (deterministic default when absent)"
+      - "Emitted files import components via module paths derived from manifest sourcePath entries — resolvable from the generated file's directory to the real source file (deterministic default when absent)"
       - "No test files are written when the context is invalid; the structured errors are surfaced instead"
     examples:
       - input: "generate(contextIsValidTrue)"
@@ -99,8 +105,9 @@ must:
   - "Plan precondition-violation cases: for each precondition clause individually, an input satisfying all other clauses but falsifying this one; assert rejection (build-spec §9.1)."
   - "Plan at least one violation case for every predicate-call precondition, synthesizing the input deterministically from the registered predicate's paramTypes and registry example hints; when no violation input is derivable, surface an explicit non-silent warning instead of emitting zero cases (build-spec §9.1)."
   - "Synthesize valid inputs predicate-aware: when a param is guarded by a registered predicate, choose a value the predicate accepts, deterministically from registry example hints or paramTypes-aware defaults — never an input the operation's registered predicates would reject (build-spec §9.1)."
-  - "Render calls shape-aware from manifest method metadata: instance methods via new <Component>().<operation>(...), static methods via <Component>.<operation>(...), positional params in declared order, and no return-value assertions for void-returning operations (build-spec §9.4)."
-  - "Derive emitter module import paths from manifest sourcePath entries when present, with a deterministic default fallback when absent — never an empty-string import (build-spec §9.4)."
+  - "Render calls shape-aware from manifest method metadata: instance methods via new <Component>().<operation>(...), static methods via <Component>.<operation>(...), positional params in declared order, no return-value assertions for void-returning operations, and accept/invariant cases on void-returning operations bound to the component INSTANCE — assertions target instance state (instance.<field>), never the void return value (build-spec §9.4, VERSAILLES-26)."
+  - "Derive emitter module import paths from project-root-relative manifest sourcePath entries (POSIX separators) computed relative to the generated file's directory — the emitted specifier must resolve to the real source file, not merely share an extension or suffix (build-spec §9.4, VERSAILLES-24)."
+  - "Surface a non-silent UNPLANNABLE_OPERATION warning (same non-blocking tier as PREDICATE_UNPLANNABLE — suite-level warning → CliResult.warnings, exit 0) when a planned operation has no matching method metadata and no resolvable source method, and do not emit the legacy static options-object call for it (build-spec §9.1, VERSAILLES-25)."
   - "Plan postcondition-satisfaction cases: valid inputs asserted against every postcondition, with old(field) resolved against captured pre-call state (build-spec §9.1)."
   - "Plan per-component invariant tests: valid pre-state satisfying all invariants, call with valid inputs, assert every invariant still holds post-call (build-spec §9.2)."
   - "Plan expected-rejection cases for the postcondition/invariant interaction bug class: inputs satisfying the operation's postconditions but violating a component invariant, flagged so the operation should refuse to complete (build-spec §9.2)."
@@ -122,12 +129,16 @@ must_not:
   - "Must not emit zero tests for a predicate-call precondition silently — a genuinely unplannable predicate call surfaces an explicit non-silent warning; silent gaps are forbidden (build-spec §9.1)."
   - "Must not emit a 'valid' input that a registered predicate in the operation's preconditions would reject — predicate-aware synthesis must satisfy registered predicates (build-spec §9.1)."
   - "Must not render calls that mismatch the extracted method metadata — a static call on an instance method, an options-object argument list where positional params are declared, or a return-value assertion on a void operation (build-spec §9.4)."
+  - "Must not emit the legacy static options-object call (<Component>.<op>({ ...inputs })) for a planned operation that has no matching method metadata and no resolvable source method — that is dead, unrunnable code; it must surface a non-silent UNPLANNABLE_OPERATION warning instead (build-spec §9.1, VERSAILLES-25)."
+  - "Must not bind a result for a void-returning operation's accept/invariant case and assert result.<field> — assertions target the component instance (const instance = new <Component>(); instance.<op>(...); expect(instance.<field>)...), never the void return value (build-spec §9.4, VERSAILLES-26)."
+  - "Must not emit an import specifier that fails to resolve to the real source file from the generated file's directory — resolvability is required, not merely a matching extension or suffix (build-spec §9.4, VERSAILLES-24)."
 
 can:
   - "May support additional config-validated rejection idiom values (for example error-return or Result-style) beyond the default throws, as long as emitters consume the configured value."
   - "May add non-required heuristic cases beyond the mandated case classes when they aid coverage, provided determinism holds."
   - "May consult registry example hints for satisfying/violating predicate argument values, keeping synthesis deterministic (build-spec §9.5 keeps SMT out of v1 scope)."
   - "May record case-planning metadata (test names, covered clause IDs) in coverage.json beyond the minimal mapping."
+  - "May skip emitting an unrenderable operation's cases (VERSAILLES-25) while still mapping its clause IDs in coverage.json so the coverage gap remains detectable."
 
 limits:
   - "No SMT-backed precise input synthesis or witness generation (v2 stretch, build-spec §9.5) — predicate planning uses deterministic heuristics over registry paramTypes + example hints only."
@@ -144,6 +155,9 @@ asserts:
   - "assert: valid inputs for an operation with a registered predicate guard satisfy the predicate (e.g. isPositive(amount) never receives 0) when the registry provides the means."
   - "assert: emitted calls match the manifest method metadata — instance methods are constructed before calling, positional params pass in declared order, static methods are called on the component, and void-return accept cases carry no return-value assertion."
   - "assert: emitted module import paths derive from manifest sourcePath (or a deterministic default), never an empty string."
+  - "assert: an emitted module import specifier derived from a manifest sourcePath resolves to the real source file from the generated file's directory for a nested layout (e.g. sourcePath 'src/order.ts' → the import resolves to <root>/src/order.ts) (VERSAILLES-24)."
+  - "assert: a planned operation with no matching method metadata and no resolvable source method (e.g. staged Order.setSubtotal with no such method in the manifest) yields a non-silent UNPLANNABLE_OPERATION warning in CliResult.warnings (exit 0) and its generated file contains no static options-object call for that operation (VERSAILLES-25)."
+  - "assert: a void-returning instance operation's accept/invariant case (e.g. new Order().addItem('initial') asserting subtotal) renders const instance = new Order(); instance.addItem('initial'); expect(instance.subtotal)... — never const result = ...; expect(result.subtotal)... (VERSAILLES-26)."
   - "assert: rejection assertions in generated tests use the configured rejection idiom from config.json (default throws), for both violation and expected-rejection cases."
   - "assert: every generated test file contains a traceability comment referencing at least one contract clause ID."
 
@@ -155,3 +169,4 @@ asserts:
 | 2026-08-11 | general-manager | Initial contract from docs/specs/deterministic-generation.md; build-spec §9; ADR-0002/0007/0008/0009/0010 |
 | 2026-08-16 | general-manager | Superseded the "vitest first / no xUnit-pytest in the first milestone" limits and owns/purpose/must wording — the full ADR-0009 emitter matrix (vitest, xUnit, pytest) is now shipped (PR feat/review-ecosystem) |
 | 2026-08-17 | general-manager | Extended for pipeline runnability (PR fix/generator-emitter-runnability): predicate-call preconditions get at least one violation case or an explicit non-silent warning (never silent zero), predicate-aware valid-input synthesis via registry paramTypes + example hints, and emitter call-shape awareness (instance vs static vs void) with sourcePath-derived module paths. Backs VERSAILLES-20/22/23 |
+| 2026-08-18 | general-manager | Extended for the E2E runnability gate follow-ups: (VERSAILLES-24) emitted module import specifiers must resolve to the real source file from the generated file's directory, computed from project-root-relative POSIX sourcePath; (VERSAILLES-25) planned operations with no matching method metadata and no resolvable source method surface a non-silent UNPLANNABLE_OPERATION warning (same tier as PREDICATE_UNPLANNABLE — exit 0, CliResult.warnings) and never emit an unrunnable static call; (VERSAILLES-26) void-operation accept/invariant cases bind the component INSTANCE — assertions target instance state, never the void return value |

@@ -15,7 +15,7 @@ owns:
   - "The scoped extraction helper (build-spec §6.6): component/operation sub-object plus its errors/warnings"
   - "Staleness orchestration via versailles check with exit codes 0/1/2 (build-spec §8)"
   - "The shared-loader guarantee: every consuming component loads through this module (build-spec §6)"
-  - "The manifests.json store entry shape: sourcePath (string; never empty for covered entries; legacy entries lacking it preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable, permissive low-confidence policy) (build-spec §3.3, §7)"
+  - "The manifests.json store entry shape: sourcePath (string; project-root-relative with POSIX separators when present, e.g. src/order.ts — never empty for covered entries; legacy entries lacking it preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable, permissive low-confidence policy) (build-spec §3.3, §7)"
   - "Surfacing sourcePath and methods on ManifestsFile entries so downstream consumers (generate handler → emitter modulePaths + call shape) can use them"
 
 purpose: |
@@ -41,7 +41,7 @@ invariants:
   - "The loader never throws on malformed input — missing files, invalid JSON, malformed-shape files, and malformed expressions all surface as structured LoaderError/ParseError/ValidationError objects inside the returned context; no failure path raises an unstructured exception (ADR-0010)."
   - "Every consuming component reaches the workspace through the single shared loader; no component re-implements loading (build-spec §6)."
   - "config.language and config.testFramework always validate against the ADR-0009 enum matrix."
-  - "A manifests.json store entry may carry sourcePath (never an empty string for covered entries; legacy entries lacking it are preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable under the permissive low-confidence policy)."
+  - "A manifests.json store entry may carry sourcePath (project-root-relative with POSIX separators when present, e.g. src/order.ts — never an empty string for covered entries; legacy entries lacking it are preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable under the permissive low-confidence policy)."
   - "The loader surfaces sourcePath and methods on every ManifestsFile entry so downstream consumers (generate handler → emitter modulePaths + call shape) can read them directly from the loaded context."
 
 operations:
@@ -106,7 +106,7 @@ must:
   - "Orchestrate versailles check: fail on non-empty parseErrors/validationErrors; recompute every stored sourceHash and compare; honor config.staleness.blockOnStale; exit 0 clean, 1 on parse/validation error, 2 on blocking staleness, and warn-with-0 when staleness is non-blocking (build-spec §8)."
   - "Be the single shared loader: every consuming component (CLI commands, review UI, CI lint, generator) loads the workspace through this module, never re-implementing loading (build-spec §6)."
   - "Return every failure as structured errors inside the returned context or scoped view — never throw — for missing files (MISSING_FILE), invalid JSON (INVALID_JSON), malformed shapes (INVALID_SHAPE, shape-guard pass), version/config mismatches (VERSION_MISMATCH | CONFIG_INVALID), malformed expressions (ParseError), and unknown scoped targets (NOT_FOUND) (build-spec §6, ADR-0010)."
-  - "Acknowledge the manifests.json store entry shape: sourcePath (string; never empty for covered entries; legacy entries lacking it preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable, permissive low-confidence policy) (build-spec §3.3, §7)."
+  - "Acknowledge the manifests.json store entry shape: sourcePath (string; project-root-relative with POSIX separators when present, e.g. src/order.ts — never empty for covered entries; legacy entries lacking it preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable, permissive low-confidence policy) (build-spec §3.3, §7)."
   - "Surface sourcePath and methods on ManifestsFile entries so downstream consumers (generate handler → emitter modulePaths + call shape) can use them directly from the loaded context."
 
 must_not:
@@ -153,3 +153,4 @@ asserts:
 | 2026-08-11 | general-manager | Initial contract from docs/specs/workspace-context.md; build-spec §2, §3.1, §6, §8; ADR-0009/0010 |
 | 2026-08-13 | general-manager | Pinned the loader never-throws guarantee (F3): invariants/ensures/must/must_not/asserts for structured LoaderErrors on missing/invalid-JSON/malformed-shape files, ScopedView errors for degenerate contexts, and ValidationResult aggregation for semantic validation (ADR-0010) |
 | 2026-08-17 | general-manager | Acknowledged the manifests.json store entry shape — sourcePath (never empty for covered entries; legacy entries lacking it preserved as-is) and per-component methods metadata ({ static, params, returnType? }, recorded where determinable, permissive low-confidence policy) — and that the loader surfaces both on ManifestsFile entries for downstream consumers (generate handler → emitter modulePaths + call shape). Aligns with the manifest-extraction/deterministic-generation extension (fix/generator-emitter-runnability); backs VERSAILLES-20/21/22/23 |
+| 2026-08-18 | general-manager | Acknowledged the canonical sourcePath semantic (VERSAILLES-24): covered entries store project-root-relative POSIX paths (src/order.ts); the loader surfaces them exactly as stored. Aligns with the manifest-extraction/deterministic-generation extension on fix/generator-emitter-runnability |
