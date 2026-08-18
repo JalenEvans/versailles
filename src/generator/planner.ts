@@ -22,6 +22,11 @@
  *   from the registered predicate's paramTypes, or a non-silent
  *   PREDICATE_UNPLANNABLE suite warning when genuinely unplannable — never a
  *   silent zero (deterministic-generation.contract.yaml, VERSAILLES-22 F3).
+ * - Predicate-aware valid inputs: valid-input synthesis (buildValidParams)
+ *   replaces a provably-invalid bounds-derived value (the default 0) with a
+ *   value the registered predicate accepts (number → 1), so a predicate guard
+ *   never receives an input it rejects on the accept side
+ *   (deterministic-generation.contract.yaml, VERSAILLES-23 F4).
  * - Postcondition-satisfaction cases: valid inputs asserted against every
  *   postcondition, with the captured pre-call state stored in `inputs` under
  *   the manifest field names so `old(field)` resolves.
@@ -87,6 +92,17 @@ const PRE_STATE_ADJUST_ROUNDS = 10;
  * the synthesis (a `can`, not a `must`, per the contract).
  */
 const PREDICATE_FALSIFY_NUMBER = -1;
+/**
+ * Deterministic numeric value the v1 accept-side heuristic uses for a
+ * predicate-guarded number param (VERSAILLES-23 F4, build-spec §9.1,
+ * deterministic-generation.contract.yaml example: isPositive → 1): the positive
+ * counterpart of PREDICATE_FALSIFY_NUMBER. Chosen over 0 because 0 is provably
+ * invalid for positive-style predicates (isPositive(0) is false); 1 is the
+ * smallest value positive, non-negative, and similar numeric predicates accept.
+ * No registry example-hint field exists yet, so paramTypes alone drive the
+ * synthesis (a `can`, not a `must`, per the contract).
+ */
+const PREDICATE_VALID_NUMBER = 1;
 
 /**
  * Valid JS identifier (Center W1): component / operation / param names flow
@@ -606,6 +622,88 @@ function predicateFalsifyingInput(
 }
 
 /**
+ * The v1 accept-side counterpart of predicateFalsifyingInput (VERSAILLES-23
+ * F4, build-spec §9.1, deterministic-generation.contract.yaml): for a
+ * top-level predicateCall precondition whose FIRST argument is a single-segment
+ * fieldRef, returns a deterministic value the registered predicate ACCEPTS per
+ * paramTypes[0] (number → PREDICATE_VALID_NUMBER, boolean → true, string →
+ * "ok"). Returns undefined — no override, no warning, no crash — when the
+ * argument is not a single-segment fieldRef or the paramType is one the v1
+ * heuristic cannot reason about (e.g. "list<number>", optional/component/enum
+ * types). Accept-side synthesis NEVER pushes to suite.warnings: the
+ * PREDICATE_UNPLANNABLE channel is violation-only (F3), so a degenerate
+ * accept-all predicate must plan an accept with NO warning and NO crash.
+ */
+function predicateValidValue(
+	ast: Extract<Node, { type: "predicateCall" }>,
+	entry: PredicateEntry,
+): unknown | undefined {
+	const firstArg = ast.args[0];
+	if (
+		firstArg === undefined ||
+		firstArg.type !== "fieldRef" ||
+		firstArg.path.length !== 1 ||
+		typeof firstArg.path[0] !== "string"
+	) {
+		return undefined;
+	}
+	const paramType = entry.paramTypes[0]?.trim() ?? "";
+	if (paramType === "number") {
+		return PREDICATE_VALID_NUMBER;
+	}
+	if (paramType === "boolean") {
+		return true;
+	}
+	if (paramType === "string") {
+		return "ok";
+	}
+	return undefined;
+}
+
+/**
+ * Finds the first registered predicate-call precondition guarding a param — a
+ * top-level predicateCall whose first argument is a single-segment fieldRef
+ * naming the param — and returns the value that predicate ACCEPTS per
+ * paramTypes[0]. Returns undefined when no guard applies (predicate-less
+ * param, unregistered predicate, non-fieldRef / multi-segment arg, unknown
+ * paramType): every one of those is a conservative no-override path with no
+ * warning and no crash.
+ */
+function predicateValidValueForParam(
+	paramName: string,
+	preconditions: ContractClause[],
+	context: VersaillesContext,
+): unknown | undefined {
+	for (const pre of preconditions) {
+		const ast = context.parsedContracts[pre.id];
+		if (ast === undefined || ast.type !== "predicateCall") {
+			continue;
+		}
+		const firstArg = ast.args[0];
+		if (
+			firstArg?.type !== "fieldRef" ||
+			firstArg.path.length !== 1 ||
+			typeof firstArg.path[0] !== "string" ||
+			firstArg.path[0] !== paramName
+		) {
+			continue;
+		}
+		const entry = context.predicates?.predicates?.[ast.name];
+		if (entry === undefined) {
+			continue;
+		}
+		const value = predicateValidValue(
+			ast as Extract<Node, { type: "predicateCall" }>,
+			entry,
+		);
+		if (value !== undefined) {
+			return value;
+		}
+	}
+	return undefined;
+}
+
+/**
  * §9.2 expected-rejection: a deterministic sweep over the operation's first
  * numeric param, other params at valid defaults, searching for inputs where
  * every postcondition evaluates true (old() resolved against the captured
@@ -925,7 +1023,13 @@ function numericConstraintBounds(
  * Builds deterministic valid call arguments: numeric params pick a value
  * inside the intersection of their numeric comparison constraints; string
  * params pick the first `in`-clause member when constrained; enum params pick
- * their first member.
+ * their first member. Predicate-aware (VERSAILLES-23 F4, build-spec §9.1):
+ * when a registered predicate-call precondition guards a numeric param and the
+ * bounds-derived value is the provably-invalid default 0, the value is
+ * replaced with one the predicate accepts (number → PREDICATE_VALID_NUMBER).
+ * Non-zero bound-derived values are kept (e.g. amount >= 10 with
+ * isPositive(amount) keeps 10 — overriding to 1 would break the bound).
+ * Accept-side synthesis never pushes to warnings and never crashes.
  */
 function buildValidParams(
 	operation: ContractOperation,
@@ -953,7 +1057,24 @@ function buildValidParams(
 	for (const param of operation.params ?? []) {
 		const typeRef = param.type.trim();
 		if (typeRef === "number") {
-			params[param.name] = pickNumeric(lower[param.name], upper[param.name]);
+			let value = pickNumeric(lower[param.name], upper[param.name]);
+			// Conservative v1 predicate override: only when the derived value
+			// is the provably-invalid default 0. A non-zero bound-derived value
+			// already satisfies a positive-style predicate guard, so it stays.
+			// The typeof guard also keeps boolean/string predicate values out of
+			// the number branch (defensive; a validated context cannot pair a
+			// number param with a non-number predicate paramType).
+			if (value === 0) {
+				const predicateValue = predicateValidValueForParam(
+					param.name,
+					preconditions,
+					context,
+				);
+				if (typeof predicateValue === "number") {
+					value = predicateValue;
+				}
+			}
+			params[param.name] = value;
 		} else if (typeRef === "string") {
 			params[param.name] = inFirst[param.name] ?? "initial";
 		} else if (typeRef === "boolean") {

@@ -90,10 +90,28 @@ import type {
  * 5. Non-regression: predicate-call preconditions coexist with numeric
  *    compare preconditions — the numeric clause keeps its §9.1 boundary
  *    cases while the predicate clause gains its violation case.
+ * 6. Predicate-aware valid-input synthesis (VERSAILLES-23 F4, build-spec
+ *    §9.1, deterministic-generation.contract.yaml): valid inputs for
+ *    satisfaction/invariant cases are synthesized by buildValidParams, and
+ *    for a param guarded by a registered predicate-call precondition the
+ *    type-default can be provably invalid (a bare number param picks 0, and
+ *    isPositive(0) is false). The F4 fixture therefore gives setSubtotal a
+ *    postcondition so an accept case is planned, and the tests pin that the
+ *    accept case's amount is a NUMBER the registered predicate accepts —
+ *    never 0. The deterministic rule is frozen to the contract example: a
+ *    number-paramType predicate guard → 1 (the positive counterpart of the
+ *    -1 violation counter-example). Registry example hints remain a `can`,
+ *    not a `must` — paramTypes alone must drive this.
+ * 7. Accept-side negative control: a degenerate predicate (one whose
+ *    false-set is empty / unknown semantics, e.g. an accept-all-number
+ *    predicate) must NOT produce spurious PREDICATE_UNPLANNABLE warnings and
+ *    must not crash — the warning channel is reserved for genuinely
+ *    unplannable VIOLATION synthesis (decision 3), never accept synthesis.
  */
 
 const ORDER = "OrderService";
 const ACCOUNT = "AccountService";
+const PLAIN = "PlainService";
 
 const PRED_CLAUSE = "OrderService.setSubtotal.pre0";
 
@@ -116,8 +134,20 @@ function contractsFixture(): ContractsFile {
 								expr: "isPositive(amount)",
 							},
 						],
-						postconditions: [],
-						effects: [],
+						// F4 (VERSAILLES-23): the postcondition + effect force
+						// buildValidParams to run, so the predicate-guarded
+						// param gets an ACCEPT case — the surface the F4 bug
+						// hits (a bare number param synthesizes 0, which
+						// isPositive rejects). F3's violation-case assertions
+						// are unaffected: the violation case for PRED_CLAUSE
+						// is still planned identically.
+						postconditions: [
+							{
+								id: "OrderService.setSubtotal.post0",
+								expr: "subtotal == amount",
+							},
+						],
+						effects: [{ field: "subtotal", kind: "mutate" }],
 						sourceHash: "setsubtotal-hash",
 					},
 				},
@@ -321,6 +351,125 @@ function suiteWarnings(suite: PlannedSuite): LoaderWarning[] {
 	);
 }
 
+/** Accept-outcome cases of one operation's group (the F4 accept surface). */
+function acceptCases(
+	suite: PlannedSuite,
+	component: string,
+	operation: string,
+): PlannedCase[] {
+	return (
+		suite.operations.find(
+			(group) => group.component === component && group.operation === operation,
+		)?.cases ?? []
+	).filter((case_) => case_.expects.outcome === "accept");
+}
+
+/**
+ * F4 backward-compat control (VERSAILLES-23): an operation with a PLAIN
+ * number param — no predicate clause, no numeric compare — must keep today's
+ * deterministic valid default (0). The postcondition forces buildValidParams
+ * to run without adding any predicate awareness.
+ */
+function plainParamsContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			[PLAIN]: {
+				invariants: [],
+				operations: {
+					setValue: {
+						id: "PlainService.setValue",
+						params: [{ name: "x", type: "number" }],
+						preconditions: [],
+						postconditions: [
+							{ id: "PlainService.setValue.post0", expr: "value == x" },
+						],
+						effects: [{ field: "value", kind: "mutate" }],
+						sourceHash: "plain-hash",
+					},
+				},
+			},
+		},
+	};
+	return {
+		config: makeConfig(),
+		contracts,
+		manifests: {
+			version: "1.0",
+			manifests: {
+				[PLAIN]: { sourceHash: "man-plain", fields: { value: "number" } },
+			},
+		},
+		predicates: { version: "1.0", predicates: {} },
+		parsedContracts: parseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
+/**
+ * F4 negative-context guard (VERSAILLES-23): a DEGENERATE predicate whose
+ * false-set is empty / whose semantics the v1 heuristic cannot prove (an
+ * accept-all-number predicate). The accept side must still synthesize
+ * deterministically WITHOUT a spurious PREDICATE_UNPLANNABLE warning and
+ * WITHOUT crashing — the warning channel is violation-only (F3).
+ */
+function degeneratePredicateContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			[ORDER]: {
+				invariants: [],
+				operations: {
+					setSubtotal: {
+						id: "OrderService.setSubtotal",
+						params: [{ name: "amount", type: "number" }],
+						preconditions: [{ id: PRED_CLAUSE, expr: "isAnyNumber(amount)" }],
+						postconditions: [
+							{
+								id: "OrderService.setSubtotal.post0",
+								expr: "subtotal == amount",
+							},
+						],
+						effects: [{ field: "subtotal", kind: "mutate" }],
+						sourceHash: "setsubtotal-any-hash",
+					},
+				},
+			},
+		},
+	};
+	return {
+		config: makeConfig(),
+		contracts,
+		manifests: {
+			version: "1.0",
+			manifests: {
+				[ORDER]: { sourceHash: "man-order", fields: { subtotal: "number" } },
+			},
+		},
+		predicates: {
+			version: "1.0",
+			predicates: {
+				isAnyNumber: {
+					params: ["n"],
+					paramTypes: ["number"],
+					returnType: "boolean",
+					sourceRef: "Num.isAnyNumber",
+					sourceHash: "p-any",
+					verifiedPure: true,
+				},
+			},
+		},
+		parsedContracts: parseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
 describe("planTestCases — predicate-call preconditions (§9.1, VERSAILLES-22 F3)", () => {
 	it("plans at least one precondition-violation case for a numeric predicate-call precondition", () => {
 		const suite = planTestCases(makeContext());
@@ -432,5 +581,98 @@ describe("planTestCases — non-regression: predicate + numeric compare coexiste
 			PRED_CLAUSE_ACCOUNT,
 		);
 		expect(predicateViolations.length).toBeGreaterThan(0);
+	});
+});
+
+describe("planTestCases — predicate-aware valid-input synthesis (§9.1, VERSAILLES-23 F4)", () => {
+	it("synthesizes a predicate-aware valid input for an isPositive-guarded numeric param — never the falsifying 0 (contract example: 1)", () => {
+		const suite = planTestCases(makeContext());
+
+		const accepts = acceptCases(suite, ORDER, "setSubtotal");
+		expect(accepts.length).toBeGreaterThan(0);
+		const amount = accepts[0].inputs.amount;
+
+		// Robust contract pin (build-spec §9.1): a "valid" input must be a
+		// NUMBER the registered predicate accepts. isPositive(0) is false, so
+		// 0 is provably invalid and must never appear on the accept side.
+		expect(typeof amount).toBe("number");
+		expect(amount).not.toBe(0);
+		// Deterministic rule freeze (deterministic-generation.contract.yaml
+		// example: isPositive → 1): a number-paramType predicate guard
+		// synthesizes 1 — the positive counterpart of the -1 violation
+		// counter-example. Deliberately an exact-value pin, not merely
+		// not-to-be-0 — the contract names 1 and the planner must stay
+		// deterministic (ADR-0002).
+		expect(amount).toBe(1);
+	});
+
+	it("predicate-guarded accept cases keep the existing ADR-0007 accept shape — outcome accept, no rejectionIdiom (no regression)", () => {
+		const suite = planTestCases(makeContext());
+
+		const accepts = acceptCases(suite, ORDER, "setSubtotal");
+		expect(accepts.length).toBeGreaterThan(0);
+		for (const accept of accepts) {
+			expect(accept.expects.outcome).toBe("accept");
+			// The rejection idiom is a reject-case-only field (ADR-0007).
+			// Predicate-aware synthesis must not reshape an accept case into
+			// a reject-shaped one.
+			expect(accept.expects.rejectionIdiom).toBeUndefined();
+		}
+	});
+
+	it("keeps the legacy valid default (0) for a predicate-less numeric param — backward compat", () => {
+		const suite = planTestCases(plainParamsContext());
+
+		const accepts = acceptCases(suite, PLAIN, "setValue");
+		expect(accepts.length).toBeGreaterThan(0);
+		// No predicate clause constrains x — today's deterministic default
+		// (pickNumeric with no bounds → 0) must stay unchanged. The F4 fix
+		// must only affect predicate-guarded params.
+		expect(accepts[0].inputs.x).toBe(0);
+	});
+
+	it("synthesizes predicate-aware accept inputs deterministically — two runs, identical accept inputs (ADR-0002)", () => {
+		const first = planTestCases(makeContext());
+		const second = planTestCases(makeContext());
+
+		const amount1 = acceptCases(first, ORDER, "setSubtotal")[0]?.inputs.amount;
+		const amount2 = acceptCases(second, ORDER, "setSubtotal")[0]?.inputs.amount;
+		expect(amount2).toEqual(amount1);
+		expect(amount1).not.toBeUndefined();
+	});
+
+	it("plans a coherent pair for a guarded op: predicate violation (reject) AND a non-provably-invalid accept", () => {
+		const suite = planTestCases(makeContext());
+
+		// F3 side: the predicate-call precondition still yields its violation
+		// case with a reject outcome.
+		const violations = predicateViolationCases(suite, PRED_CLAUSE);
+		expect(violations.length).toBeGreaterThan(0);
+		expect(violations[0].expects.outcome).toBe("reject");
+
+		// F4 side: the SAME operation's accept case is not provably invalid.
+		const accepts = acceptCases(suite, ORDER, "setSubtotal");
+		expect(accepts.length).toBeGreaterThan(0);
+		expect(accepts[0].expects.outcome).toBe("accept");
+		expect(accepts[0].inputs.amount).toBe(1);
+
+		// Coherence: the "valid" input is distinct from the falsifying input —
+		// the accept value never reuses the violation counter-example.
+		expect(accepts[0].inputs.amount).not.toBe(violations[0].inputs.amount);
+	});
+
+	it("never warns or crashes on the accept side for a degenerate (accept-all) predicate guard", () => {
+		const suite = planTestCases(degeneratePredicateContext());
+
+		// No crash; the accept case is still planned with a numeric value.
+		const accepts = acceptCases(suite, ORDER, "setSubtotal");
+		expect(accepts.length).toBeGreaterThan(0);
+		expect(typeof accepts[0].inputs.amount).toBe("number");
+
+		// The accept side must not surface PREDICATE_UNPLANNABLE warnings —
+		// that channel is reserved for genuinely unplannable VIOLATION
+		// synthesis (F3). A number paramType is always plannable on the accept
+		// side, even when the predicate's false-set is empty / unknown.
+		expect(suiteWarnings(suite)).toEqual([]);
 	});
 });
