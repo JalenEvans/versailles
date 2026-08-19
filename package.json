@@ -18,6 +18,8 @@
 	"files": ["dist", "bin", "config.schema.json"],
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
+		"prepare": "tsc -p tsconfig.json",
+		"prepublishOnly": "bun run build && bun run smoke",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"smoke": "vitest run tests/smoke.test.ts",
