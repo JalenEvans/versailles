@@ -1,10 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-import { extractManifests } from "../src/extractors/index.js";
 
 /**
  * Packaging lifecycle (VERSAILLES-16, "Get Ready For Beta" sprint Phase 2):
@@ -14,13 +13,18 @@ import { extractManifests } from "../src/extractors/index.js";
  *
  * 1. scripts.prepare runs the tsc build (src → dist per tsconfig outDir), so
  *    dist/cli/index.js exists on install/link/publish — no manual build step.
- * 2. scripts.prepublishOnly is a non-empty guard so a broken package (missing
- *    dist/) can never be published.
- * 3. The stable machine-readable envelope + exit codes that bin/versailles
- *    serializes — { ok, errors, warnings, exitCode }; 0 clean · 1 parse/usage ·
- *    2 blocking staleness — are unchanged through runCli. The bin shim itself
- *    is verified separately by the E2E walk; these tests pin the surface the
- *    shim depends on so the packaging change cannot silently break it.
+ * 2. scripts.prepublishOnly runs the build + smoke, so a broken package
+ *    (missing dist/ or failing smoke) can never be published.
+ * 3. The stable machine-readable envelope { ok, errors, warnings, exitCode }
+ *    that bin/versailles serializes survives a JSON round-trip through runCli
+ *    and a clean workspace maps to exit 0. The rest of the envelope /
+ *    exit-code matrix (UNKNOWN_COMMAND → 1, STALE → 2, ...) is pinned in
+ *    tests/cli.test.ts; this file keeps only the packaging-relevant bit.
+ * 4. The real bin/versailles shim is exercised end-to-end below: it is spawned
+ *    with node against a scratch workspace (after a fresh `bun run build`) and
+ *    its stdout must parse to the envelope while the process exit code must
+ *    equal result.exitCode — covering the shipped surface runCli cannot:
+ *    JSON.stringify on stdout + process.exit wiring (build-spec §10).
  *
  * Contract grounding:
  * - docs/contracts/versailles.contract.yaml: every command answers with the
@@ -28,15 +32,11 @@ import { extractManifests } from "../src/extractors/index.js";
  *   {0, 1, 2} — 2 is reserved for blocking staleness (build-spec §8, §10).
  * - tsconfig.json: outDir "dist", rootDir "src" — `tsc -p tsconfig.json` is
  *   the build that materializes dist/cli/index.js for bin/versailles.
- *
- * ── Green ──────────────────────────────────────────────────────────────────
- * package.json ships both hooks; the prepare/prepublishOnly assertions pin
- * the implemented behavior and the envelope/exit-code regressions guard the
- * surface bin/versailles depends on.
  */
 
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const PACKAGE_JSON_PATH = join(REPO_ROOT, "package.json");
+const SHIM_PATH = join(REPO_ROOT, "bin", "versailles");
 
 type PackageJson = {
 	name?: string;
@@ -71,15 +71,6 @@ async function writeWorkspaceFile(
 	await writeJsonFile(join(cwd, ".versailles", fileName), value);
 }
 
-async function writeSource(
-	cwd: string,
-	fileName: string,
-	content: string,
-): Promise<void> {
-	await mkdir(join(cwd, "src"), { recursive: true });
-	await writeFile(join(cwd, "src", fileName), content, "utf8");
-}
-
 /**
  * Scaffolds a fresh workspace into its own temp subdir (four jointly-loaded
  * files written directly so fixtures do not depend on the CLI under test).
@@ -104,24 +95,6 @@ async function freshWorkspace(name: string): Promise<string> {
 	return cwd;
 }
 
-/**
- * Extractor-derived manifests store (loader format) for the fixture source
- * under <cwd>/src/ — the same derivation the §8 staleness recompute produces.
- */
-function referenceManifests(cwd: string): unknown {
-	const result = extractManifests([join(cwd, "src")]);
-	const manifests: Record<string, unknown> = {};
-	for (const [component, entry] of Object.entries(result.manifests)) {
-		manifests[component] = {
-			sourceHash: entry.sourceHash,
-			fields: Object.fromEntries(
-				entry.fields.map((field) => [field.name, field.typeRef]),
-			),
-		};
-	}
-	return { version: "1.0", manifests };
-}
-
 let tempRoot: string;
 
 beforeAll(async () => {
@@ -135,30 +108,36 @@ afterAll(async () => {
 // ── package.json lifecycle scripts (VERSAILLES-16) ─────────────────────────
 
 describe("package.json lifecycle scripts (VERSAILLES-16 local install path)", () => {
-	it("declares a `prepare` script that runs the tsc build — dist/ exists on install/link/publish, no manual build (asserts scripts.prepare is defined and runs tsc — install/link/publish must build dist)", async () => {
+	it("declares a `prepare` script that runs the tsc build — dist/ exists on install/link/publish, no manual build", async () => {
 		const pkg = await readPackageJson();
 
 		expect(pkg.scripts).toBeDefined();
 		expect(pkg.scripts?.prepare).toBeDefined();
 		// Robust pin: whatever the exact spelling, prepare must run the tsc
 		// build that materializes dist/cli/index.js for bin/versailles.
-		expect(pkg.scripts?.prepare).toContain("tsc");
+		expect(pkg.scripts?.prepare).toMatch(/tsc -p tsconfig\.json/);
 	});
 
-	it("declares a non-empty `prepublishOnly` guard — publishing must never ship a package whose CLI is broken (asserts scripts.prepublishOnly is defined and non-empty — publish must never ship a broken CLI)", async () => {
+	it("declares a `prepublishOnly` guard that runs build and smoke — a broken CLI can never be published", async () => {
 		const pkg = await readPackageJson();
 
 		expect(pkg.scripts).toBeDefined();
 		expect(pkg.scripts?.prepublishOnly).toBeDefined();
-		expect(pkg.scripts?.prepublishOnly?.length).toBeGreaterThan(0);
+		// The publish gate must run the full check: build (materialize dist/)
+		// AND smoke (run the shipped-surface suite) before npm can publish.
+		expect(pkg.scripts?.prepublishOnly).toContain("build");
+		expect(pkg.scripts?.prepublishOnly).toContain("smoke");
 	});
 });
 
-// ── Envelope + exit codes serialized by bin/versailles (VERSAILLES-16) ─────
+// ── Envelope through runCli (VERSAILLES-16) ────────────────────────────────
 // The bin shim does exactly: runCli(argv) → JSON.stringify(result) on stdout →
-// process.exit(result.exitCode). These regressions pin that surface so the
-// packaging fix cannot silently change it. runCli is imported from src (the
-// shim's dist path is covered by the separate E2E walk).
+// process.exit(result.exitCode). The envelope / exit-code matrix itself (clean
+// 0, UNKNOWN_COMMAND 1, STALE 2, ...) is pinned in tests/cli.test.ts; this
+// file keeps only the packaging-relevant bit — the envelope must survive the
+// JSON round-trip the shim performs (no undefined / non-serializable members)
+// on a representative clean run. The REAL shim surface (JSON.stringify +
+// process.exit) is covered below by spawning bin/versailles against dist/.
 
 type CliErrorShape = {
 	code: string;
@@ -184,9 +163,9 @@ beforeAll(async () => {
 	({ runCli } = await import("../src/cli/index.js"));
 });
 
-describe("runCli — stable envelope + exit codes serialized by bin/versailles (VERSAILLES-16)", () => {
-	it("returns the { ok, errors, warnings, exitCode } envelope as JSON-round-trippable output — the exact shape the shim stringifies", async () => {
-		const cwd = await freshWorkspace("p-envelope");
+describe("runCli — JSON-round-trippable envelope + clean exit 0 (VERSAILLES-16)", () => {
+	it("returns the { ok, errors, warnings, exitCode } envelope as JSON-round-trippable output and maps a clean workspace to exit 0", async () => {
+		const cwd = await freshWorkspace("p-clean");
 		const result = await runCli(["validate"], { cwd });
 
 		expect(typeof result.ok).toBe("boolean");
@@ -196,55 +175,71 @@ describe("runCli — stable envelope + exit codes serialized by bin/versailles (
 		// The shim writes JSON.stringify(result) to stdout: the envelope must
 		// survive a JSON round-trip byte-for-byte (no undefined/non-serializable).
 		expect(JSON.parse(JSON.stringify(result))).toEqual(result);
-	});
-
-	it("maps a clean workspace to exit 0 — validate on an empty-but-valid workspace (build-spec §8, §10)", async () => {
-		const cwd = await freshWorkspace("p-clean");
-		const result = await runCli(["validate"], { cwd });
-
 		expect(result.ok).toBe(true);
 		expect(result.exitCode).toBe(0);
 		expect(result.errors).toEqual([]);
 		expect(result.output).toMatchObject({ valid: true });
 	});
+});
 
-	it("maps a usage error to exit 1 — unknown command surfaces UNKNOWN_COMMAND, never exit 2", async () => {
-		const cwd = await freshWorkspace("p-usage");
-		const result = await runCli(["bogus"], { cwd });
+// ── bin/versailles shim E2E (VERSAILLES-16) ────────────────────────────────
+// Real shipped surface: npm links bin/versailles as the `versailles` binary,
+// which imports ../dist/cli/index.js (gitignored → the prepare hook rebuilds
+// it on install). Spawn the shim with node against a scratch workspace so the
+// E2E covers exactly what runCli cannot: JSON.stringify on stdout + process.
+// exit with the result exit code.
 
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(1);
-		expect(result.errors).toContainEqual(
-			expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
-		);
+describe("bin/versailles shim — real shipped surface (VERSAILLES-16)", () => {
+	beforeAll(() => {
+		// dist/ is gitignored; rebuild it so the shim's import of
+		// ../dist/cli/index.js resolves to the current src — the same dist a
+		// fresh install (prepare hook) or `bun run build` would produce.
+		const build = spawnSync("bun", ["run", "build"], {
+			cwd: REPO_ROOT,
+			encoding: "utf8",
+		});
+		expect(
+			build.status,
+			`bun run build failed:\n${build.stdout}\n${build.stderr}`,
+		).toBe(0);
 	});
 
-	it("maps blocking staleness to exit 2 — check surfaces STALE with ids (build-spec §8, never 0 or 1)", async () => {
-		const SOURCE_VERSION_A = `export class OrderService {
-	id: number;
-	total: number;
-}
-`;
-		const SOURCE_VERSION_B = `export class OrderService {
-	id: number;
-	total: number;
-	status: string;
-}
-`;
-		const cwd = await freshWorkspace("p-stale");
-		await writeSource(cwd, "OrderService.ts", SOURCE_VERSION_A);
-		await writeWorkspaceFile(cwd, "manifests.json", referenceManifests(cwd));
-		// Source changes after extraction: the stored hash no longer matches
-		// the recomputed hash → blocking staleness.
-		await writeSource(cwd, "OrderService.ts", SOURCE_VERSION_B);
+	it("validate on a clean workspace → stdout parses to the envelope, ok true, exit 0", async () => {
+		const cwd = await freshWorkspace("shim-clean");
+		const run = spawnSync("node", [SHIM_PATH, "validate"], {
+			cwd,
+			encoding: "utf8",
+		});
 
-		const result = await runCli(["check"], { cwd });
+		expect(
+			run.status,
+			`shim exited ${run.status}:\n${run.stdout}\n${run.stderr}`,
+		).toBe(0);
+		const envelope = JSON.parse(run.stdout) as CliResultShape;
+		expect(envelope.ok).toBe(true);
+		expect(envelope.exitCode).toBe(0);
+		expect(Array.isArray(envelope.errors)).toBe(true);
+		expect(Array.isArray(envelope.warnings)).toBe(true);
+		expect(envelope.errors).toEqual([]);
+		expect(envelope.output).toMatchObject({ valid: true });
+	});
 
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(2);
-		expect(result.errors).toContainEqual(
-			expect.objectContaining({ code: "STALE", ids: ["OrderService"] }),
+	it("an unknown command → stdout parses to the envelope, ok false, exit 1 — process.exit propagates the result exit code", async () => {
+		const cwd = await freshWorkspace("shim-usage");
+		const run = spawnSync("node", [SHIM_PATH, "bogus"], {
+			cwd,
+			encoding: "utf8",
+		});
+
+		expect(
+			run.status,
+			`shim exited ${run.status}:\n${run.stdout}\n${run.stderr}`,
+		).toBe(1);
+		const envelope = JSON.parse(run.stdout) as CliResultShape;
+		expect(envelope.ok).toBe(false);
+		expect(envelope.exitCode).toBe(1);
+		expect(envelope.errors).toContainEqual(
+			expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
 		);
-		expect(result.output).toMatchObject({ staleIds: ["OrderService"] });
 	});
 });

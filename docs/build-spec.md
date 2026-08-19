@@ -21,9 +21,11 @@ name `versailles` is already registered (unmaintained placeholder). CLI command 
 `bin/versailles` is a thin shim importing the built `dist/cli/index.js`, and `dist/` is
 gitignored — never committed. To keep install self-sufficient (VERSAILLES-16), the package
 ships two lifecycle hooks: `prepare` runs the same `tsc` build as `bun run build`, so
-install/link/publish materializes `dist/` automatically — a fresh clone plus install yields
-a working CLI with no manual build — and `prepublishOnly` runs the build + smoke suite as a
-publish guard, so a package whose CLI is broken never ships.
+git/root installs and the published tarball materialize `dist/` automatically — a fresh
+clone plus install yields a working CLI with no manual build (bun skips `prepare` for
+`file:` dependencies, so `bun add file:../versailles` needs a manual build) — and
+`prepublishOnly` runs the build + smoke suite as a publish guard, so a package whose CLI
+is broken never ships.
 
 ---
 
