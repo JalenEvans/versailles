@@ -7,11 +7,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { extractManifests } from "../src/extractors/index.js";
 
 /**
- * Local install path (VERSAILLES-16, "Get Ready For Beta" sprint Phase 2):
- * bin/versailles imports ../dist/cli/index.js, but dist/ is gitignored and
- * package.json ships NO prepare hook and NO prepublishOnly guard — a fresh
- * clone leaves the CLI broken until a manual `bun run build`. These tests pin
- * the fix that makes a clean install/link/publish self-sufficient:
+ * Packaging lifecycle (VERSAILLES-16, "Get Ready For Beta" sprint Phase 2):
+ * bin/versailles imports ../dist/cli/index.js, but dist/ is gitignored, so
+ * package.json ships the prepare and prepublishOnly hooks that make a clean
+ * install/link/publish self-sufficient. These tests pin that behavior:
  *
  * 1. scripts.prepare runs the tsc build (src → dist per tsconfig outDir), so
  *    dist/cli/index.js exists on install/link/publish — no manual build step.
@@ -30,10 +29,10 @@ import { extractManifests } from "../src/extractors/index.js";
  * - tsconfig.json: outDir "dist", rootDir "src" — `tsc -p tsconfig.json` is
  *   the build that materializes dist/cli/index.js for bin/versailles.
  *
- * ── Red phase ──────────────────────────────────────────────────────────────
- * Against today's package.json, the prepare and prepublishOnly assertions FAIL
- * (both scripts are absent); the envelope/exit-code regressions pass (the
- * surface is already correct) and guard the fix from changing it.
+ * ── Green ──────────────────────────────────────────────────────────────────
+ * package.json ships both hooks; the prepare/prepublishOnly assertions pin
+ * the implemented behavior and the envelope/exit-code regressions guard the
+ * surface bin/versailles depends on.
  */
 
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -136,7 +135,7 @@ afterAll(async () => {
 // ── package.json lifecycle scripts (VERSAILLES-16) ─────────────────────────
 
 describe("package.json lifecycle scripts (VERSAILLES-16 local install path)", () => {
-	it("declares a `prepare` script that runs the tsc build — dist/ exists on install/link/publish, no manual build (Red today: scripts.prepare is undefined)", async () => {
+	it("declares a `prepare` script that runs the tsc build — dist/ exists on install/link/publish, no manual build (asserts scripts.prepare is defined and runs tsc — install/link/publish must build dist)", async () => {
 		const pkg = await readPackageJson();
 
 		expect(pkg.scripts).toBeDefined();
@@ -146,7 +145,7 @@ describe("package.json lifecycle scripts (VERSAILLES-16 local install path)", ()
 		expect(pkg.scripts?.prepare).toContain("tsc");
 	});
 
-	it("declares a non-empty `prepublishOnly` guard — publishing must never ship a package whose CLI is broken (Red today: scripts.prepublishOnly is undefined)", async () => {
+	it("declares a non-empty `prepublishOnly` guard — publishing must never ship a package whose CLI is broken (asserts scripts.prepublishOnly is defined and non-empty — publish must never ship a broken CLI)", async () => {
 		const pkg = await readPackageJson();
 
 		expect(pkg.scripts).toBeDefined();
