@@ -7,6 +7,23 @@
  * file content out. Rejection assertions are rendered from the case's
  * configured idiom ("throws" → expect(() => op(inputs)).toThrow();
  * "returns" → expect(op(inputs)).toBeNull()) — never hardcoded (ADR-0007).
+ *
+ * Call rendering is shape-aware from manifest method metadata
+ * (deterministic-generation.contract.yaml §9.4, VERSAILLES-20 F1): instance
+ * methods render `new <Component>().<op>(<positional>)`, static methods render
+ * `<Component>.<op>(<positional>)` with params in declared order, and
+ * void-return accept cases carry no return-value assertion. Accept/invariant
+ * cases on a void-returning INSTANCE operation WITH assertions bind the
+ * component INSTANCE — `const instance = new <Component>(); instance.<op>(...);
+ * expect(instance.<field>)...` — so assertions target instance state, never
+ * the void return value (VERSAILLES-26). A STATIC void operation with
+ * assertions renders the bare call `<Component>.<op>(...);` with no
+ * instance.<field> assertion — the static call never touches a constructed
+ * instance, so an instance assertion would be meaningless (VERSAILLES-26
+ * follow-up, W1). Without the `methods` option
+ * (legacy) the historical static options-object call
+ * `<Component>.<op>({ ...inputs })` with a toBeDefined assertion is preserved
+ * byte-identically.
  */
 import type {
 	AssertionDescriptor,
@@ -49,6 +66,7 @@ export function emitVitest(
 ): EmittedFile[] {
 	const generatedDir = options?.generatedDir ?? DEFAULT_GENERATED_DIR;
 	const modulePaths = options?.modulePaths ?? {};
+	const methods = options?.methods;
 	const groups = groupByComponent(suite);
 	const files: EmittedFile[] = [];
 	for (const component of Object.keys(groups)) {
@@ -58,6 +76,7 @@ export function emitVitest(
 			groups[component],
 			suite.clauseIds,
 			modulePaths,
+			methods,
 		);
 		files.push({ path: `${generatedDir}/${component}.test.ts`, content });
 	}
@@ -88,6 +107,7 @@ function renderComponentFile(
 	group: ComponentGroup,
 	clauseIds: string[],
 	modulePaths: Record<string, string>,
+	methods: EmitOptions["methods"],
 ): string {
 	const lines: string[] = [];
 	lines.push(
@@ -104,19 +124,29 @@ function renderComponentFile(
 	);
 	lines.push('import { describe, expect, it } from "vitest";');
 	lines.push("");
+	// modulePaths override wins when present and non-empty; an absent (legacy)
+	// or empty entry falls back to the deterministic default — an empty-string
+	// import must never be emitted (deterministic-generation.contract.yaml).
+	const override = modulePaths[component];
 	const modulePath =
-		modulePaths[component] ?? `${DEFAULT_MODULE_PREFIX}${component}.js`;
+		typeof override === "string" && override.length > 0
+			? override
+			: `${DEFAULT_MODULE_PREFIX}${component}.js`;
 	lines.push(`import { ${component} } from "${modulePath}";`);
 	lines.push("");
 
 	for (const operation of group.operations) {
 		assertIdentifier(operation.operation, "operation name");
-		lines.push(`describe("${operation.operation}", () => {`);
-		for (const case_ of operation.cases) {
-			lines.push(...renderCase(case_, component, operation.operation));
+		if (operation.cases.length > 0) {
+			lines.push(`describe("${operation.operation}", () => {`);
+			for (const case_ of operation.cases) {
+				lines.push(
+					...renderCase(case_, component, operation.operation, methods),
+				);
+			}
+			lines.push("});");
+			lines.push("");
 		}
-		lines.push("});");
-		lines.push("");
 	}
 
 	if (group.invariantCases.length > 0) {
@@ -124,7 +154,7 @@ function renderComponentFile(
 		for (const case_ of group.invariantCases) {
 			const operation = operationOf(case_);
 			assertIdentifier(operation, "operation name");
-			lines.push(...renderCase(case_, component, operation));
+			lines.push(...renderCase(case_, component, operation, methods));
 		}
 		lines.push("});");
 		lines.push("");
@@ -146,19 +176,35 @@ const MATCHER: Record<AssertionDescriptor["op"], string> = {
 	"!=": "not.toEqual",
 };
 
-function renderAssertion(assertion: AssertionDescriptor): string {
+/**
+ * Renders a real vitest matcher on the subject field. The receiver is either
+ * "result" (a non-void operation's return value) or "instance" (a bound
+ * component instance for void-returning operations, VERSAILLES-26) — a void
+ * call's return value is undefined and must never be the assertion subject.
+ */
+function renderAssertion(
+	assertion: AssertionDescriptor,
+	receiver: "result" | "instance",
+): string {
 	const matcher = MATCHER[assertion.op];
-	return `expect(result.${assertion.subject}).${matcher}(${renderValue(assertion.literal)})`;
+	return `expect(${receiver}.${assertion.subject}).${matcher}(${renderValue(assertion.literal)})`;
 }
 
 function renderCase(
 	case_: PlannedCase,
 	component: string,
 	operation: string,
+	methods: EmitOptions["methods"],
 ): string[] {
 	const title = `${case_.id} — ${case_.description}`;
-	const inputLiteral = renderObjectLiteral(case_.inputs);
-	const call = `${component}.${operation}(${inputLiteral})`;
+	const call = renderCall(case_, component, operation, methods);
+	const meta = methods?.[component]?.[operation];
+	// §9.4 shape awareness: a void-returning operation's accept case must not
+	// assert the return value (expect(result).toBeDefined() fails on
+	// undefined). Only metadata-driven renders skip it — the legacy default
+	// (no methods metadata) keeps the historical toBeDefined assertion.
+	const voidAccept =
+		meta?.returnType === "void" && case_.expects.outcome === "accept";
 	const lines: string[] = [];
 	lines.push(`\tit(${JSON.stringify(title)}, () => {`);
 	if (case_.expects.outcome === "reject") {
@@ -177,15 +223,109 @@ function renderCase(
 		}
 	} else {
 		const assertions = case_.expects.assertions ?? [];
-		lines.push(`\t\tconst result = ${call};`);
-		lines.push("\t\texpect(result).toBeDefined();");
-		for (const assertion of assertions) {
-			lines.push(`\t\t${renderAssertion(assertion)};`);
+		if (voidAccept) {
+			if (meta.static) {
+				// W1 (VERSAILLES-26 follow-up,
+				// deterministic-generation.contract.yaml): a STATIC void
+				// operation's accept/invariant case renders the bare call —
+				// `<Component>.<op>(...);` — with NO instance binding, NO
+				// result binding, and NO assertions. The static call never
+				// touches a constructed instance, so `const instance = new
+				// <Component>(); <Component>.<op>(...); expect(instance.<field>)`
+				// would assert state on an object the call cannot have
+				// modified — a silently meaningless assertion. Instance void
+				// ops keep the V-26 instance-state render below.
+				lines.push(`\t\t${call};`);
+			} else if (assertions.length > 0) {
+				// VERSAILLES-26: a void-returning operation's return value is
+				// undefined, so `const result = ...; expect(result.<field>)`
+				// throws TypeError at runtime. The case binds the component
+				// INSTANCE and asserts instance state — `const instance = new
+				// <Component>(); instance.<op>(...); expect(instance.<field>)`
+				// (§9.4). Only INSTANCE void ops reach this branch (the static
+				// void carve-out above handles the static variant), so the
+				// call always runs on the bound instance.
+				lines.push(`\t\tconst instance = new ${component}();`);
+				lines.push(
+					`\t\tinstance.${operation}${renderPositionalArgs(case_, component, operation, methods)};`,
+				);
+				for (const assertion of assertions) {
+					lines.push(`\t\t${renderAssertion(assertion, "instance")};`);
+				}
+			} else {
+				// Bare call — no result binding, no return-value assertion.
+				lines.push(`\t\t${call};`);
+			}
+		} else {
+			lines.push(`\t\tconst result = ${call};`);
+			lines.push("\t\texpect(result).toBeDefined();");
+			for (const assertion of assertions) {
+				lines.push(`\t\t${renderAssertion(assertion, "result")};`);
+			}
 		}
 	}
 	lines.push("\t});");
 	lines.push("");
 	return lines;
+}
+
+/**
+ * Shape-aware call rendering from manifest method metadata (VERSAILLES-20 F1,
+ * deterministic-generation.contract.yaml §9.4):
+ *
+ * - instance method → `new <Component>().<op>(<positional args>)`
+ * - static method  → `<Component>.<op>(<positional args>)`
+ * - params pass POSITIONALLY in the metadata's declared order, looked up in
+ *   the case inputs by name — a declared param missing from inputs renders
+ *   the deterministic default `undefined`, and captured pre-call state (e.g.
+ *   balance) never leaks into the call because only declared params are read.
+ *
+ * Legacy default (no methods metadata for the component+operation): today's
+ * static options-object call `<Component>.<op>({ ...inputs })` is preserved
+ * byte-identically, keeping existing suites (tests/generator.test.ts and the
+ * backward-compat pin in tests/emitters.test.ts) green.
+ */
+function renderCall(
+	case_: PlannedCase,
+	component: string,
+	operation: string,
+	methods: EmitOptions["methods"],
+): string {
+	const meta = methods?.[component]?.[operation];
+	if (meta === undefined) {
+		return `${component}.${operation}(${renderObjectLiteral(case_.inputs)})`;
+	}
+	const callee = meta.static
+		? `${component}.${operation}`
+		: `new ${component}().${operation}`;
+	return `${callee}${renderPositionalArgs(case_, component, operation, methods)}`;
+}
+
+/**
+ * The positional argument list `(<args>)` from the declared metadata params,
+ * in declared order (VERSAILLES-20 F1). Split out of renderCall so the
+ * void-with-assertions path can invoke a bound instance
+ * (`instance.<op>(<args>)`) while reusing the exact same argument computation
+ * (VERSAILLES-26). Callers must guarantee method metadata is present (the
+ * renderCall meta guard, or the voidAccept branch where meta is defined).
+ */
+function renderPositionalArgs(
+	case_: PlannedCase,
+	component: string,
+	operation: string,
+	methods: EmitOptions["methods"],
+): string {
+	const meta = methods?.[component]?.[operation];
+	if (meta === undefined) {
+		throw new Error(
+			`Cannot render positional args for "${component}.${operation}" — no method metadata`,
+		);
+	}
+	const args = meta.params.map((param) => {
+		assertIdentifier(param, "param name");
+		return renderValue(case_.inputs[param]);
+	});
+	return `(${args.join(", ")})`;
 }
 
 /**

@@ -20,6 +20,12 @@
  * - Nested/related types (e.g. items: OrderItem[]) are added transitively to
  *   the flat manifest map via a worklist, so order.items[].sku resolves
  *   through a sibling OrderItem entry (build-spec §3.3).
+ * - Per-component method metadata is recorded for every resolvable method
+ *   (class methods incl. static, interface method signatures): method name →
+ *   { static, params (declared order), returnType? } (build-spec §7,
+ *   VERSAILLES-20 F1). Accessors (get/set) are NOT methods. returnType is
+ *   resolved to the simple typeRef grammar (void/number/string/boolean) where
+ *   determinable and left undefined otherwise — never a hard error (ADR-0004).
  * - Fields whose type can only be inferred (untyped property initializer) are
  *   flagged low-confidence with a LOW_CONFIDENCE_FIELD warning — never a hard
  *   error (ADR-0004). Methods are never fields.
@@ -28,6 +34,12 @@
  *   compiler-generated anonymous symbols) and never throw — no warning.
  * - sourceRoots is a HARD boundary: only *.ts files under the roots are
  *   scanned, indexed, or resolved — never outside, even through imports.
+ * - Each covered entry records a PROJECT-root-relative sourcePath with POSIX
+ *   separators (e.g. "src/order.ts" for <projectRoot>/src/order.ts) so the
+ *   generator's join(cwd, sourcePath) resolves to the real file
+ *   (manifest-extraction.contract.yaml, VERSAILLES-24). The project root is
+ *   the optional extractManifests projectRoot argument (the CLI's cwd); when
+ *   absent it is inferred as the common directory prefix of the source roots.
  *
  * Synchronous: ts.createProgram is synchronous (directory glob expansion is a
  * CLI concern, not the extractor's).
@@ -43,6 +55,7 @@ import type {
 	ExtractorWarning,
 	FieldEntry,
 	ManifestMap,
+	MethodMetadata,
 } from "./types.js";
 
 /**
@@ -72,6 +85,7 @@ type NamedComponentDeclaration = (
 	name: ts.Identifier;
 };
 type FieldMember = ts.PropertyDeclaration | ts.PropertySignature;
+type MethodMember = ts.MethodDeclaration | ts.MethodSignature;
 
 /** Recursively collects *.ts files under each root (HARD boundary). */
 function scanTypeScriptFiles(sourceRoots: string[]): string[] {
@@ -141,15 +155,118 @@ function fieldNameOf(member: FieldMember): string {
 	return ts.isIdentifier(name) ? name.text : name.getText();
 }
 
+/**
+ * Method signatures are recorded for class methods (instance AND static) and
+ * interface method signatures. Accessors (get/set) are NOT methods for the
+ * manifest purpose — they are data accessors, skipped (fields only).
+ */
+function isMethodMember(node: ts.Node): node is MethodMember {
+	return ts.isMethodDeclaration(node) || ts.isMethodSignature(node);
+}
+
+function methodNameOf(member: MethodMember): string {
+	const name = member.name;
+	return ts.isIdentifier(name) ? name.text : name.getText();
+}
+
+/** Static detection via the modifier list (ts.getModifiers, TS 5.0+). */
+function isStaticMember(member: MethodMember): boolean {
+	const modifiers = ts.canHaveModifiers(member)
+		? ts.getModifiers(member)
+		: undefined;
+	return (
+		modifiers?.some(
+			(modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword,
+		) ?? false
+	);
+}
+
+/** Parameter names in DECLARED order (binding identifiers/text). */
+function paramNamesOf(member: MethodMember): string[] {
+	return member.parameters.map((parameter) => {
+		const name = parameter.name;
+		return ts.isIdentifier(name) ? name.text : name.getText();
+	});
+}
+
+/**
+ * Resolves a method's return type to a typeRef-grammar string where
+ * determinable (build-spec §7): the tests' fixtures need void/number/string/
+ * boolean only, so the renderer stays intentionally minimal. Anything else
+ * (component refs, list<T>, unions, unresolved nodes) records `undefined` —
+ * the permissive never-block policy (ADR-0004) keeps the signature recorded
+ * with params + static flag intact.
+ */
+function resolveReturnType(
+	checker: ts.TypeChecker,
+	member: MethodMember,
+): string | undefined {
+	if (member.type === undefined) return undefined;
+	const type = checker.getTypeFromTypeNode(member.type);
+	if (type.flags & ts.TypeFlags.Void) return "void";
+	if (type.flags & ts.TypeFlags.Boolean) return "boolean";
+	if (type.flags & ts.TypeFlags.String) return "string";
+	if (type.flags & ts.TypeFlags.Number) return "number";
+	return undefined;
+}
+
+/**
+ * Longest common directory prefix of the source roots — the best available
+ * project-root estimate when a caller does not pass an explicit projectRoot
+ * (VERSAILLES-24). For the common single-source-root case the root IS the
+ * inferred project root, so results are byte-identical to the pre-fix
+ * behavior; for nested/multi-root layouts the common ancestor keeps every
+ * sourcePath project-root-relative (never source-root-relative, never
+ * absolute). Returns undefined when the roots share no directory prefix
+ * (including the empty sourceRoots list) so the caller can fall back.
+ */
+function inferProjectRoot(sourceRoots: string[]): string | undefined {
+	if (sourceRoots.length === 0) return undefined;
+	let common = sourceRoots[0];
+	for (const root of sourceRoots.slice(1)) {
+		while (root !== common && !root.startsWith(`${common}${sep}`)) {
+			const next = common.lastIndexOf(sep);
+			if (next <= 0) return undefined;
+			common = common.slice(0, next);
+		}
+	}
+	return common;
+}
+
+/**
+ * PROJECT-root-relative sourcePath for a covered component
+ * (manifest-extraction.contract.yaml, VERSAILLES-24): a component at
+ * <projectRoot>/src/order.ts records "src/order.ts" — never source-root-
+ * relative ("order.ts") and never absolute — so deriveModulePaths'
+ * join(cwd, sourcePath) resolves to the real file. The project root is the
+ * explicit projectRoot argument when provided (the CLI's cwd); otherwise it
+ * is inferred as the common directory prefix of the source roots. When no
+ * project root is derivable (projectRoot omitted + disjoint source roots),
+ * the fallback is the file relative to sourceRoots[0] when that yields a
+ * relative path, or "" (the store-write omission sentinel) — the absolute
+ * file path is never emitted (VERSAILLES-24 follow-up, W2). POSIX
+ * separators always (build-spec §3.3).
+ */
 function sourcePathOf(
 	decl: NamedComponentDeclaration,
 	sourceRoots: string[],
+	projectRoot?: string,
 ): string {
 	const file = decl.getSourceFile().fileName;
-	const root = sourceRoots.find(
-		(candidate) => file.startsWith(`${candidate}${sep}`) || file === candidate,
-	);
-	if (root === undefined) return file;
+	const root = projectRoot ?? inferProjectRoot(sourceRoots);
+	if (root === undefined || root === "") {
+		// W2 (manifest-extraction.contract.yaml, VERSAILLES-24 follow-up): no
+		// project root is derivable (projectRoot omitted and the source roots
+		// share no common prefix — disjoint roots). Fall back to the file
+		// relative to sourceRoots[0] when that yields a relative path, or
+		// return "" — the caller's omission sentinel (extract.ts never
+		// persists an empty sourcePath) — never the absolute file path, which
+		// would leak machine-specific absolute paths into the store. The CLI
+		// path (projectRoot passed) never reaches here.
+		if (sourceRoots.length === 0) return "";
+		const rel = relative(sourceRoots[0], file);
+		return rel === "" ? "" : rel.split(sep).join("/");
+	}
 	const rel = relative(root, file);
 	return rel === "" ? file : rel.split(sep).join("/");
 }
@@ -282,7 +399,10 @@ function isArrayType(checker: ts.TypeChecker, type: ts.Type): boolean {
 	return checker.getIndexTypeOfType(type, ts.IndexKind.Number) !== undefined;
 }
 
-function extractTypeScript(sourceRoots: string[]): ExtractorResult {
+function extractTypeScript(
+	sourceRoots: string[],
+	projectRoot?: string,
+): ExtractorResult {
 	const files = scanTypeScriptFiles(sourceRoots);
 	const program = ts.createProgram({
 		rootNames: files,
@@ -328,21 +448,34 @@ function extractTypeScript(sourceRoots: string[]): ExtractorResult {
 		processed.add(component);
 
 		const fields: FieldEntry[] = [];
+		const methods: Record<string, MethodMetadata> = {};
 		const refs = new Set<string>();
 		let hasLowConfidence = false;
 
 		for (const member of declaration.members) {
-			if (!isFieldMember(member)) continue;
-			const field = resolveField(checker, member, component, warnings, refs);
-			fields.push(field);
-			if (field.confidence === "low") hasLowConfidence = true;
+			if (isFieldMember(member)) {
+				const field = resolveField(checker, member, component, warnings, refs);
+				fields.push(field);
+				if (field.confidence === "low") hasLowConfidence = true;
+			} else if (isMethodMember(member)) {
+				// Signature record: name, static/instance, ordered params,
+				// return type where determinable. Method BODIES never enter
+				// the manifest or the structural hash (build-spec §7). The
+				// last overload wins deterministically (source order).
+				methods[methodNameOf(member)] = {
+					static: isStaticMember(member),
+					params: paramNamesOf(member),
+					returnType: resolveReturnType(checker, member),
+				};
+			}
 		}
 
 		manifests[component] = {
 			component,
 			fields,
-			sourceHash: computeSourceHash(fields),
-			sourcePath: sourcePathOf(declaration, sourceRoots),
+			methods,
+			sourceHash: computeSourceHash(fields, methods),
+			sourcePath: sourcePathOf(declaration, sourceRoots, projectRoot),
 			confidence: hasLowConfidence ? "low" : "high",
 		};
 

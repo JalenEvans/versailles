@@ -6,7 +6,16 @@
  * validated VersaillesContext) and the emitter plugins (a pure function of the
  * IR). No framework strings live here — only the rejection idiom NAME
  * passthrough (ADR-0007), which emitters translate into real assertion syntax.
+ *
+ * PlannedSuite.warnings is a suite-level planning warning channel
+ * (VERSAILLES-22 F3, deterministic-generation.contract.yaml): a predicate-call
+ * precondition the planner genuinely cannot falsify surfaces a non-silent
+ * PREDICATE_UNPLANNABLE warning here instead of silently emitting zero cases.
+ * Same { code, field, detail } shape as LoaderWarning (ADR-0004 tier) — the
+ * generate handler merges these into CliResult.warnings (non-blocking, exit 0).
+ * Emitters ignore the field entirely.
  */
+import type { LoaderWarning } from "../loader/workspace.js";
 
 /** §9.1–§9.2 case kinds. */
 export type CaseKind =
@@ -75,12 +84,21 @@ export type OperationCaseGroup = {
 /**
  * A planned suite. `clauseIds` carries the FULL source clause set so the
  * coverage manifest can expose zero-coverage clauses as empty arrays.
+ * `warnings` (VERSAILLES-22 F3) carries non-blocking planning warnings — e.g.
+ * PREDICATE_UNPLANNABLE for a predicate-call precondition the planner cannot
+ * falsify — so a coverage gap is never silent. The generate handler merges
+ * these into CliResult.warnings (same ADR-0004 tier as validationWarnings).
  */
 export type PlannedSuite = {
 	operations: OperationCaseGroup[];
 	/** §9.2 invariant + expected-rejection cases. */
 	invariantCases: PlannedCase[];
 	clauseIds: string[];
+	/**
+	 * Suite-level planning warnings ({ code, field, detail } — the
+	 * LoaderWarning shape). Absent/empty when planning is fully plannable.
+	 */
+	warnings?: LoaderWarning[];
 };
 
 /** A full-file output unit — ready for idempotent full-file regeneration. */
@@ -92,6 +110,21 @@ export type EmitOptions = {
 	generatedDir?: string;
 	/** Per-component import specifier overrides (component → module path). */
 	modulePaths?: Record<string, string>;
+	/**
+	 * Per-component method metadata (component → method name → signature),
+	 * threaded through the emitter seam exactly like modulePaths
+	 * (VERSAILLES-20 F1, deterministic-generation.contract.yaml §9.4). When
+	 * present for a component+operation the emitter renders shape-aware
+	 * calls: instance → `new <Component>().<op>(<positional>)`, static →
+	 * `<Component>.<op>(<positional>)`, params in declared order, and
+	 * void-return accept cases carry no return-value assertion. When absent
+	 * (legacy) the emitter keeps today's static options-object call with a
+	 * toBeDefined assertion — byte-identical to pre-metadata output.
+	 */
+	methods?: Record<
+		string,
+		Record<string, { static: boolean; params: string[]; returnType?: string }>
+	>;
 };
 
 /** Maps every source clause ID → the test IDs tracing it (§9.3). */

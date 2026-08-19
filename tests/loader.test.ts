@@ -1431,3 +1431,70 @@ describe("loadWorkspace — re-review crash holes close (chunk 3.4b)", () => {
 		},
 	);
 });
+
+/**
+ * sourcePath persistence (VERSAILLES-21 F2, docs/contracts/workspace-context.contract.yaml
+ * 2026-08-17): the manifests.json store entry shape now owns sourcePath (string;
+ * never empty for covered entries; legacy entries lacking it preserved as-is),
+ * and the loader surfaces it on ManifestsFile entries so the generate handler →
+ * emitter modulePaths can derive real import paths. These tests pin the loader
+ * side of the flow: a stored sourcePath must come back through the loaded
+ * context untouched, and a legacy entry without one must load normally without
+ * an invented path or an INVALID_SHAPE error. (Runtime pass-through already
+ * holds; the fix extends the ManifestsFile TYPE with the optional sourcePath
+ * field this contract documents.)
+ */
+describe("loadWorkspace — surfaces sourcePath on manifests store entries (VERSAILLES-21 F2)", () => {
+	it("preserves sourcePath on a manifests store entry exactly as stored — never stripped or defaulted", async () => {
+		const ws = await seedWorkspace("sp1-sourcepath-preserved");
+		await writeWorkspaceFile(ws, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				Order: {
+					sourceHash: "man-order",
+					fields: { status: "string" },
+					sourcePath: "src/order.ts",
+				},
+			},
+		});
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.isValid).toBe(true);
+		expect(context.validationErrors).toEqual([]);
+		// The loaded entry carries sourcePath intact — the loader neither
+		// strips it nor replaces it with an empty string.
+		expect(context.manifests?.manifests.Order).toMatchObject({
+			sourceHash: "man-order",
+			fields: { status: "string" },
+			sourcePath: "src/order.ts",
+		});
+	});
+
+	it("loads a legacy manifest entry without sourcePath as-is — no INVALID_SHAPE error, no invented path", async () => {
+		const ws = await seedWorkspace("sp2-legacy-no-sourcepath");
+		await writeWorkspaceFile(ws, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				Legacy: {
+					sourceHash: "legacy-hash",
+					fields: { note: "string" },
+				},
+			},
+		});
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.isValid).toBe(true);
+		expect(context.validationErrors).toEqual([]);
+		const legacy = context.manifests?.manifests.Legacy as Record<
+			string,
+			unknown
+		>;
+		expect(legacy).toEqual({
+			sourceHash: "legacy-hash",
+			fields: { note: "string" },
+		});
+		expect(legacy.sourcePath).toBeUndefined();
+	});
+});

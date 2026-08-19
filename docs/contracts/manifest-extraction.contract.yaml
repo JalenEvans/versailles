@@ -11,17 +11,24 @@ owns:
   - "The per-language extractor plugin seam selected by config.language, with no language-specific code in the core (ADR-0008)"
   - "The TypeScript extractor built on the TypeScript compiler API (ts.createProgram + type checker) — the first target (ADR-0005, ADR-0009)"
   - "typeRef grammar application (build-spec §3.3): string | number | boolean | <ComponentName> | list<typeRef> | optional<typeRef> | enum<v1,v2,...>, generics to list<T>, literal unions to enum<...>, nested/related types added transitively to the flat map"
-  - "Structural sourceHash computation over sorted field name+type pairs only (build-spec §7, ADR-0005)"
-  - "The permissive typing policy: low-confidence/inferred fields warn and never block (ADR-0004)"
+  - "Structural sourceHash computation over the sorted field name+type pairs plus sorted method-signature records — never method bodies (build-spec §7, ADR-0005)"
+  - "Per-component method metadata recording — method name, static/instance, ordered param names, return type where determinable — into the manifest store (build-spec §7)"
+  - "The methods-key presence semantics in the manifests.json store (build-spec §3.3, §7): every manifest entry REFRESHED by an extract run always carries the methods key — possibly {} — an empty map being the first-class 'we know this component has zero methods' signal that distinguishes a freshly-extracted entry from a preserved legacy one the extractor never touched; only preserved legacy entries may lack the key (VERSAILLES-25 follow-up)"
+  - "The permissive typing policy: low-confidence/inferred fields and unresolvable method signatures warn and never block (ADR-0004)"
   - "The versailles extract-manifests command behavior: update covered entries, preserve uncovered entries, remove only via explicit --prune (build-spec §7)"
+  - "sourcePath persistence through the manifests.json store format (build-spec §3.3): every covered entry carries the project-root-relative path (POSIX separators, e.g. src/order.ts) of the source file it was extracted from, so the loader and generator can derive real module import paths (VERSAILLES-24); when no project root is derivable (projectRoot omitted and the source roots share no common prefix), the fallback is the file relative to sourceRoots[0] when that yields a relative path — or omission of the field — never the absolute file path (VERSAILLES-24 follow-up)"
 
 purpose: |
   manifest-extraction derives the grounding layer of the pipeline — manifests.json — from real
   source code. It resolves declared field types to the typeRef grammar through per-language
   extractor plugins (TypeScript first, via ts.createProgram and the type checker), adding nested
   and related types transitively to the flat manifest map so references like order.items[].sku
-  resolve. It computes structural sourceHash values from sorted field name+type pairs only, so
-  body-only edits never trigger false staleness while structural edits are detectable.
+  resolve. It computes structural sourceHash values from the sorted field name+type pairs plus sorted
+  method-signature records — never method bodies — so body-only edits never trigger false
+  staleness while structural edits are detectable. Each entry also records per-component
+  method metadata (method name, static/instance, ordered param names, return type where
+  determinable) and the sourcePath of the file it was extracted from, so downstream emitters
+  can render shape-aware calls against real modules.
   Extraction is static-analysis-first and permissive: inferred fields are flagged low-confidence
   and warn rather than block (ADR-0004). Manifests are derived artifacts — an external agent may
   author or update them via the CLI, but the tool itself never invokes an LLM (ADR-0005,
@@ -29,8 +36,12 @@ purpose: |
 
 invariants:
   - "Every manifest field maps to a value of the typeRef grammar (build-spec §3.3); no free-form type strings enter manifests.json."
-  - "sourceHash is a pure function of the structural shape (sorted field name+type pairs); body-only edits never change it, structural edits always do."
+  - "sourceHash is a pure function of the structural shape: sorted field name+type pairs plus sorted method-signature records (method name, static/instance, ordered param names, return type where determinable); method BODY edits never change it, structural edits always do (build-spec §7)."
   - "Every manifest entry traces to real source under config.sourceRoots — nothing is invented (ADR-0005)."
+  - "Every covered manifest entry carries the sourcePath of the file it was extracted from — never an empty string for covered entries; a missing path is a legacy-entry condition only."
+  - "A covered entry's sourcePath is project-root-relative with POSIX separators (e.g. src/order.ts for a file at <root>/src/order.ts) — never source-root-relative (order.ts) and never absolute, so the generator's join(cwd, sourcePath) resolves to the real file (VERSAILLES-24). When projectRoot is omitted and the source roots share no common prefix (disjoint roots), the fallback is relative(sourceRoots[0], file) when it yields a relative path — or omission of the sourcePath field — never the absolute file path."
+  - "A manifest entry refreshed by an extract run always carries the methods key — possibly {} — the empty map being a first-class 'we know this component has zero methods' signal that distinguishes a freshly-extracted entry from a preserved legacy one; only preserved legacy entries the extractor never touched may lack the methods key (VERSAILLES-25 follow-up)."
+  - "Method metadata is recorded for every resolvable method (name, static/instance, ordered param names, return type where determinable); an unresolvable signature follows the permissive policy — warn, never block (ADR-0004)."
   - "No language-specific extraction code exists outside the extractor plugin seam (ADR-0008)."
   - "The tool never invokes an LLM anywhere in extraction; any externally-authored manifest content is mechanically verified against source before writing (ADR-0005, ADR-0010)."
 
@@ -42,6 +53,8 @@ operations:
     ensures:
       - "manifests.json gains or updates an entry for every covered component, with fields mapped to typeRef values"
       - "TS generics become list<T>, literal-only unions become enum<...>, and nested/related types are added to the flat manifest map transitively"
+      - "Every covered entry records per-component method metadata — method name, static/instance, ordered param names, return type where determinable — and the sourcePath of the file it was extracted from, expressed project-root-relative with POSIX separators (e.g. src/order.ts)"
+      - "Every refreshed covered entry records a methods key — even when the component has zero methods (methods: {}) — so an entry the extractor touched is never indistinguishable from a preserved legacy entry (VERSAILLES-25 follow-up)"
       - "Only files under config.sourceRoots are scanned"
     examples:
       - input: "extract({ language: 'typescript', sourceRoots: ['src/**/*.ts'] }) over an OrderService class with items: OrderItem[]"
@@ -49,19 +62,22 @@ operations:
   compute_source_hash:
     requires:
       - "fields is the component's field set: an ordered collection of (fieldName, typeRef) pairs"
+      - "methods is the component's method-signature set: an ordered collection of (methodName, staticFlag, paramNames[], returnType?) records"
     ensures:
-      - "Returns the digest of the sorted (fieldName, typeRef) pairs only — never the full source file"
-      - "Two field sets that differ only by method-body changes hash identically; adding, removing, or retyping a field changes the hash"
+      - "Returns the digest of the sorted (fieldName, typeRef) pairs plus the sorted method-signature records only — never the full source file and never method bodies"
+      - "Two components that differ only by method-body changes hash identically; adding, removing, or retyping a field, or adding/removing/changing a method signature (name, static/instance, params, return type), changes the hash"
     examples:
-      - input: "compute_source_hash([{ name: 'sku', type: 'string' }, { name: 'price', type: 'number' }])"
-        output: "a stable digest; unchanged when a method body changes, different when a field is added or retyped"
+      - input: "compute_source_hash([{ name: 'sku', type: 'string' }, { name: 'price', type: 'number' }], [{ name: 'total', static: false, params: ['qty'], returnType: 'number' }])"
+        output: "a stable digest; unchanged when a method body changes, different when a field is added or retyped or a method signature changes"
   extract_manifests_command:
     requires:
       - "config and the current manifests.json content"
       - "options carries the explicit prune flag state"
     ensures:
-      - "Entries for components covered by the scan are updated to reflect current source"
+      - "Entries for components covered by the scan are updated to reflect current source, including method metadata and sourcePath"
       - "Entries for components not covered are preserved when prune is false and removed only when prune is true — never implicitly"
+      - "Legacy entries lacking sourcePath are preserved as-is and never rewritten with an empty sourcePath"
+      - "Entries refreshed by this run always carry the methods key — possibly {} when the component has zero methods; only entries preserved because the scan did not cover them may lack the key (VERSAILLES-25 follow-up)"
     examples:
       - input: "extract_manifests_command(config, manifests, { prune: false }) with an uncovered stale component X"
         output: "X's entry remains in manifests.json"
@@ -73,7 +89,10 @@ must:
   - "For TypeScript, walk class and interface declarations with ts.createProgram and the type checker, resolving field types to the typeRef grammar (ADR-0005, ADR-0009)."
   - "Map TypeScript generics to list<T> and literal-only unions to enum<...>."
   - "Add nested and related types to the flat manifest map transitively so paths like order.items[].sku resolve via a sibling entry in the same map."
-  - "Compute sourceHash from sorted field name+type pairs only — never the full source file (build-spec §7, ADR-0005)."
+  - "Compute sourceHash from the sorted field name+type pairs plus the sorted method-signature records — never the full source file and never method bodies (build-spec §7, ADR-0005)."
+  - "Record per-component method metadata — method name, static/instance, ordered param names, return type where determinable — for every resolvable method (build-spec §7)."
+  - "Persist each covered component's sourcePath through the manifests.json store as a project-root-relative path with POSIX separators (e.g. src/order.ts), so the loader and generator can derive real module import paths via join(cwd, sourcePath) (build-spec §3.3, §7, VERSAILLES-24). When projectRoot is omitted and the source roots share no common prefix, fall back to the file relative to sourceRoots[0] when that yields a relative path — or omit the sourcePath field — never persist the absolute file path (VERSAILLES-24 follow-up)."
+  - "Persist the methods key on every covered/refreshed manifest entry written by extract_manifests_command — including an empty map {} when the component has zero methods — so the planner can distinguish 'we know this component has zero methods' from 'legacy entry the extractor never touched' (VERSAILLES-25 follow-up)."
   - "Flag inferred/low-confidence fields and surface them as non-blocking warnings; never hard-error purely on inference uncertainty (ADR-0004)."
   - "Preserve manifest entries for components not covered by the current scan, and remove them only when the caller passes the explicit prune flag (build-spec §7)."
   - "Scan only files under config.sourceRoots."
@@ -81,29 +100,40 @@ must:
 
 must_not:
   - "Must not treat manifests.json as a hand-authored source of truth — it is a derived artifact produced by static analysis (build-spec §3.3, ADR-0005)."
-  - "Must not compute sourceHash over the full source file — only the sorted field name+type pairs, so unrelated body edits do not trigger false staleness."
+  - "Must not compute sourceHash over the full source file or method bodies — only the sorted field pairs plus sorted method-signature records, so unrelated body edits do not trigger false staleness."
   - "Must not prune manifest entries implicitly; removal occurs only via the explicit prune flag (build-spec §7)."
   - "Must not scan outside config.sourceRoots."
   - "Must not invoke an LLM anywhere in extraction — no LLM client, no prompting logic, no retry loop; the only LLM-assisted path is an external agent whose output passes a mechanical verification gate before writing (ADR-0010, ADR-0005)."
   - "Must not let a low-confidence or inferred field cause a hard type-compatibility error — that tier warns but never blocks (ADR-0004)."
+  - "Must not write a covered manifest entry with an empty sourcePath — a missing path is a legacy-entry condition, never a silent empty string."
+  - "Must not record sourcePath relative to a source root (order.ts for src/order.ts) or as an absolute path — the canonical semantic is project-root-relative with POSIX separators (VERSAILLES-24). The no-project-root/disjoint-roots fallback is relative(sourceRoots[0], file) when derivable, or omission of the field — the absolute file path is never emitted (VERSAILLES-24 follow-up)."
+  - "Must not omit the methods key from a refreshed covered entry with zero methods — an empty map {} must be persisted; omitting the key is reserved for preserved legacy entries the extractor never touched (VERSAILLES-25 follow-up)."
+  - "Must not silently drop unresolvable method signatures — they follow the permissive policy and surface a warning (ADR-0004)."
   - "Must not place language-specific extraction code in the core — all extraction lives behind the ExtractorPlugin seam (ADR-0008)."
 
 can:
   - "May surface per-field confidence metadata alongside manifest entries as an extension point (build-spec §5.1, ADR-0004)."
   - "May add extractor plugins for csharp (Roslyn) and python (ast + typing introspection) as they are sequenced (ADR-0009) — the seam is shared."
-  - "May recompute and rewrite sourceHash values in place when field sets change, as part of the extract command."
+  - "May recompute and rewrite sourceHash values in place when field sets or method signatures change, as part of the extract command."
+  - "May record method parameter types and other signature details beyond the minimum (name, static/instance, ordered params, return type) when determinable."
 
 limits:
   - "No C# (Roslyn) or Python (ast) extractor implementations within the first milestone — TypeScript + vitest is sequenced first; the seam exists for all three (ADR-0009)."
   - "No semantic validation of contracts that consume manifests — that is contract-language."
   - "No staleness check orchestration or exit-code semantics — workspace-context runs versailles check; this context only computes hashes."
+  - "No method-body analysis — only signatures (name, static/instance, params, return type) are recorded; bodies never enter the manifest or the hash."
   - "No predicate registry tooling, even where it reuses static-analysis seams."
   - "No LLM client, prompt templates, or in-tool LLM extraction — any LLM assistance is external and verification-gated."
 
 asserts:
-  - "assert: compute_source_hash over a component whose method bodies changed but whose field set and types are unchanged equals the stored hash."
-  - "assert: compute_source_hash changes when a field is added, removed, or retyped."
+  - "assert: compute_source_hash over a component whose method bodies changed but whose field set and method signatures are unchanged equals the stored hash."
+  - "assert: compute_source_hash changes when a field is added, removed, or retyped, or when a method signature (name, static/instance, params, return type) changes."
   - "assert: extraction of a TypeScript component under config.sourceRoots yields manifest fields whose typeRefs match the type-checker-resolved types."
+  - "assert: extraction of a TypeScript component with instance and static methods records method metadata with correct static/instance flags, ordered param names, and return type where determinable."
+  - "assert: a covered manifest entry written by extract_manifests_command carries a non-empty sourcePath; a preserved legacy entry lacking one is left unmodified."
+  - "assert: extraction of a component at <root>/src/order.ts records sourcePath 'src/order.ts' — never 'order.ts' (source-root-relative) and never an absolute path."
+  - "assert: when projectRoot is omitted and the source roots share no common prefix (disjoint roots), sourcePathOf falls back to the file relative to sourceRoots[0] when that yields a relative path, or omits the sourcePath field — never the absolute file path (VERSAILLES-24 follow-up)."
+  - "assert: a refreshed manifest entry for a component with zero methods persists methods: {} in the store — never an omitted key — so the planner's UNPLANNABLE_OPERATION guard fires for any planned op; only preserved legacy entries may lack the methods key (VERSAILLES-25 follow-up)."
   - "assert: an uncovered component's entry persists across extract_manifests_command runs without prune and is removed with prune."
   - "assert: no code path in the extractor invokes an LLM (no LLM call sites in the tool)."
 
@@ -113,3 +143,6 @@ asserts:
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-11 | general-manager | Initial contract from docs/specs/manifest-extraction.md; build-spec §3.3, §7; ADR-0004/0005/0008/0009/0010 |
+| 2026-08-17 | general-manager | Extended for pipeline runnability (PR fix/generator-emitter-runnability): per-component method metadata (name, static/instance, ordered params, return type where determinable), sourcePath persistence through the manifests.json store, and sourceHash extended to cover sorted field pairs + sorted method-signature records (method bodies still excluded). Backs VERSAILLES-20/21 |
+| 2026-08-18 | general-manager | Pinned the canonical sourcePath semantic (VERSAILLES-24): covered entries store project-root-relative paths with POSIX separators (src/order.ts), never source-root-relative and never absolute — so deriveModulePaths' join(cwd, sourcePath) resolves to the real source file |
+| 2026-08-18 | general-manager | Closed the review-warning follow-ups (fix/generator-emitter-runnability): (W3/VERSAILLES-25) refreshed manifest entries always carry the methods key — possibly {} — as the first-class zero-methods signal, with only preserved legacy entries allowed to lack it; (W2/VERSAILLES-24) the disjoint-roots sourcePath fallback (projectRoot omitted + no common source-root prefix) is relative(sourceRoots[0], file) or omission of the field — never the absolute file path |

@@ -65,12 +65,20 @@ export async function handleExtractManifests(
 		return zeroRoots;
 	}
 
-	const extracted = extractManifests(roots);
+	// The CLI's cwd is the PROJECT root (the dir containing .versailles/):
+	// sourcePath values are anchored project-root-relative so the generator's
+	// join(cwd, sourcePath) resolves to the real file (VERSAILLES-24).
+	const extracted = extractManifests(roots, cwd);
 	const warnings = extractorWarnings(extracted.warnings);
 
-	// The loader store format ({ sourceHash, fields: Record }) differs from the
-	// extractor ManifestMap ({ fields: FieldEntry[], sourcePath, confidence });
-	// convert the stored manifests so mergeManifests can operate on one shape.
+	// The loader store format ({ sourceHash, fields: Record, sourcePath?,
+	// methods? }) differs from the extractor ManifestMap ({ fields:
+	// FieldEntry[], methods, sourcePath, confidence }); convert the stored
+	// manifests so mergeManifests can operate on one shape. sourcePath and
+	// methods are carried through from the store (VERSAILLES-21 F2 /
+	// VERSAILLES-20 F1): a preserved legacy entry without them converts to ""
+	// / {} internally and is omitted from the store write — never an invented
+	// or empty persisted path.
 	const existing: ManifestMap = {};
 	for (const [component, entry] of Object.entries(stored)) {
 		existing[component] = {
@@ -80,8 +88,9 @@ export async function handleExtractManifests(
 				typeRef,
 				confidence: "high",
 			})),
+			methods: entry.methods ?? {},
 			sourceHash: entry.sourceHash,
-			sourcePath: "",
+			sourcePath: entry.sourcePath ?? "",
 			confidence: "high",
 		};
 	}
@@ -107,15 +116,57 @@ export async function handleExtractManifests(
 
 	const mergedStore: Record<
 		string,
-		{ sourceHash: string; fields: Record<string, string> }
+		{
+			sourceHash: string;
+			fields: Record<string, string>;
+			sourcePath?: string;
+			methods?: Record<
+				string,
+				{ static: boolean; params: string[]; returnType?: string }
+			>;
+		}
 	> = {};
 	for (const [component, entry] of Object.entries(merged)) {
-		mergedStore[component] = {
+		// W3 (workspace-context.contract.yaml, VERSAILLES-25 follow-up):
+		// distinguish covered (added OR refreshed by this run) from preserved
+		// legacy entries — only covered entries always carry the methods key.
+		const covered = component in extracted.manifests;
+		const storeEntry: {
+			sourceHash: string;
+			fields: Record<string, string>;
+			sourcePath?: string;
+			methods?: Record<
+				string,
+				{ static: boolean; params: string[]; returnType?: string }
+			>;
+		} = {
 			sourceHash: entry.sourceHash,
 			fields: Object.fromEntries(
 				entry.fields.map((field) => [field.name, field.typeRef]),
 			),
 		};
+		// Covered entries carry the extractor's real sourcePath; preserved
+		// legacy entries without one convert to "" and stay out of the store
+		// (contract: never an empty or invented persisted sourcePath).
+		if (entry.sourcePath.length > 0) {
+			storeEntry.sourcePath = entry.sourcePath;
+		}
+		if (covered) {
+			// A refreshed/covered entry ALWAYS carries the methods key — the
+			// empty map {} is the first-class "we know this component has
+			// zero methods" signal that distinguishes it from a preserved
+			// legacy entry, so the planner's UNPLANNABLE_OPERATION guard
+			// fires for every staged op instead of treating the component as
+			// full-legacy and silently emitting a dead static call. Today the
+			// key is dropped when the map is empty (the W3 hole).
+			storeEntry.methods = entry.methods ?? {};
+		} else if (Object.keys(entry.methods ?? {}).length > 0) {
+			// Preserved legacy entries keep their stored shape exactly
+			// (byte-compat): a methods map persists only when non-empty, so
+			// an entry that never carried the key stays without it.
+			storeEntry.methods = entry.methods;
+		}
+		mergedStore[component] = storeEntry;
 	}
 	await writeJsonFile(workspaceDir, "manifests.json", {
 		version: "1.0",

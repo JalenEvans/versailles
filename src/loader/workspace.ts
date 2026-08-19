@@ -68,7 +68,29 @@ export type ManifestsFile = {
 	version: string;
 	manifests: Record<
 		string,
-		{ sourceHash: string; fields: Record<string, string> }
+		{
+			sourceHash: string;
+			fields: Record<string, string>;
+			/**
+			 * Root-relative source file the covered entry was extracted from
+			 * (workspace-context.contract.yaml, VERSAILLES-21 F2). Optional on
+			 * the TYPE because legacy entries predate sourcePath — the shape
+			 * guard tolerates its absence (never an INVALID_SHAPE error) and
+			 * the loader surfaces it untouched when present.
+			 */
+			sourcePath?: string;
+			/**
+			 * Per-component method metadata (workspace-context.contract.yaml):
+			 * method name → { static, params, returnType? }. Recorded where
+			 * determinable under the permissive low-confidence policy. Also
+			 * optional — F1 owns the recording side; the loader only surfaces
+			 * it (no emitter behavior is wired yet).
+			 */
+			methods?: Record<
+				string,
+				{ static: boolean; params: string[]; returnType?: string }
+			>;
+		}
 	>;
 };
 

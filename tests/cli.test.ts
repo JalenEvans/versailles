@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
 	mkdir,
 	mkdtemp,
@@ -7,7 +8,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { extractManifests } from "../src/extractors/index.js";
@@ -923,6 +924,142 @@ describe("runCli generate — deterministic generation (build-spec §9)", () => 
 	});
 });
 
+describe("runCli generate — non-silent unplannable predicate warnings (VERSAILLES-22 F3, deterministic-generation.contract.yaml)", () => {
+	it("a genuinely unplannable predicate clause surfaces PREDICATE_UNPLANNABLE in warnings — never a silent zero, exit 0", async () => {
+		const cwd = await freshWorkspace("g-predicate-unplannable");
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				OrderService: {
+					invariants: [],
+					operations: {
+						setSubtotal: {
+							id: "OrderService.setSubtotal",
+							// A non-primitive paramType the v1 falsifying-input
+							// heuristic cannot reason about.
+							params: [{ name: "items", type: "list<number>" }],
+							preconditions: [
+								{
+									id: "OrderService.setSubtotal.pre0",
+									expr: "isNonEmpty(items)",
+								},
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "setsubtotal-list-hash",
+						},
+					},
+				},
+			},
+		});
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order",
+					fields: { subtotal: "number" },
+				},
+			},
+		});
+		await writeWorkspaceFile(cwd, "predicates.json", {
+			version: "1.0",
+			predicates: {
+				isNonEmpty: {
+					params: ["items"],
+					paramTypes: ["list<number>"],
+					returnType: "boolean",
+					sourceRef: "List.isNonEmpty",
+					sourceHash: "p-nonempty",
+					verifiedPure: true,
+				},
+			},
+		});
+
+		const result = await runCli(["generate"], { cwd });
+
+		// Generation still succeeds (exit 0) — the warning tier is
+		// non-blocking, exactly like validationWarnings (ADR-0004).
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+		expect(result.warnings).toContainEqual(
+			expect.objectContaining({
+				code: "PREDICATE_UNPLANNABLE",
+				field: "OrderService.setSubtotal.pre0",
+			}),
+		);
+	});
+});
+
+describe("runCli generate — non-silent UNPLANNABLE_OPERATION warnings for staged ops missing from source (VERSAILLES-25, deterministic-generation.contract.yaml)", () => {
+	it("a staged operation absent from the component's manifest methods metadata surfaces UNPLANNABLE_OPERATION in warnings — never a dead static call, exit 0", async () => {
+		const cwd = await freshWorkspace("g-unplannable-operation");
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				Order: {
+					invariants: [],
+					operations: {
+						setSubtotal: {
+							id: "Order.setSubtotal",
+							params: [{ name: "amount", type: "number" }],
+							preconditions: [
+								{ id: "Order.setSubtotal.pre0", expr: "amount >= 0" },
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "setsubtotal-hash",
+						},
+					},
+				},
+			},
+		});
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				Order: {
+					sourceHash: "man-order",
+					fields: { subtotal: "number" },
+					// The source records Order.setTotal but NOT
+					// Order.setSubtotal — the staged operation has no
+					// matching method metadata and no resolvable source
+					// method (the V-25 E2E-gate case).
+					methods: {
+						setTotal: {
+							static: false,
+							params: ["amount"],
+							returnType: "number",
+						},
+					},
+				},
+			},
+		});
+
+		const result = await runCli(["generate"], { cwd });
+
+		// Generation still succeeds (exit 0) — the warning tier is
+		// non-blocking, exactly like PREDICATE_UNPLANNABLE (ADR-0004).
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+		expect(result.warnings).toContainEqual(
+			expect.objectContaining({
+				code: "UNPLANNABLE_OPERATION",
+				field: "Order.setSubtotal",
+			}),
+		);
+
+		// The generated surface contains NO unrunnable static call for the
+		// warned operation — the V-25 must_not (no `Order.setSubtotal({`.
+		const content = await readFile(
+			join(cwd, ".versailles", "generated", "Order.test.ts"),
+			"utf8",
+		);
+		expect(content).not.toContain("Order.setSubtotal(");
+		expect(content).not.toContain("setSubtotal({");
+	});
+});
+
 // ── review (valid arg routing; no staged object → NOT_FOUND, exit 1 — real flow) ─
 
 describe("runCli review — valid arg shapes route to the handler; no staged object → NOT_FOUND, exit 1 (flow pinned in tests/review.test.ts)", () => {
@@ -1297,5 +1434,368 @@ describe("runCli — predicate registry command routing (predicate-registry.cont
 				expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
 			);
 		}
+	});
+});
+
+// ── VERSAILLES-21 F2: sourcePath flow extractor → store → loader → generate ──
+//
+// The TypeScript extractor records ManifestEntry.sourcePath, but the extract
+// handler's store conversion drops it (writes sourcePath: "" and never writes
+// it back to manifests.json), so the vitest emitter falls back to the derived
+// "../../src/<Component>.js" import path that does NOT match real source files
+// (wrong case AND wrong extension). Contract-gated fix direction
+// (manifest-extraction.contract.yaml + workspace-context.contract.yaml +
+// deterministic-generation.contract.yaml, 2026-08-17): sourcePath must flow
+// extractor → manifests.json store → loader → generate handler → emitter
+// modulePaths, with a deterministic default fallback when absent. These tests
+// pin the fixed behavior — each covered entry carries its real sourcePath, and
+// generated vitest files import from the real source path.
+
+// ── F2.1: extract-manifests persists sourcePath through the store ──────────
+// Current: the existing-store conversion (src/cli/handlers/extract.ts) maps
+// stored entries to ManifestEntry with sourcePath: "", and the store write
+// round-trips only { sourceHash, fields } — so covered entries on disk never
+// carry sourcePath. Fixed: covered entries (added OR refreshed) carry the real
+// root-relative sourcePath, and legacy uncovered entries stay as-is (never an
+// invented or empty sourcePath).
+
+describe("runCli extract-manifests — sourcePath persists through the store (VERSAILLES-21 F2)", () => {
+	const ORDER_SERVICE_SOURCE = `export class OrderService {
+	id: number;
+	total: number;
+}
+`;
+	const ORDER_ITEM_SOURCE = `export class OrderItem {
+	sku: string;
+	qty: number;
+}
+`;
+
+	it("writes the real sourcePath on covered manifest entries — never '' and never missing", async () => {
+		const cwd = await freshWorkspace("x-sourcepath");
+		await writeSource(cwd, "OrderService.ts", ORDER_SERVICE_SOURCE);
+		await writeSource(cwd, "OrderItem.ts", ORDER_ITEM_SOURCE);
+		// A stale covered entry (refreshed path must gain sourcePath) + a
+		// legacy uncovered entry (preserved path must not invent one).
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "deadbeef",
+					fields: { id: "number", total: "number" },
+				},
+				LegacyComponent: {
+					sourceHash: "legacy-hash",
+					fields: { note: "string" },
+				},
+			},
+		});
+
+		const result = await runCli(["extract-manifests"], { cwd });
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		const stored = JSON.parse(
+			await readFile(join(cwd, ".versailles", "manifests.json"), "utf8"),
+		) as {
+			manifests: Record<
+				string,
+				{
+					sourceHash: string;
+					fields: Record<string, string>;
+					sourcePath?: string;
+				}
+			>;
+		};
+
+		// Covered entries (refreshed AND added) carry the REAL PROJECT-root-
+		// relative source path — never the '' the store conversion writes
+		// today, and never the source-root-relative "OrderService.ts" the
+		// extractor records pre-fix (VERSAILLES-24: sourcePath is anchored to
+		// the project root so join(cwd, sourcePath) resolves to the real file).
+		expect(stored.manifests.OrderService.sourcePath).toBe(
+			"src/OrderService.ts",
+		);
+		expect(stored.manifests.OrderItem.sourcePath).toBe("src/OrderItem.ts");
+		expect(stored.manifests.OrderService.sourcePath?.length).toBeGreaterThan(0);
+		// Legacy uncovered entries are preserved as-is — no invented path.
+		expect(stored.manifests.LegacyComponent.sourcePath).toBeUndefined();
+	});
+});
+
+// ── W3 (Center review finding): zero-method components — methods: {} must
+// survive the store, and generate must warn instead of emitting dead calls ──
+// workspace-context.contract.yaml + manifest-extraction.contract.yaml
+// (2026-08-18, VERSAILLES-25 follow-up): the extractor records `methods: {}`
+// for a component with no methods, and the extract handler must PERSIST that
+// empty map on refreshed covered entries. An empty methods map is the
+// planner's authoritative "knows zero methods" signal: every staged op is
+// missing from it, so generate surfaces UNPLANNABLE_OPERATION (exit 0,
+// non-blocking) and never emits the legacy static options-object call
+// `<Component>.<op>({ ... })` — dead, unrunnable code (TypeError at runtime).
+// Today extract.ts writes the entry WITHOUT the methods key when the map is
+// empty, so the loader surfaces methods === undefined and the planner treats
+// the component as full-legacy → silent dead call (the W3 E2E-gate bug).
+
+const ZERO_METHOD_ORDER_SOURCE = `export class Order {
+	id: number;
+	total: number;
+}
+`;
+
+describe("runCli extract-manifests — persists an empty methods map on zero-method covered entries (W3, VERSAILLES-25 follow-up)", () => {
+	it("writes methods: {} for a refreshed zero-method entry — never drops the key (Red today: the store omits methods entirely)", async () => {
+		const cwd = await freshWorkspace("x-zero-methods");
+		await writeSource(cwd, "Order.ts", ZERO_METHOD_ORDER_SOURCE);
+
+		const result = await runCli(["extract-manifests"], { cwd });
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		const stored = JSON.parse(
+			await readFile(join(cwd, ".versailles", "manifests.json"), "utf8"),
+		) as {
+			manifests: Record<string, { methods?: unknown }>;
+		};
+		// The extractor records methods: {} for a zero-method component; the
+		// store write must persist it (the planner's "knows zero methods"
+		// signal). Today the key is absent → this is undefined, not {}.
+		expect(stored.manifests.Order.methods).toEqual({});
+	});
+});
+
+describe("runCli extract-manifests + generate — a zero-method component with a staged op warns, never emits a dead static call (W3, VERSAILLES-25 follow-up)", () => {
+	it("full chain: real extract over a zero-method component → generate surfaces UNPLANNABLE_OPERATION and emits no Order.<op>({...}) (Red today: warnings [] + dead call)", async () => {
+		const cwd = await freshWorkspace("g-zero-method");
+		await writeSource(cwd, "Order.ts", ZERO_METHOD_ORDER_SOURCE);
+		// Stage an operation that cannot exist in the zero-method source.
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				Order: {
+					invariants: [],
+					operations: {
+						setSubtotal: {
+							id: "Order.setSubtotal",
+							params: [{ name: "amount", type: "number" }],
+							preconditions: [
+								{ id: "Order.setSubtotal.pre0", expr: "amount >= 0" },
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "setsubtotal-hash",
+						},
+					},
+				},
+			},
+		});
+
+		const extract = await runCli(["extract-manifests"], { cwd });
+		expect(extract.ok).toBe(true);
+		expect(extract.exitCode).toBe(0);
+
+		const generate = await runCli(["generate"], { cwd });
+
+		// Generation still succeeds (exit 0) — the warning tier is
+		// non-blocking (ADR-0004), and the warning MUST surface once the
+		// store carries methods: {} (today the dropped key makes the planner
+		// treat the component as legacy → warnings []).
+		expect(generate.ok).toBe(true);
+		expect(generate.exitCode).toBe(0);
+		expect(generate.errors).toEqual([]);
+		expect(generate.warnings).toContainEqual(
+			expect.objectContaining({
+				code: "UNPLANNABLE_OPERATION",
+				field: "Order.setSubtotal",
+			}),
+		);
+
+		// No dead static options-object call in the generated surface (the
+		// file may legitimately be absent when every staged op is skipped).
+		const files = await generatedTestFiles(cwd);
+		if (files.includes("Order.test.ts")) {
+			const content = await readFile(
+				join(cwd, ".versailles", "generated", "Order.test.ts"),
+				"utf8",
+			);
+			expect(content).not.toContain("Order.setSubtotal(");
+			expect(content).not.toContain("setSubtotal({");
+		}
+	});
+});
+
+// ── F2.2: generate derives emitter modulePaths from manifest sourcePath ────
+// Current: the generate handler passes only { generatedDir } to emitSuite, so
+// the vitest emitter falls back to "../../src/<Component>.js" (wrong case +
+// wrong extension for e.g. src/order.ts → Order). Fixed: the handler derives
+// modulePaths from context.manifests sourcePath entries and passes them through
+// emitSuite options; entries lacking sourcePath (legacy) keep the deterministic
+// default — never an empty-string import. The seeded sourcePath values below
+// use the canonical PROJECT-root-relative form (src/AccountService.ts — a
+// covered entry's sourcePath is anchored to the project root, VERSAILLES-24).
+
+async function seedGeneratorWorkspaceWithSourcePaths(
+	name: string,
+): Promise<string> {
+	const cwd = await seedGeneratorWorkspace(name);
+	await writeWorkspaceFile(cwd, "manifests.json", {
+		version: "1.0",
+		manifests: {
+			AccountService: {
+				sourceHash: "man-account",
+				fields: { balance: "number", status: "string" },
+				sourcePath: "src/AccountService.ts",
+			},
+			CustomerService: {
+				sourceHash: "man-customer",
+				fields: {},
+				sourcePath: "src/CustomerService.ts",
+			},
+		},
+	});
+	return cwd;
+}
+
+describe("runCli generate — vitest module paths derive from manifest sourcePath (VERSAILLES-21 F2)", () => {
+	it("imports components from sourcePath-derived module paths — real case + real extension, never the wrong default", async () => {
+		const cwd = await seedGeneratorWorkspaceWithSourcePaths("g-sourcepath");
+		const result = await runCli(["generate"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		const content = await readFile(
+			join(cwd, ".versailles", "generated", "AccountService.test.ts"),
+			"utf8",
+		);
+		// The import specifier must reference the real source file (correct
+		// case + .ts extension) — the manifest sourcePath flows into
+		// emitSuite options.modulePaths. Today the emitter renders the
+		// derived default "../../src/AccountService.js" (wrong extension).
+		expect(content).toMatch(
+			/import \{ AccountService \} from "[^"]*AccountService\.ts"/,
+		);
+		expect(content).not.toContain('from "../../src/AccountService.js"');
+	});
+
+	it("falls back to the deterministic default import when a manifest entry lacks sourcePath (legacy) — never an empty import", async () => {
+		const cwd = await seedGeneratorWorkspace("g-sourcepath-legacy");
+		// Only AccountService carries sourcePath; CustomerService is a legacy
+		// entry without one and must fall back to the deterministic default.
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				AccountService: {
+					sourceHash: "man-account",
+					fields: { balance: "number", status: "string" },
+					sourcePath: "src/AccountService.ts",
+				},
+				CustomerService: {
+					sourceHash: "man-customer",
+					fields: {},
+				},
+			},
+		});
+
+		const result = await runCli(["generate"], { cwd });
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		const content = await readFile(
+			join(cwd, ".versailles", "generated", "CustomerService.test.ts"),
+			"utf8",
+		);
+		// Deterministic default (the existing emitter fallback), never "".
+		expect(content).toContain(
+			'import { CustomerService } from "../../src/CustomerService.js";',
+		);
+		expect(content).not.toMatch(/from ""/);
+	});
+});
+
+// ── VERSAILLES-24: emitted imports RESOLVE to the real source file ─────────
+// E2E-gate finding: sourcePathOf (src/extractors/typescript.ts) stores
+// SOURCE-ROOT-relative paths ("order.ts" for <root>/src/order.ts), so
+// deriveModulePaths' join(cwd, "order.ts") points at <cwd>/order.ts and the
+// emitted import "../../order.ts" cannot resolve to the real <cwd>/src/order.ts
+// — the generated test fails at module load. Contract-gated fix direction
+// (manifest-extraction.contract.yaml + deterministic-generation.contract.yaml,
+// 2026-08-18, build-spec §3.3/§7/§9.4): extract-manifests stores
+// PROJECT-root-relative sourcePath ("src/order.ts"), so generate emits
+// "../../src/order.ts", which resolves to the real file. This test runs the
+// REAL pipeline (extract-manifests → generate), parses the emitted import,
+// resolves it against the generated file's directory, and asserts the resolved
+// path exists on disk and is the component's source file — resolvability, not
+// merely a matching extension or suffix.
+
+// Real nested source layout under <cwd>/src/ (config sourceRoots
+// "src/**/*.ts" expands to <cwd>/src) with a transitive sibling.
+const V24_ORDER_SOURCE = `export class Order {
+	id: number;
+	items: OrderItem[];
+}
+
+export class OrderItem {
+	sku: string;
+	qty: number;
+}
+`;
+
+function v24OrderContracts(): unknown {
+	return {
+		version: "1.0",
+		contracts: {
+			Order: {
+				invariants: [],
+				operations: {
+					setTotal: {
+						id: "Order.setTotal",
+						params: [{ name: "amount", type: "number" }],
+						preconditions: [{ id: "Order.setTotal.pre0", expr: "amount >= 0" }],
+						postconditions: [],
+						effects: [],
+						sourceHash: "settotal-hash",
+					},
+				},
+			},
+		},
+	};
+}
+
+describe("runCli generate — emitted imports resolve to the real source file (VERSAILLES-24)", () => {
+	it("extract-manifests + generate emit an import that resolves to <root>/src/order.ts on disk", async () => {
+		const cwd = await freshWorkspace("v24-resolvable");
+		await writeSource(cwd, "order.ts", V24_ORDER_SOURCE);
+		await writeWorkspaceFile(cwd, "contracts.json", v24OrderContracts());
+
+		const extract = await runCli(["extract-manifests"], { cwd });
+		expect(extract.ok).toBe(true);
+		expect(extract.exitCode).toBe(0);
+
+		const generate = await runCli(["generate"], { cwd });
+		expect(generate.ok).toBe(true);
+		expect(generate.exitCode).toBe(0);
+
+		const content = await readFile(
+			join(cwd, ".versailles", "generated", "Order.test.ts"),
+			"utf8",
+		);
+		const match = content.match(/import \{ Order \} from "([^"]+)"/);
+		expect(match).not.toBeNull();
+		const specifier = match?.[1] ?? "";
+
+		// POSIX separators on any platform (deriveModulePaths converts with
+		// .split(sep).join("/") — the emitted specifier never carries "\").
+		expect(specifier).not.toContain("\\");
+
+		// Resolvability: resolve the emitted specifier against the generated
+		// file's directory and assert it points at a file that ACTUALLY
+		// EXISTS and is the component's source file (src/order.ts). Today the
+		// extractor records "order.ts", so the specifier is "../../order.ts"
+		// and the resolved <cwd>/order.ts does not exist — the Red pin.
+		const generatedDir = join(cwd, ".versailles", "generated");
+		const resolved = resolve(generatedDir, specifier);
+		expect(existsSync(resolved)).toBe(true);
+		expect(basename(resolved)).toBe("order.ts");
 	});
 });

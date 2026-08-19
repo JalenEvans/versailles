@@ -17,6 +17,25 @@
  * - Precondition-violation cases: for clauses that cannot double as a
  *   boundary/partition reject (e.g. `x != null`), a dedicated case whose input
  *   falsifies the clause; outcome reject with the configured idiom.
+ * - Predicate-call preconditions: a top-level predicate call (e.g.
+ *   `isPositive(amount)`) gets one deterministic violation case synthesized
+ *   from the registered predicate's paramTypes, or a non-silent
+ *   PREDICATE_UNPLANNABLE suite warning when genuinely unplannable — never a
+ *   silent zero (deterministic-generation.contract.yaml, VERSAILLES-22 F3).
+ * - Predicate-aware valid inputs: valid-input synthesis (buildValidParams)
+ *   replaces a provably-invalid bounds-derived value (the default 0) with a
+ *   value the registered predicate accepts (number → 1), so a predicate guard
+ *   never receives an input it rejects on the accept side
+ *   (deterministic-generation.contract.yaml, VERSAILLES-23 F4).
+ * - Unplannable operations (VERSAILLES-25): a staged operation whose component
+ *   carries extracted method metadata but that is MISSING from it — no
+ *   matching method metadata and no resolvable source method — is never
+ *   emitted as the legacy static options-object call (dead, unrunnable code).
+ *   Instead it surfaces a non-silent UNPLANNABLE_OPERATION suite warning (the
+ *   same LoaderWarning tier as PREDICATE_UNPLANNABLE, VERSAILLES-22 F3) and
+ *   its cases are skipped while its clause ids stay mapped in coverage.json as
+ *   a detectable zero-coverage gap (build-spec §9.1/§9.3). A component with NO
+ *   methods key stays fully legacy — byte-identical options-object emission.
  * - Postcondition-satisfaction cases: valid inputs asserted against every
  *   postcondition, with the captured pre-call state stored in `inputs` under
  *   the manifest field names so `old(field)` resolves.
@@ -33,8 +52,10 @@ import type { Node } from "../core/parser.js";
 import type {
 	ContractClause,
 	ContractOperation,
+	LoaderWarning,
 	VersaillesContext,
 } from "../loader/workspace.js";
+import type { PredicateEntry } from "../predicates/registry.js";
 import type {
 	AssertionDescriptor,
 	CaseKind,
@@ -49,6 +70,7 @@ type NumericOp = ">" | ">=" | "<" | "<=";
 type ClauseShape =
 	| { kind: "numeric"; variable: string; op: NumericOp; boundary: number }
 	| { kind: "in"; variable: string; members: unknown[] }
+	| { kind: "predicateCall" }
 	| { kind: "other" };
 
 type EvalEnv = {
@@ -69,6 +91,27 @@ const PRE_STATE_NUMBER = 50;
 const EXPECTED_REJECTION_SWEEP_MAX = 300;
 /** Pre-state adjustment cap so the builder always terminates. */
 const PRE_STATE_ADJUST_ROUNDS = 10;
+/**
+ * Deterministic numeric counter-example for predicate falsification
+ * (VERSAILLES-22 F3, build-spec §9.1): number → -1. Chosen over 0 because 0
+ * SATISFIES isNonNegative-style predicates (n >= 0), so it would not falsify
+ * them; -1 deterministically falsifies positive, non-negative, even,
+ * greater-than-threshold, and similar numeric predicates the v1 heuristic must
+ * reject. No registry example-hint field exists yet, so paramTypes alone drive
+ * the synthesis (a `can`, not a `must`, per the contract).
+ */
+const PREDICATE_FALSIFY_NUMBER = -1;
+/**
+ * Deterministic numeric value the v1 accept-side heuristic uses for a
+ * predicate-guarded number param (VERSAILLES-23 F4, build-spec §9.1,
+ * deterministic-generation.contract.yaml example: isPositive → 1): the positive
+ * counterpart of PREDICATE_FALSIFY_NUMBER. Chosen over 0 because 0 is provably
+ * invalid for positive-style predicates (isPositive(0) is false); 1 is the
+ * smallest value positive, non-negative, and similar numeric predicates accept.
+ * No registry example-hint field exists yet, so paramTypes alone drive the
+ * synthesis (a `can`, not a `must`, per the contract).
+ */
+const PREDICATE_VALID_NUMBER = 1;
 
 /**
  * Valid JS identifier (Center W1): component / operation / param names flow
@@ -130,6 +173,10 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 	const operations: OperationCaseGroup[] = [];
 	const invariantCases: PlannedCase[] = [];
 	const clauseIds: string[] = [];
+	// Suite-level planning warnings (VERSAILLES-22 F3): a genuinely
+	// unplannable predicate-call precondition lands here instead of silently
+	// producing zero cases. LoaderWarning shape, ADR-0004 non-blocking tier.
+	const warnings: LoaderWarning[] = [];
 
 	for (const [componentName, component] of Object.entries(
 		context.contracts.contracts,
@@ -173,6 +220,46 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 				return `${componentName}.${operationName}.${kind}-${current}`;
 			};
 
+			// VERSAILLES-25 (deterministic-generation.contract.yaml §9.1): a
+			// staged operation with no matching method metadata and no
+			// resolvable source method must NOT be emitted as the legacy
+			// static options-object call (`<Component>.<op>({ ...inputs })`) —
+			// that is dead, unrunnable code (TypeError at runtime) with no
+			// signal. The authoritative "no resolvable source method" signal is
+			// the component's extracted methods map (F1): when the map EXISTS
+			// but the staged op is missing from it, warn non-silently (same
+			// LoaderWarning tier as PREDICATE_UNPLANNABLE) and skip the op's
+			// cases. A component with NO methods key stays fully legacy —
+			// "no matching metadata" is vacuously false there, so legacy
+			// suites keep their byte-identical options-object emission.
+			const componentMethods =
+				context.manifests?.manifests[componentName]?.methods;
+			if (
+				componentMethods !== undefined &&
+				componentMethods[operationName] === undefined
+			) {
+				const operationId = `${componentName}.${operationName}`;
+				const present = Object.keys(componentMethods).join(", ");
+				warnings.push({
+					code: "UNPLANNABLE_OPERATION",
+					field: operationId,
+					detail: `Staged operation ${operationId} has no matching method in ${componentName}'s extracted methods metadata (present: ${present || "none"}) — no resolvable source method, so its cases are skipped and no call is emitted`,
+				});
+				// Keep the operation group in the suite with EMPTY cases: the
+				// component's file still renders (the CLI e2e reads it), and
+				// the clause ids collected above stay mapped in coverage.json
+				// as a detectable zero-coverage gap (contract can: skip the
+				// cases, keep the coverage gap visible). The emitter renders
+				// no invocation for an empty-case group — and never the
+				// legacy options-object call.
+				operations.push({
+					component: componentName,
+					operation: operationName,
+					cases,
+				});
+				continue;
+			}
+
 			// §9.1 — per-operation cases.
 			for (const pre of preconditions) {
 				const ast = context.parsedContracts[pre.id];
@@ -184,6 +271,19 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 					planBoundaryCases(shape, pre.id, cases, nextId, idiom);
 				} else if (shape.kind === "in") {
 					planPartitionCases(shape, pre.id, cases, nextId, idiom);
+				} else if (shape.kind === "predicateCall") {
+					// classifyClause returns "predicateCall" exactly when
+					// ast.type === "predicateCall", so the cast is safe and
+					// narrows the Node union for the synthesizer.
+					planPredicateViolationCase(
+						ast as Extract<Node, { type: "predicateCall" }>,
+						pre.id,
+						cases,
+						nextId,
+						idiom,
+						warnings,
+						context,
+					);
 				} else {
 					planGenericViolationCase(ast, pre.id, cases, nextId, idiom);
 				}
@@ -305,7 +405,7 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 		}
 	}
 
-	return { operations, invariantCases, clauseIds };
+	return { operations, invariantCases, clauseIds, warnings };
 }
 
 /**
@@ -460,7 +560,9 @@ function planEnumPartitionCases(
  * §9.1 precondition-violation for clauses that cannot double as a
  * boundary/partition reject (e.g. `newTier != null`). Synthesizes a
  * deterministic falsifying input; clauses we cannot falsify are skipped
- * (v1 heuristic — no SMT solver, build-spec §9.5).
+ * (v1 heuristic — no SMT solver, build-spec §9.5). Top-level predicate-call
+ * clauses NEVER reach here (they are routed to planPredicateViolationCase, so
+ * their coverage gap is never silent).
  */
 function planGenericViolationCase(
 	ast: Node,
@@ -481,6 +583,173 @@ function planGenericViolationCase(
 		expects: { outcome: "reject", rejectionIdiom: idiom },
 		traces: [clauseId],
 	});
+}
+
+/**
+ * §9.1 predicate-call violation synthesis (deterministic-generation.contract.yaml
+ * + build-spec §9.1, VERSAILLES-22 F3): a precondition whose AST is a
+ * predicate call (e.g. `isPositive(amount)`) must produce at least one
+ * deterministic violation case, or an explicit non-silent PREDICATE_UNPLANNABLE
+ * warning — never a silent zero. The falsifying input is synthesized purely
+ * from the registered predicate's paramTypes (no randomness, ADR-0002); the
+ * case is a normal §9.1 violation case (kind "precondition-violation", traces
+ * the clause id, outcome reject with the configured rejection idiom, ADR-0007).
+ */
+function planPredicateViolationCase(
+	ast: Extract<Node, { type: "predicateCall" }>,
+	clauseId: string,
+	cases: PlannedCase[],
+	nextId: (kind: CaseKind) => string,
+	idiom: string,
+	warnings: LoaderWarning[],
+	context: VersaillesContext,
+): void {
+	const entry = context.predicates?.predicates?.[ast.name];
+	if (entry === undefined) {
+		warnings.push({
+			code: "PREDICATE_UNPLANNABLE",
+			field: clauseId,
+			detail: `Predicate "${ast.name}" is not registered in predicates.json — no falsifying input can be derived for ${clauseId}`,
+		});
+		return;
+	}
+	const falsifier = predicateFalsifyingInput(ast, entry);
+	if (falsifier === null) {
+		warnings.push({
+			code: "PREDICATE_UNPLANNABLE",
+			field: clauseId,
+			detail: `Cannot deterministically falsify predicate call "${ast.name}" for ${clauseId} — the v1 heuristic requires the first argument to be a single-segment field reference with a primitive paramType (number, boolean, or string)`,
+		});
+		return;
+	}
+	cases.push({
+		id: nextId("precondition-violation"),
+		kind: "precondition-violation",
+		description: `violates ${clauseId} (predicate ${ast.name} falsified via ${falsifier.argName})`,
+		inputs: { [falsifier.argName]: falsifier.value },
+		expects: { outcome: "reject", rejectionIdiom: idiom },
+		traces: [clauseId],
+	});
+}
+
+/** A deterministic falsifying input for one predicate call argument. */
+type PredicateFalsifier = { argName: string; value: unknown };
+
+/**
+ * The v1 falsification heuristic (build-spec §9.5 keeps SMT out of v1 scope):
+ * the predicate's FIRST argument is the guarded value — its single-segment
+ * fieldRef name becomes the inputs key, and the predicate's first paramType
+ * determines the deterministic counter-example (number → -1, boolean → false,
+ * string → ""). Returns null when genuinely unplannable: no args, a
+ * non-fieldRef or multi-segment first argument, or a paramType the heuristic
+ * cannot reason about (e.g. "list<number>", optional/component/enum types).
+ */
+function predicateFalsifyingInput(
+	ast: Extract<Node, { type: "predicateCall" }>,
+	entry: PredicateEntry,
+): PredicateFalsifier | null {
+	const firstArg = ast.args[0];
+	if (
+		firstArg === undefined ||
+		firstArg.type !== "fieldRef" ||
+		firstArg.path.length !== 1 ||
+		typeof firstArg.path[0] !== "string"
+	) {
+		return null;
+	}
+	const paramType = entry.paramTypes[0]?.trim() ?? "";
+	if (paramType === "number") {
+		return { argName: firstArg.path[0], value: PREDICATE_FALSIFY_NUMBER };
+	}
+	if (paramType === "boolean") {
+		return { argName: firstArg.path[0], value: false };
+	}
+	if (paramType === "string") {
+		return { argName: firstArg.path[0], value: "" };
+	}
+	return null;
+}
+
+/**
+ * The v1 accept-side counterpart of predicateFalsifyingInput (VERSAILLES-23
+ * F4, build-spec §9.1, deterministic-generation.contract.yaml): for a
+ * top-level predicateCall precondition whose FIRST argument is a single-segment
+ * fieldRef, returns a deterministic value the registered predicate ACCEPTS per
+ * paramTypes[0] (number → PREDICATE_VALID_NUMBER, boolean → true, string →
+ * "ok"). Returns undefined — no override, no warning, no crash — when the
+ * argument is not a single-segment fieldRef or the paramType is one the v1
+ * heuristic cannot reason about (e.g. "list<number>", optional/component/enum
+ * types). Accept-side synthesis NEVER pushes to suite.warnings: the
+ * PREDICATE_UNPLANNABLE channel is violation-only (F3), so a degenerate
+ * accept-all predicate must plan an accept with NO warning and NO crash.
+ */
+function predicateValidValue(
+	ast: Extract<Node, { type: "predicateCall" }>,
+	entry: PredicateEntry,
+): unknown | undefined {
+	const firstArg = ast.args[0];
+	if (
+		firstArg === undefined ||
+		firstArg.type !== "fieldRef" ||
+		firstArg.path.length !== 1 ||
+		typeof firstArg.path[0] !== "string"
+	) {
+		return undefined;
+	}
+	const paramType = entry.paramTypes[0]?.trim() ?? "";
+	if (paramType === "number") {
+		return PREDICATE_VALID_NUMBER;
+	}
+	if (paramType === "boolean") {
+		return true;
+	}
+	if (paramType === "string") {
+		return "ok";
+	}
+	return undefined;
+}
+
+/**
+ * Finds the first registered predicate-call precondition guarding a param — a
+ * top-level predicateCall whose first argument is a single-segment fieldRef
+ * naming the param — and returns the value that predicate ACCEPTS per
+ * paramTypes[0]. Returns undefined when no guard applies (predicate-less
+ * param, unregistered predicate, non-fieldRef / multi-segment arg, unknown
+ * paramType): every one of those is a conservative no-override path with no
+ * warning and no crash.
+ */
+function predicateValidValueForParam(
+	paramName: string,
+	preconditions: ContractClause[],
+	context: VersaillesContext,
+): unknown | undefined {
+	for (const pre of preconditions) {
+		const ast = context.parsedContracts[pre.id];
+		if (ast === undefined || ast.type !== "predicateCall") {
+			continue;
+		}
+		const firstArg = ast.args[0];
+		if (
+			firstArg?.type !== "fieldRef" ||
+			firstArg.path.length !== 1 ||
+			typeof firstArg.path[0] !== "string" ||
+			firstArg.path[0] !== paramName
+		) {
+			continue;
+		}
+		const entry = context.predicates?.predicates?.[ast.name];
+		if (entry === undefined) {
+			continue;
+		}
+		const value = predicateValidValue(
+			ast as Extract<Node, { type: "predicateCall" }>,
+			entry,
+		);
+		if (value !== undefined) {
+			return value;
+		}
+	}
+	return undefined;
 }
 
 /**
@@ -803,7 +1072,13 @@ function numericConstraintBounds(
  * Builds deterministic valid call arguments: numeric params pick a value
  * inside the intersection of their numeric comparison constraints; string
  * params pick the first `in`-clause member when constrained; enum params pick
- * their first member.
+ * their first member. Predicate-aware (VERSAILLES-23 F4, build-spec §9.1):
+ * when a registered predicate-call precondition guards a numeric param and the
+ * bounds-derived value is the provably-invalid default 0, the value is
+ * replaced with one the predicate accepts (number → PREDICATE_VALID_NUMBER).
+ * Non-zero bound-derived values are kept (e.g. amount >= 10 with
+ * isPositive(amount) keeps 10 — overriding to 1 would break the bound).
+ * Accept-side synthesis never pushes to warnings and never crashes.
  */
 function buildValidParams(
 	operation: ContractOperation,
@@ -831,7 +1106,24 @@ function buildValidParams(
 	for (const param of operation.params ?? []) {
 		const typeRef = param.type.trim();
 		if (typeRef === "number") {
-			params[param.name] = pickNumeric(lower[param.name], upper[param.name]);
+			let value = pickNumeric(lower[param.name], upper[param.name]);
+			// Conservative v1 predicate override: only when the derived value
+			// is the provably-invalid default 0. A non-zero bound-derived value
+			// already satisfies a positive-style predicate guard, so it stays.
+			// The typeof guard also keeps boolean/string predicate values out of
+			// the number branch (defensive; a validated context cannot pair a
+			// number param with a non-number predicate paramType).
+			if (value === 0) {
+				const predicateValue = predicateValidValueForParam(
+					param.name,
+					preconditions,
+					context,
+				);
+				if (typeof predicateValue === "number") {
+					value = predicateValue;
+				}
+			}
+			params[param.name] = value;
 		} else if (typeRef === "string") {
 			params[param.name] = inFirst[param.name] ?? "initial";
 		} else if (typeRef === "boolean") {
@@ -1027,6 +1319,9 @@ function evaluate(node: Node, env: EvalEnv): unknown {
 
 /** Classifies a clause AST into the shapes the planner can act on. */
 function classifyClause(ast: Node): ClauseShape {
+	if (ast.type === "predicateCall") {
+		return { kind: "predicateCall" };
+	}
 	if (ast.type !== "compare") {
 		return { kind: "other" };
 	}

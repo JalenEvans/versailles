@@ -62,7 +62,10 @@ export async function handleCheck(cwd: string): Promise<CliResult> {
 		return zeroRoots;
 	}
 
-	const extracted = extractManifests(roots);
+	// cwd is the project root: recomputed entries' sourcePath is anchored
+	// project-root-relative (VERSAILLES-24) — check only compares structural
+	// hashes, but the extracted entries stay consistent with extract-manifests.
+	const extracted = extractManifests(roots, cwd);
 	const extractionWarnings = extractorWarnings(extracted.warnings);
 
 	const staleIds: string[] = [];
@@ -73,7 +76,11 @@ export async function handleCheck(cwd: string): Promise<CliResult> {
 			// is not reported as stale (pruning is an extract-manifests concern).
 			continue;
 		}
-		if (computeSourceHash(fresh.fields) !== entry.sourceHash) {
+		// Structural hash covers sorted field pairs PLUS sorted
+		// method-signature records (manifest-extraction.contract.yaml 2026-08-17,
+		// VERSAILLES-20 F1) — a fields-only recompute would false-positive
+		// STALE on every methods-bearing entry.
+		if (computeSourceHash(fresh.fields, fresh.methods) !== entry.sourceHash) {
 			staleIds.push(component);
 		}
 	}

@@ -1,8 +1,15 @@
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import { parseExpression } from "../src/core/parser.js";
 import type { ClauseKind, Node, ParseError } from "../src/core/parser.js";
+import { extractManifests } from "../src/extractors/index.js";
 // The generator core (src/generator/) is implemented; these value imports
 // resolve at runtime. The assertions below pin the xunit/pytest emitter
 // contract the implementation must satisfy.
@@ -10,6 +17,7 @@ import { emitSuite, planTestCases } from "../src/generator/index.js";
 import type {
 	EmittedFile,
 	EmitterFramework,
+	PlannedCase,
 	PlannedSuite,
 } from "../src/generator/index.js";
 import type {
@@ -1071,3 +1079,816 @@ const contextArb: fc.Arbitrary<VersaillesContext> = fc
 			`status in [${members.map((member) => `"${member}"`).join(", ")}]`,
 		),
 	);
+
+// ── Shape-aware vitest calls from manifest method metadata (VERSAILLES-20 F1) ─
+//
+// The vitest emitter always renders `Component.operation({...inputs})` — a
+// static call with an options-object — which breaks against the most common TS
+// shape: instance methods with positional params (e.g. `class Order {
+// addItem(sku: string): void }` → `Order.addItem({ sku: "" })` →
+// TypeError: Order.addItem is not a function). Void-returning operations also
+// get a failing `expect(result).toBeDefined()`.
+//
+// FIXED (deterministic-generation.contract.yaml 2026-08-17, build-spec §9.4):
+// emitters render calls from manifest method metadata — instance → `new
+// <Component>().<op>(...positional params)`, static → `<Component>.<op>(...
+// positional params)`, params in declared order, and void-return accept cases
+// carry NO return-value assertion.
+//
+// The metadata seam is the emitSuite options object (mirroring the existing
+// modulePaths option — both are per-component overrides threaded through the
+// emitter seam; the planner/emitter boundary stays the framework-agnostic IR):
+//
+//   emitSuite(suite, "vitest", {
+//     methods: { Order: { addItem: { static: false, params: ["sku"], returnType: "void" } } },
+//   })
+//
+// The option is OPTIONAL: with no methods metadata the emitter keeps today's
+// legacy options-object static call (backward compatible — existing pins in
+// tests/generator.test.ts and the E test below stay green).
+
+function singleOperationSuite(
+	component: string,
+	operation: string,
+	cases: PlannedCase[],
+): PlannedSuite {
+	return {
+		clauseIds: cases.flatMap((case_) => case_.traces),
+		operations: [{ component, operation, cases }],
+		invariantCases: [],
+	};
+}
+
+/** The Phase 1 failure: `class Order { addItem(sku: string): void }`. */
+function orderSuite(): PlannedSuite {
+	return singleOperationSuite("Order", "addItem", [
+		{
+			id: "Order.addItem.boundary-0",
+			kind: "boundary",
+			description: "accept with a sku",
+			inputs: { sku: "ABC" },
+			expects: { outcome: "accept" },
+			traces: ["Order.addItem.pre0"],
+		},
+		{
+			id: "Order.addItem.boundary-1",
+			kind: "boundary",
+			description: "reject with an empty sku",
+			inputs: { sku: "" },
+			expects: { outcome: "reject", rejectionIdiom: "throws" },
+			traces: ["Order.addItem.pre0"],
+		},
+	]);
+}
+
+const ORDER_METHODS = {
+	Order: {
+		addItem: { static: false, params: ["sku"], returnType: "void" },
+	},
+};
+
+describe("emitSuite — shape-aware vitest calls from method metadata (VERSAILLES-20 F1, §9.4)", () => {
+	it("renders an instance method as new Order().addItem(...) — positional params, never Order.addItem({ sku: ... })", () => {
+		const files = emitSuite(orderSuite(), "vitest", {
+			methods: ORDER_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// The accept case constructs the instance and passes the param
+		// positionally — the exact Phase 1 failure shape.
+		expect(order?.content).toContain('new Order().addItem("ABC")');
+		// No static call on the instance method, for accept OR reject cases.
+		expect(order?.content).not.toContain("Order.addItem(");
+		// No options-object argument — positional params only.
+		expect(order?.content).not.toContain('{ sku: "ABC" }');
+		// Reject cases render the same shape-aware call inside the idiom.
+		expect(order?.content).toContain(
+			'expect(() => new Order().addItem("")).toThrow()',
+		);
+	});
+
+	it("renders a static method as Component.op(...) with positional params — never an options object", () => {
+		const suite = singleOperationSuite("Order", "staticOp", [
+			{
+				id: "Order.staticOp.boundary-0",
+				kind: "boundary",
+				description: "static accept",
+				inputs: { n: 2 },
+				expects: { outcome: "accept" },
+				traces: ["Order.staticOp.pre0"],
+			},
+		]);
+		const files = emitSuite(suite, "vitest", {
+			methods: {
+				Order: {
+					staticOp: { static: true, params: ["n"], returnType: "number" },
+				},
+			},
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		expect(order?.content).toContain("Order.staticOp(2)");
+		expect(order?.content).not.toContain("Order.staticOp({");
+		expect(order?.content).not.toContain("{ n: 2 }");
+	});
+
+	it("passes params positionally in the DECLARED order, not the inputs-object order", () => {
+		// The inputs object is deliberately reversed relative to the declared
+		// params, so only metadata-driven ordering can render this call.
+		const suite = singleOperationSuite("Cart", "setSubtotal", [
+			{
+				id: "Cart.setSubtotal.boundary-0",
+				kind: "boundary",
+				description: "accept with amount and label",
+				inputs: { label: "gross", amount: 5 },
+				expects: { outcome: "accept" },
+				traces: ["Cart.setSubtotal.pre0"],
+			},
+		]);
+		const files = emitSuite(suite, "vitest", {
+			methods: {
+				Cart: {
+					setSubtotal: {
+						static: false,
+						params: ["amount", "label"],
+						returnType: "number",
+					},
+				},
+			},
+		});
+		const cart = files.find((file) => file.path.endsWith("Cart.test.ts"));
+		expect(cart).toBeDefined();
+
+		expect(cart?.content).toContain('new Cart().setSubtotal(5, "gross")');
+		expect(cart?.content).not.toContain('new Cart().setSubtotal("gross", 5)');
+		expect(cart?.content).not.toContain("setSubtotal({");
+	});
+
+	it("passes only the declared params — captured pre-call state never leaks into the call", () => {
+		// Postcondition/invariant cases carry captured pre-state fields (e.g.
+		// balance) inside inputs alongside the params; the call must take the
+		// declared params only (metadata params: ["amount"]).
+		const suite = singleOperationSuite("Ledger", "withdraw", [
+			{
+				id: "Ledger.withdraw.postcondition-satisfaction-0",
+				kind: "postcondition-satisfaction",
+				description: "accept with captured pre-state",
+				inputs: { amount: 55, balance: 50 },
+				expects: { outcome: "accept" },
+				traces: ["Ledger.withdraw.post0"],
+			},
+		]);
+		const files = emitSuite(suite, "vitest", {
+			methods: {
+				Ledger: {
+					withdraw: {
+						static: false,
+						params: ["amount"],
+						returnType: "number",
+					},
+				},
+			},
+		});
+		const ledger = files.find((file) => file.path.endsWith("Ledger.test.ts"));
+		expect(ledger).toBeDefined();
+
+		expect(ledger?.content).toContain("new Ledger().withdraw(55)");
+		// balance is pre-state, not a param — it must never appear as an arg.
+		expect(ledger?.content).not.toContain("new Ledger().withdraw(55, 50)");
+		// Non-void accept cases still assert the result (only void skips it).
+		expect(ledger?.content).toContain("expect(result).toBeDefined()");
+	});
+
+	it("renders a void accept case WITHOUT a return-value assertion", () => {
+		const files = emitSuite(orderSuite(), "vitest", {
+			methods: ORDER_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// addItem returns void — the accept case must call it without
+		// `expect(result).toBeDefined()` (which fails on undefined).
+		expect(order?.content).not.toContain("expect(result)");
+		// The call itself is still emitted (the accept case is not empty).
+		expect(order?.content).toContain('new Order().addItem("ABC")');
+	});
+
+	it("keeps the legacy options-object static call when NO methods metadata is present (backward compatible)", () => {
+		// No `methods` option → today's behavior stays: static component call
+		// with an options-object and a toBeDefined assertion. Existing pins
+		// (tests/generator.test.ts vitest describes) depend on this default.
+		const files = emitSuite(orderSuite(), "vitest");
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		expect(order?.content).toContain('Order.addItem({ sku: "ABC" })');
+		expect(order?.content).toContain("expect(result).toBeDefined()");
+	});
+});
+
+// ── VERSAILLES-26: void-op accept/invariant cases assert INSTANCE state ─────
+//
+// E2E-gate finding: an invariant case on a void-returning operation renders
+// `const result = new Order().addItem("initial"); expect(result.subtotal)...` —
+// addItem returns void, so `result` is undefined at runtime → TypeError:
+// Cannot read properties of undefined (reading 'subtotal'). The F1 voidAccept
+// branch (src/generator/emitters/vitest.ts) correctly drops toBeDefined() for
+// void accept cases WITHOUT assertions, but a void accept case WITH assertions
+// (invariant cases) still binds `const result = ${call}` and renders
+// `result.<field>` assertions on the void return value.
+//
+// FIXED (deterministic-generation.contract.yaml 2026-08-18, build-spec §9.4,
+// VERSAILLES-26): accept/invariant cases on void-returning operations bind the
+// component INSTANCE — `const instance = new <Component>(); instance.<op>(...);
+// expect(instance.<field>)...` — never the void return value.
+
+/** An invariant PlannedCase on a VOID-returning operation (subject: subtotal). */
+function voidInvariantSuite(): PlannedSuite {
+	return {
+		clauseIds: ["Order.inv0"],
+		operations: [],
+		invariantCases: [
+			{
+				id: "Order.addItem.invariant-0",
+				kind: "invariant",
+				description:
+					"call Order.addItem and assert invariant Order.inv0 still holds",
+				inputs: { sku: "initial" },
+				expects: {
+					outcome: "accept",
+					postconditions: ["Order.inv0"],
+					assertions: [{ subject: "subtotal", op: ">=", literal: 0 }],
+				},
+				traces: ["Order.inv0"],
+			},
+		],
+	};
+}
+
+const ORDER_VOID_METHODS = {
+	Order: {
+		addItem: { static: false, params: ["sku"], returnType: "void" },
+	},
+};
+
+const ORDER_NONVOID_METHODS = {
+	Order: {
+		addItem: { static: false, params: ["sku"], returnType: "number" },
+	},
+};
+
+describe("emitSuite — void-op accept/invariant cases assert INSTANCE state, never the void return value (VERSAILLES-26, §9.4)", () => {
+	it("binds the INSTANCE and asserts instance.<field> for a void op's invariant case — never const result / result.<field>", () => {
+		const files = emitSuite(voidInvariantSuite(), "vitest", {
+			methods: ORDER_VOID_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// The void call is NOT bound to a result — the case binds the
+		// component instance, calls the op on it, and asserts instance state
+		// (subtotal is a component FIELD, not a return value).
+		expect(order?.content).toContain("const instance = new Order();");
+		expect(order?.content).toContain('instance.addItem("initial");');
+		expect(order?.content).toContain(
+			"expect(instance.subtotal).toBeGreaterThanOrEqual(0)",
+		);
+
+		// The runtime TypeError shape is forbidden on the void case.
+		expect(order?.content).not.toContain("const result =");
+		expect(order?.content).not.toContain("result.subtotal");
+		expect(order?.content).not.toContain("expect(result)");
+	});
+
+	it("keeps const result = ...; expect(result).toBeDefined(); expect(result.<field>) for a NON-void op's invariant case — no regression", () => {
+		const files = emitSuite(voidInvariantSuite(), "vitest", {
+			methods: ORDER_NONVOID_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// returnType "number" — the return value is the assertion receiver.
+		expect(order?.content).toContain(
+			'const result = new Order().addItem("initial");',
+		);
+		expect(order?.content).toContain("expect(result).toBeDefined();");
+		expect(order?.content).toContain(
+			"expect(result.subtotal).toBeGreaterThanOrEqual(0)",
+		);
+		// The instance-binding form is void-only — a non-void op never uses it.
+		expect(order?.content).not.toContain("const instance =");
+		expect(order?.content).not.toContain("instance.addItem(");
+	});
+
+	it("keeps the bare call for a void op accept case WITHOUT assertions — no const result binding (F1 pin)", () => {
+		const files = emitSuite(orderSuite(), "vitest", {
+			methods: ORDER_VOID_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// The accept case (boundary-0, no assertions) stays a bare call.
+		expect(order?.content).toContain('new Order().addItem("ABC");');
+		expect(order?.content).not.toContain("const result =");
+		expect(order?.content).not.toContain("expect(result)");
+	});
+
+	it("renders the configured rejection idiom wrapper for a void op's reject case — no result binding (guard)", () => {
+		const files = emitSuite(orderSuite(), "vitest", {
+			methods: ORDER_VOID_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// Reject cases on a void op stay the idiom around the shape-aware call.
+		expect(order?.content).toContain(
+			'expect(() => new Order().addItem("")).toThrow()',
+		);
+		// No result binding anywhere on the reject side.
+		expect(order?.content).not.toContain("const result =");
+		expect(order?.content).not.toContain("expect(result)");
+	});
+
+	it("keeps the legacy options-object static call with toBeDefined for an invariant case when NO methods metadata is present (backward compatible)", () => {
+		const files = emitSuite(voidInvariantSuite(), "vitest");
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// No methods metadata → the historical render stays byte-identical:
+		// static options-object call + toBeDefined + result.<field> assertion.
+		expect(order?.content).toContain('Order.addItem({ sku: "initial" })');
+		expect(order?.content).toContain("expect(result).toBeDefined();");
+		expect(order?.content).toContain(
+			"expect(result.subtotal).toBeGreaterThanOrEqual(0)",
+		);
+		// The instance-binding form is metadata-driven only — never the legacy
+		// default (a legacy void op must NOT silently change shape).
+		expect(order?.content).not.toContain("const instance =");
+		expect(order?.content).not.toContain("instance.addItem(");
+	});
+});
+
+/** Real Order source for the V-26 E2E runnability pin — addItem mutates state and returns void. */
+const V26_ORDER_SOURCE = `export class Order {
+	subtotal = 0;
+	addItem(sku: string): void {
+		this.subtotal = sku.length * 10;
+	}
+}
+`;
+
+describe("emitSuite — a generated suite for a void-op invariant case RUNS (VERSAILLES-26 E2E runnability gate)", () => {
+	it("executes the emitted void-op invariant test with bun's test runner — no TypeError on the void return value", async () => {
+		const root = await mkdtemp(join(tmpdir(), "versailles-v26-"));
+		try {
+			await writeFile(join(root, "order.ts"), `${V26_ORDER_SOURCE}\n`, "utf8");
+
+			const files = emitSuite(voidInvariantSuite(), "vitest", {
+				generatedDir: ".",
+				modulePaths: { Order: "./order" },
+				methods: ORDER_VOID_METHODS,
+			});
+			const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+			expect(order).toBeDefined();
+			await writeFile(
+				join(root, "Order.test.ts"),
+				order?.content ?? "",
+				"utf8",
+			);
+
+			// Run the generated suite with bun's test runner (which intercepts
+			// the vitest import). Today the emitted `const result = new
+			// Order().addItem(...); expect(result.subtotal)...` throws
+			// TypeError: undefined is not an object — the E2E-gate finding —
+			// so the run exits 1 (Red). The FIXED instance-bound render must
+			// exit 0.
+			const run = spawnSync("bun", ["test", "Order.test.ts"], {
+				cwd: root,
+				encoding: "utf8",
+			});
+			expect(
+				run.status,
+				`generated void-op invariant suite did not run clean:\n${run.stdout}\n${run.stderr}`,
+			).toBe(0);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});
+
+// ── W1 (Center review finding): STATIC void ops with assertions must NOT
+// bind an instance or assert instance.<field> ───────────────────────────────
+// deterministic-generation.contract.yaml (2026-08-18) extends the V-26
+// instance-binding carve-out with the static variant: a STATIC void-returning
+// operation has no instance state to assert — `new <Component>()` is a
+// completely different object that the static call never touches. The FIXED
+// render is the bare static call `<Component>.<op>(...);` with NO instance
+// binding and NO instance.<field> assertion. Today the emitter binds the
+// instance anyway (the misleading `const instance = new Order();` +
+// `expect(instance.subtotal)...` shape) — a false-green/false-red test whose
+// assertion is silently meaningless.
+//
+// Non-void static ops are untouched by this carve-out: their return value is
+// the assertion receiver (const result + toBeDefined + result.<field>), and
+// instance void ops keep the V-26 instance-bound render (pinned above).
+
+/** An invariant PlannedCase on a STATIC VOID-returning operation (subject: subtotal). */
+function staticVoidInvariantSuite(): PlannedSuite {
+	return {
+		clauseIds: ["Order.inv0"],
+		operations: [],
+		invariantCases: [
+			{
+				id: "Order.reset.invariant-0",
+				kind: "invariant",
+				description:
+					"call Order.reset and assert invariant Order.inv0 still holds",
+				inputs: {},
+				expects: {
+					outcome: "accept",
+					postconditions: ["Order.inv0"],
+					assertions: [{ subject: "subtotal", op: ">=", literal: 0 }],
+				},
+				traces: ["Order.inv0"],
+			},
+		],
+	};
+}
+
+const ORDER_STATIC_VOID_METHODS = {
+	Order: {
+		reset: { static: true, params: [], returnType: "void" },
+	},
+};
+
+const ORDER_STATIC_NONVOID_METHODS = {
+	Order: {
+		reset: { static: true, params: [], returnType: "number" },
+	},
+};
+
+describe("emitSuite — STATIC void-op invariant cases emit the bare static call, never an instance assertion (W1, deterministic-generation.contract.yaml)", () => {
+	it("emits ONLY the bare static call for a static void op's invariant case — no const instance binding, no expect(instance.<field>) (Red today: binds the instance and asserts instance.subtotal)", () => {
+		const files = emitSuite(staticVoidInvariantSuite(), "vitest", {
+			methods: ORDER_STATIC_VOID_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// THE fix: the static void call is emitted bare — a static call has
+		// no instance state to assert, so no `const instance = new Order();`
+		// and no `expect(instance.<field>)` in the emitted surface.
+		expect(order?.content).toContain("Order.reset();");
+		expect(order?.content).not.toContain("const instance = new Order();");
+		expect(order?.content).not.toContain("expect(instance.subtotal)");
+		expect(order?.content).not.toContain("const result =");
+	});
+
+	it("keeps the result-bound render for a STATIC NON-void op's invariant case — const result + toBeDefined + result.<field>, never an instance binding (non-regression)", () => {
+		const files = emitSuite(staticVoidInvariantSuite(), "vitest", {
+			methods: ORDER_STATIC_NONVOID_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// returnType "number" — the return value is the assertion receiver,
+		// exactly like the instance non-void pin (V-26): const result, then
+		// toBeDefined, then result.<field>. The static call shape stays.
+		expect(order?.content).toContain("const result = Order.reset();");
+		expect(order?.content).toContain("expect(result).toBeDefined();");
+		expect(order?.content).toContain(
+			"expect(result.subtotal).toBeGreaterThanOrEqual(0)",
+		);
+		// The instance-binding form is void-only — a non-void op never uses it.
+		expect(order?.content).not.toContain("const instance =");
+		expect(order?.content).not.toContain("instance.reset(");
+	});
+});
+
+/**
+ * Real Order source for the W1 E2E runnability pin. subtotal starts at -5 —
+ * DELIBERATELY violating the "subtotal >= 0" invariant on a fresh instance.
+ * The current misleading render (`const instance = new Order(); Order.reset();
+ * expect(instance.subtotal)...`) FAILS at runtime: the fresh instance's
+ * subtotal (-5) is untouched by the static call, so the assertion is a false
+ * red. The FIXED bare-call render (`Order.reset();`) asserts nothing about a
+ * fresh instance and runs green.
+ */
+const W1_ORDER_SOURCE = `export class Order {
+	subtotal = -5;
+	static reset(): void {
+		// Static/global reset — never touches a particular instance.
+	}
+}
+`;
+
+describe("emitSuite — a generated STATIC void-op invariant suite RUNS (W1 E2E runnability gate)", () => {
+	it("executes the emitted static void-op invariant test with the REAL vitest runner — exit 0 (Red today: the misleading instance assertion fails on a fresh instance)", async () => {
+		const root = await mkdtemp(join(tmpdir(), "versailles-w1-"));
+		try {
+			await writeFile(join(root, "order.ts"), `${W1_ORDER_SOURCE}\n`, "utf8");
+
+			const files = emitSuite(staticVoidInvariantSuite(), "vitest", {
+				generatedDir: ".",
+				modulePaths: { Order: "./order" },
+				methods: ORDER_STATIC_VOID_METHODS,
+			});
+			const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+			expect(order).toBeDefined();
+			await writeFile(
+				join(root, "Order.test.ts"),
+				order?.content ?? "",
+				"utf8",
+			);
+
+			// The REAL vitest runner (vitest.mjs under process.execPath) —
+			// the established V-27 command. Today the emitted
+			// `expect(instance.subtotal).toBeGreaterThanOrEqual(0)` fails
+			// (-5 >= 0 is false) → exit 1 (Red). The FIXED bare static call
+			// must exit 0.
+			const vitestBin = join(
+				dirname(fileURLToPath(import.meta.url)),
+				"..",
+				"node_modules",
+				"vitest",
+				"vitest.mjs",
+			);
+			const run = spawnSync(process.execPath, [vitestBin, "run"], {
+				cwd: root,
+				encoding: "utf8",
+			});
+			expect(
+				run.status,
+				`generated static void-op invariant suite did not run clean:\n${run.stdout}\n${run.stderr}`,
+			).toBe(0);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});
+
+/**
+ * VERSAILLES-24 module-path resolvability (deterministic-generation.contract.yaml
+ * §9.4, build-spec §9.4): an emitted import specifier derived from a manifest
+ * sourcePath must RESOLVE to the real source file from the generated file's
+ * directory — not merely share an extension or suffix. The deriveModulePaths
+ * seam (src/cli/handlers/generate.ts) computes
+ * relative(<root>/<generatedDir>, join(<root>, sourcePath)); this test mirrors
+ * that logic against a REAL nested temp-dir layout and proves the specifier
+ * resolves to the file that exists on disk. The sourcePath comes from the REAL
+ * extractor — the buggy side pre-fix (source-root-relative "models/order.ts"
+ * instead of project-root-relative "src/models/order.ts") — so the
+ * resolvability assertion is Red today: the derived specifier
+ * "../../order.ts" resolves to <root>/order.ts, which does not exist.
+ */
+
+// Real nested source layout: <root>/src/models/order.ts (project root = root;
+// source root = root/src, the directory the "src/**/*.ts" glob expands to).
+const V24_ORDER_SOURCE = `export class Order {
+	id: number;
+	items: OrderItem[];
+}
+
+export class OrderItem {
+	sku: string;
+	qty: number;
+}
+`;
+
+describe("emitSuite — module paths derived from project-root-relative sourcePath resolve to real files (VERSAILLES-24)", () => {
+	it("derives a specifier via the deriveModulePaths seam that resolves to the REAL nested source file on disk", async () => {
+		const root = await mkdtemp(join(tmpdir(), "versailles-v24-"));
+		try {
+			await mkdir(join(root, "src", "models"), { recursive: true });
+			const sourceFile = join(root, "src", "models", "order.ts");
+			await writeFile(sourceFile, `${V24_ORDER_SOURCE}\n`, "utf8");
+
+			// Real extraction with the project root: a covered entry's
+			// sourcePath must be project-root-relative ("src/models/order.ts"),
+			// never source-root-relative ("models/order.ts") — Red today.
+			const { manifests } = extractManifests([join(root, "src")], root);
+			expect(manifests.Order.sourcePath).toBe("src/models/order.ts");
+
+			// Mirror deriveModulePaths (src/cli/handlers/generate.ts): the
+			// specifier is node:path relative from <root>/<generatedDir> to
+			// join(<root>, sourcePath), POSIX separators, explicit ./ prefix
+			// when the target is not in a parent directory.
+			const generatedDir = ".versailles/generated";
+			const from = join(root, generatedDir);
+			const to = join(root, manifests.Order.sourcePath);
+			let specifier = relative(from, to).split(sep).join("/");
+			if (!specifier.startsWith(".")) specifier = `./${specifier}`;
+
+			// POSIX separators on any platform (C).
+			expect(specifier).not.toContain("\\");
+
+			// Emit via the modulePaths seam (mirrors generate's emitSuite
+			// options) and assert the specifier appears in the import line.
+			const files = emitSuite(orderSuite(), "vitest", {
+				generatedDir,
+				modulePaths: { Order: specifier },
+			});
+			const order = files.find(
+				(file) => file.path === `${generatedDir}/Order.test.ts`,
+			);
+			expect(order).toBeDefined();
+			expect(order?.content).toContain(`import { Order } from "${specifier}";`);
+
+			// RESOLVABILITY: resolve the emitted specifier against the
+			// generated file's directory — the result must be the real source
+			// file that exists on disk. With today's source-root-relative
+			// sourcePath the specifier is "../../order.ts" and resolves to
+			// <root>/order.ts, which does not exist — Red.
+			const generatedFile = join(root, `${generatedDir}/Order.test.ts`);
+			const resolved = resolve(dirname(generatedFile), specifier);
+			expect(resolved).toBe(sourceFile);
+			expect(existsSync(resolved)).toBe(true);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});
+
+// ── VERSAILLES-27: an operation group with ZERO planned cases emits NO describe ─
+//
+// E2E re-run finding: the V-25 skip path (UNPLANNABLE_OPERATION) keeps the
+// warned operation's group in the suite with an EMPTY cases array (planner.ts
+// keeps the group so the component file still renders and the coverage gap
+// stays mapped in coverage.json), but the vitest emitter renders
+// `describe("<op>", () => { });` UNCONDITIONALLY for every operation group —
+// an empty suite. Vitest 3.2.7 (and 4.1.10) hard-fails empty describes:
+// `Error: No test found in suite setSubtotal` → the whole file fails, exit 1.
+// All other cases pass; only the empty describe fails the file.
+//
+// FIXED (deterministic-generation.contract.yaml 2026-08-18, build-spec §9.4,
+// VERSAILLES-27): the emitter emits NO describe block for an operation whose
+// planned case list is empty — the operation is fully skipped by the planner,
+// so an empty suite is never rendered (the trace header already records the
+// operation's clause ids, §9.3). Sibling operations WITH cases render
+// byte-identically (D), and the invariant describe stays guarded on
+// `length > 0` exactly as today (B).
+
+const V27_EMPTY_OP = "setSubtotal";
+const V27_SIBLING_OP = "setTotal";
+
+/**
+ * A V-25-shaped suite at the emitter seam: the skipped operation's group
+ * survives planning with ZERO cases (planner.ts keeps the group), alongside a
+ * sibling operation with a real case. Mirror of the methodsMissingOpFixture
+ * suite in tests/generator-unplannable-operation.test.ts (which pins the
+ * PLANNED side — this fixture pins the EMITTED side).
+ */
+function emptyOperationGroupSuite(): PlannedSuite {
+	return {
+		clauseIds: [`Order.${V27_EMPTY_OP}.pre0`, `Order.${V27_SIBLING_OP}.pre0`],
+		operations: [
+			{ component: "Order", operation: V27_EMPTY_OP, cases: [] },
+			{
+				component: "Order",
+				operation: V27_SIBLING_OP,
+				cases: [
+					{
+						id: `Order.${V27_SIBLING_OP}.boundary-0`,
+						kind: "boundary",
+						description: "accept with an amount",
+						inputs: { amount: 25 },
+						expects: { outcome: "accept" },
+						traces: [`Order.${V27_SIBLING_OP}.pre0`],
+					},
+				],
+			},
+		],
+		invariantCases: [],
+	};
+}
+
+/** Method metadata for the sibling op only — the skipped op has no source method (V-25). */
+const V27_METHODS = {
+	Order: {
+		setTotal: { static: false, params: ["amount"], returnType: "number" },
+	},
+};
+
+describe("emitSuite — an operation group with ZERO planned cases emits NO describe block for it (VERSAILLES-27, §9.1)", () => {
+	it('emits NO describe block for the empty-case operation — no empty suite, no it.skip placeholder (Red today: the emitter renders describe("setSubtotal", () => {});)', () => {
+		const files = emitSuite(emptyOperationGroupSuite(), "vitest", {
+			methods: V27_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// THE fix: the skipped operation leaves NO describe in the file — the
+		// planner fully skipped it, so an empty suite is never rendered.
+		expect(order?.content).not.toContain('describe("setSubtotal", () => {');
+		// The pinned form is NO describe block (not the it.skip alternative):
+		// the skipped operation contributes NOTHING to the emitted surface.
+		expect(order?.content).not.toContain("it.skip(");
+
+		// The sibling operation WITH cases still emits its describe, unchanged.
+		expect(order?.content).toContain('describe("setTotal", () => {');
+	});
+
+	it("keeps the sibling operation's describe WITH cases byte-identical — only the empty group is omitted (non-regression D)", () => {
+		const files = emitSuite(emptyOperationGroupSuite(), "vitest", {
+			methods: V27_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// The with-cases sibling renders exactly the established F1 shape:
+		// shape-aware instance call + toBeDefined, byte-identical to the same
+		// case rendered in any existing suite (the empty group's presence must
+		// not perturb the sibling's render).
+		expect(order?.content).toContain('describe("setTotal", () => {');
+		expect(order?.content).toContain(
+			'it("Order.setTotal.boundary-0 — accept with an amount", () => {',
+		);
+		expect(order?.content).toContain(
+			"const result = new Order().setTotal(25);",
+		);
+		expect(order?.content).toContain("expect(result).toBeDefined();");
+	});
+
+	it("keeps the invariant describe guarded on length > 0 — empty invariantCases renders no invariants describe, non-empty still does (pin B)", () => {
+		// Empty invariantCases (the V-27 suite) → no `describe("Order invariants")`.
+		const files = emitSuite(emptyOperationGroupSuite(), "vitest", {
+			methods: V27_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+		expect(order?.content).not.toContain('describe("Order invariants"');
+
+		// Non-empty invariantCases → the invariants describe STILL emits (the
+		// existing V-26 guard at vitest.ts:144 stays — this is not a
+		// blanket "skip empty describes" change).
+		const withInvariants = emitSuite(voidInvariantSuite(), "vitest", {
+			methods: ORDER_VOID_METHODS,
+		});
+		const order2 = withInvariants.find((file) =>
+			file.path.endsWith("Order.test.ts"),
+		);
+		expect(order2).toBeDefined();
+		expect(order2?.content).toContain('describe("Order invariants", () => {');
+	});
+});
+
+/**
+ * Real Order source for the V-27 E2E runnability pin. setSubtotal does NOT
+ * exist in source (the V-25 shape: the staged op is missing from the source
+ * method metadata) — the generated file must not reference it at all.
+ */
+const V27_ORDER_SOURCE = `export class Order {
+	setTotal(amount: number): number {
+		return amount * 2;
+	}
+}
+`;
+
+describe("emitSuite — a generated suite containing an EMPTY operation group RUNS GREEN under the real vitest runner (VERSAILLES-27 E2E runnability gate)", () => {
+	it("executes the emitted file (empty op group + sibling with a real case) with the REAL vitest runner — exit 0, never 'No test found in suite' (Red today: vitest 3.2.7 hard-fails the empty describe)", async () => {
+		const root = await mkdtemp(join(tmpdir(), "versailles-v27-"));
+		try {
+			await writeFile(join(root, "order.ts"), `${V27_ORDER_SOURCE}\n`, "utf8");
+
+			const files = emitSuite(emptyOperationGroupSuite(), "vitest", {
+				generatedDir: ".",
+				modulePaths: { Order: "./order" },
+				methods: V27_METHODS,
+			});
+			const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+			expect(order).toBeDefined();
+			await writeFile(
+				join(root, "Order.test.ts"),
+				order?.content ?? "",
+				"utf8",
+			);
+
+			// The REAL vitest runner (vitest.mjs under process.execPath).
+			// bun's own test-runner shim TOLERATES empty describes, so `bun
+			// test` cannot reproduce the V-27 failure; the established command
+			// (package.json "test": "vitest run") must run the generated file
+			// green — no --passWithNoTests, no manual edits.
+			const vitestBin = join(
+				dirname(fileURLToPath(import.meta.url)),
+				"..",
+				"node_modules",
+				"vitest",
+				"vitest.mjs",
+			);
+			const run = spawnSync(process.execPath, [vitestBin, "run"], {
+				cwd: root,
+				encoding: "utf8",
+			});
+			expect(
+				run.status,
+				`generated suite with an empty op group did not run clean:\n${run.stdout}\n${run.stderr}`,
+			).toBe(0);
+			// The reported hard-fail shape is gone — no empty-suite rejection.
+			expect(run.stdout + run.stderr).not.toContain("No test found in suite");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});

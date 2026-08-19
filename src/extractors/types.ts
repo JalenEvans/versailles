@@ -15,10 +15,28 @@ export type FieldEntry = {
 	confidence: "high" | "low";
 };
 
+/**
+ * Method metadata for one resolvable method (build-spec §7,
+ * manifest-extraction.contract.yaml 2026-08-17): the signature record that
+ * powers shape-aware emitter calls. returnType is present only where
+ * determinable under the permissive policy (ADR-0004) — an unresolvable
+ * signature is recorded without it, never dropped and never a hard error.
+ */
+export type MethodMetadata = {
+	/** true for static methods; interface signatures are always instance. */
+	static: boolean;
+	/** Parameter names in DECLARED order. */
+	params: string[];
+	/** typeRef-grammar return type where determinable (void/number/...). */
+	returnType?: string;
+};
+
 /** A flat manifest entry for one component (class or interface). */
 export type ManifestEntry = {
 	component: string;
 	fields: FieldEntry[];
+	/** Per-method signature metadata; `{}` when the component has no methods. */
+	methods: Record<string, MethodMetadata>;
 	sourceHash: string;
 	sourcePath: string;
 	confidence: "high" | "low";
@@ -48,5 +66,12 @@ export type ExtractorResult = {
  */
 export interface ExtractorPlugin {
 	readonly language: "typescript" | "csharp" | "python";
-	extract(sourceRoots: string[]): ExtractorResult;
+	/**
+	 * @param sourceRoots Directory roots to scan (glob expansion is a CLI
+	 *   concern). Files are scanned recursively under these roots only.
+	 * @param projectRoot Optional project root (the CLI's cwd) anchoring
+	 *   sourcePath values project-root-relative (VERSAILLES-24). When omitted
+	 *   the plugin infers it from the source roots' common directory prefix.
+	 */
+	extract(sourceRoots: string[], projectRoot?: string): ExtractorResult;
 }

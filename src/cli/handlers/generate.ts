@@ -9,14 +9,15 @@
  * reject case. Deterministic: same context in, byte-identical files out.
  */
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 import {
 	coverageManifest,
 	emitSuite,
 	planTestCases,
 } from "../../generator/index.js";
-import { loadWorkspace } from "../../loader/workspace.js";
+import type { EmitOptions } from "../../generator/index.js";
+import { type ManifestsFile, loadWorkspace } from "../../loader/workspace.js";
 import { contextErrors, contextWarnings, messageOf } from "../context.js";
 import type { CliResult } from "../types.js";
 
@@ -52,6 +53,16 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 		const suite = planTestCases(context);
 		const files = emitSuite(suite, context.config.testFramework, {
 			generatedDir: context.config.generatedDir,
+			modulePaths: deriveModulePaths(
+				cwd,
+				context.config.generatedDir,
+				context.manifests,
+			),
+			// Shape-aware call metadata (VERSAILLES-20 F1): pass each
+			// component's manifest method metadata straight into the emitter.
+			// Absent for legacy entries → the emitter keeps the options-object
+			// static call (backward compatible).
+			methods: deriveMethods(context.manifests),
 		});
 		for (const file of files) {
 			const target = join(cwd, file.path);
@@ -73,7 +84,12 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 		return {
 			ok: true,
 			errors: [],
-			warnings: contextWarnings(context),
+			// Suite-level planning warnings (VERSAILLES-22 F3) ride the same
+			// non-blocking tier as loader/extractor warnings (ADR-0004): a
+			// PREDICATE_UNPLANNABLE warning surfaces here with exit 0 — the
+			// coverage gap is visible, never silent. LoaderWarning is
+			// structurally compatible with CliError ({ code, field, detail }).
+			warnings: [...contextWarnings(context), ...(suite.warnings ?? [])],
 			exitCode: 0,
 			output: {
 				files: [...files.map((file) => file.path), coveragePath],
@@ -95,4 +111,58 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 			output: { files: [] },
 		};
 	}
+}
+
+/**
+ * Derives per-component emitter module paths from the loaded manifests store
+ * (VERSAILLES-21 F2, deterministic-generation.contract.yaml §9.4): a covered
+ * entry's sourcePath is root-relative (e.g. "src/order.ts"), and the generated
+ * file lives under <cwd>/<generatedDir>/<Component>.test.ts — so the import
+ * specifier is the node:path-relative path from the generated file's directory
+ * to the source file, with POSIX separators and an explicit ./ prefix when the
+ * target is not in a parent directory. The sourcePath extension is preserved
+ * (the vitest convention already emits .ts imports; the legacy default
+ * "../../src/<Component>.js" only applies when sourcePath is absent). Entries
+ * lacking sourcePath (legacy) contribute no override — the emitter falls back
+ * to its deterministic default, never an empty-string import.
+ */
+function deriveModulePaths(
+	cwd: string,
+	generatedDir: string,
+	manifests: ManifestsFile | null,
+): Record<string, string> {
+	const modulePaths: Record<string, string> = {};
+	for (const [component, entry] of Object.entries(manifests?.manifests ?? {})) {
+		if (typeof entry.sourcePath !== "string" || entry.sourcePath.length === 0) {
+			continue;
+		}
+		const from = join(cwd, generatedDir);
+		const to = join(cwd, entry.sourcePath);
+		let rel = relative(from, to).split(sep).join("/");
+		if (!rel.startsWith(".")) {
+			rel = `./${rel}`;
+		}
+		modulePaths[component] = rel;
+	}
+	return modulePaths;
+}
+
+/**
+ * Per-component method metadata for the emitter seam (VERSAILLES-20 F1): the
+ * manifest store already carries each covered entry's optional `methods`
+ * (method name → { static, params, returnType? }) — the generate handler
+ * maps them onto the emitSuite options shape exactly like modulePaths.
+ * Components without a `methods` key contribute nothing, so the emitter's
+ * legacy default applies for them.
+ */
+function deriveMethods(
+	manifests: ManifestsFile | null,
+): EmitOptions["methods"] {
+	const methods: EmitOptions["methods"] = {};
+	for (const [component, entry] of Object.entries(manifests?.manifests ?? {})) {
+		if (entry.methods !== undefined) {
+			methods[component] = entry.methods;
+		}
+	}
+	return methods;
 }
