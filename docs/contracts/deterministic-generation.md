@@ -24,13 +24,18 @@ IR and lets per-framework emitters (vitest, xUnit, pytest) render it into real t
 - Every generated test carries a traceability comment; `generated/coverage.json` maps clause
   IDs → test IDs so a clause with **zero generated tests is detectable**.
 - Emitters render shape-aware calls from method metadata: instance → `new <Component>().<op>(...)`,
-  static → `<Component>.<op>(...)`, and void-return accept/invariant cases bind the component
-  **instance** — assertions target instance state, never the void return value (VERSAILLES-26).
+  static → `<Component>.<op>(...)`, and void-return accept/invariant cases on **instance**
+  operations bind the component **instance** — assertions target instance state, never the
+  void return value (VERSAILLES-26). A **static** void operation with assertions renders the
+  bare call with no `instance.<field>` assertion — the static call never touches a
+  constructed instance (VERSAILLES-26 follow-up).
 - Import specifiers derive from project-root-relative `sourcePath` and **resolve to the real
   source file** from the generated file's directory (VERSAILLES-24).
 - A planned operation with no matching source method surfaces a non-silent, non-blocking
   `UNPLANNABLE_OPERATION` warning (exit 0, `CliResult.warnings`) and is **never emitted as an
-  unrunnable static call** (VERSAILLES-25).
+  unrunnable static call** (VERSAILLES-25). The guard fires whenever the component's entry
+  carries a `methods` key — empty or not — missing the planned op; only preserved legacy
+  entries lacking the key entirely keep the legacy default (VERSAILLES-25 follow-up).
 - Regeneration is idempotent and full-file; generation only runs when `context.isValid` is
   true — invalid contexts are rejected with structured errors and **no test files written**.
 

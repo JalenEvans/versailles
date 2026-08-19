@@ -160,10 +160,17 @@ Rules:
   It is never source-root-relative (`order.ts`) and never absolute, so the generator's
   `join(cwd, sourcePath)` derives a module path that resolves to the real file
   (VERSAILLES-24). Covered entries always carry it; legacy entries may lack it and are
-  preserved as-is.
+  preserved as-is. When no project root is derivable (projectRoot omitted and the source
+  roots share no common prefix), the fallback is the file relative to `sourceRoots[0]`
+  when that yields a relative path — or the field is omitted — never the absolute file
+  path (VERSAILLES-24 follow-up).
 - `methods` records per-component method metadata — method name, static/instance,
   ordered param names, return type where determinable — so the generator can render
-  shape-aware calls. Method bodies never enter the manifest.
+  shape-aware calls. Method bodies never enter the manifest. Every entry **refreshed by an
+  extract run always carries the `methods` key** — possibly `{}`, the first-class
+  "we know this component has zero methods" signal that distinguishes a freshly-extracted
+  entry from a preserved legacy one; only preserved legacy entries the extractor never
+  touched may lack the key (VERSAILLES-25 follow-up).
 - `sourceHash` covers the structural shape: sorted field name+type pairs plus sorted
   method-signature records. Method bodies are excluded, so body-only edits don't trigger
   false staleness.
@@ -359,12 +366,19 @@ aggregating parse + loader + semantic errors (ADR-0010).
 - Per-component **method metadata**: every resolvable method is recorded with its name,
   static/instance flag, ordered param names, and return type where determinable — so the
   generator can render shape-aware calls (instance vs static vs void). Method bodies are
-  never recorded.
+  never recorded. Every entry **refreshed by an extract run persists the `methods` key
+  even when the component has zero methods** — an empty map `{}` is the first-class
+  "we know this component has zero methods" signal that keeps the planner's
+  `UNPLANNABLE_OPERATION` guard firing for any planned op; only preserved legacy entries
+  the extractor never touched may lack the key (VERSAILLES-25 follow-up).
 - `sourcePath` recording: every covered component entry carries the source file path it
   was extracted from, expressed **project-root-relative with POSIX separators**
   (`src/order.ts`, never `order.ts` and never absolute), persisted through
   `manifests.json` (§3.3) so the loader and generator can derive real module import paths
-  that resolve against the workspace root (VERSAILLES-24).
+  that resolve against the workspace root (VERSAILLES-24). When projectRoot is omitted
+  and the source roots share no common prefix (disjoint roots), the fallback is the file
+  relative to `sourceRoots[0]` when that yields a relative path — or the field is omitted
+  — never the absolute file path (VERSAILLES-24 follow-up).
 - `sourceHash` computation: hash of the **structural shape only** (sorted field
   name+type pairs plus sorted method-signature records), not the full source file and
   never method bodies — so unrelated changes to method bodies don't trigger false
@@ -420,6 +434,11 @@ For each operation:
   non-blocking warning** — `UNPLANNABLE_OPERATION`, same tier as the predicate-call
   `PREDICATE_UNPLANNABLE` warning: exit 0, warning in `CliResult.warnings` — and the
   generator never emits the legacy static options-object call for it (VERSAILLES-25).
+  The guard fires whenever the component's entry carries a `methods` key — empty or not —
+  missing the planned op: an empty map `{}` on a refreshed entry still warns for every
+  planned op, because it is the first-class "we know this component has zero methods"
+  signal. Only an entry lacking the `methods` key entirely (a preserved legacy entry the
+  extractor never touched) keeps the legacy default (VERSAILLES-25 follow-up).
 - **Postcondition-satisfaction cases**: for valid inputs (satisfying all preconditions),
   generate a case and assert every postcondition clause holds on the result, resolving
   `old(field)` against captured pre-call state.
@@ -454,9 +473,12 @@ For each operation:
   instance methods via `new <Component>().<operation>(...)`, static methods via
   `<Component>.<operation>(...)`, params passed positionally in declared order, and no
   return-value assertion for void-returning operations. Accept/invariant cases on
-  void-returning operations bind the component **instance** — `const instance = new
-  <Component>(); instance.<op>(...); expect(instance.<field>)...` — so assertions target
-  instance state, never the void return value (VERSAILLES-26).
+  **instance** void-returning operations bind the component **instance** — `const instance
+  = new <Component>(); instance.<op>(...); expect(instance.<field>)...` — so assertions
+  target instance state, never the void return value (VERSAILLES-26). For a **static**
+  void operation with assertions, the case renders the bare call without any
+  `instance.<field>` assertion — the static call never touches a constructed instance, so
+  asserting on one would be misleading (VERSAILLES-26 follow-up).
 - **Module paths**: emitters derive component import paths from the manifest `sourcePath`
   entry when present — a project-root-relative path (`src/order.ts`) joined against the
   workspace root and computed relative to the generated file's directory, so the emitted

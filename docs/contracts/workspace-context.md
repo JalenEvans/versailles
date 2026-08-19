@@ -25,6 +25,10 @@ loading.
   errors — what the human review UI shows, never a whole file.
 - `versailles check` distinguishes clean (`0`), parse/validation error (`1`), and blocking
   staleness (`2`); non-blocking staleness warns and still exits `0`.
+- The store shape's `methods` key is always present on **refreshed** entries — possibly
+  `{}`, the first-class zero-methods signal — with only preserved legacy entries allowed to
+  lack it; a present empty map is surfaced exactly as stored, never stripped or flagged
+  INVALID_SHAPE (VERSAILLES-25 follow-up).
 
 ## What it forbids (must not)
 

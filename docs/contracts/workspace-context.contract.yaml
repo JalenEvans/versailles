@@ -15,7 +15,7 @@ owns:
   - "The scoped extraction helper (build-spec §6.6): component/operation sub-object plus its errors/warnings"
   - "Staleness orchestration via versailles check with exit codes 0/1/2 (build-spec §8)"
   - "The shared-loader guarantee: every consuming component loads through this module (build-spec §6)"
-  - "The manifests.json store entry shape: sourcePath (string; project-root-relative with POSIX separators when present, e.g. src/order.ts — never empty for covered entries; legacy entries lacking it preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable, permissive low-confidence policy) (build-spec §3.3, §7)"
+  - "The manifests.json store entry shape: sourcePath (string; project-root-relative with POSIX separators when present, e.g. src/order.ts — never empty for covered entries; legacy entries lacking it preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable, permissive low-confidence policy); every refreshed entry always carries the methods key — possibly {} — and only preserved legacy entries may lack it, the empty map being the first-class zero-methods signal the planner reads (build-spec §3.3, §7, VERSAILLES-25 follow-up)"
   - "Surfacing sourcePath and methods on ManifestsFile entries so downstream consumers (generate handler → emitter modulePaths + call shape) can use them"
 
 purpose: |
@@ -32,7 +32,9 @@ purpose: |
   sourcePath (the file a covered entry was extracted from) and per-component method metadata
   (methods), and it surfaces both on ManifestsFile entries so the generate handler and emitters
   can derive real module import paths and call shapes; legacy entries lacking them load and are
-  preserved as-is.
+  preserved as-is. A refreshed entry's methods key may be the empty map {} — the first-class
+  signal that the extractor knows the component has zero methods — and the loader surfaces it
+  exactly as stored, never stripping or inventing it.
 
 invariants:
   - "The four top-level .versailles/ files are always loaded together; no file is interpreted in isolation (build-spec §2)."
@@ -41,7 +43,7 @@ invariants:
   - "The loader never throws on malformed input — missing files, invalid JSON, malformed-shape files, and malformed expressions all surface as structured LoaderError/ParseError/ValidationError objects inside the returned context; no failure path raises an unstructured exception (ADR-0010)."
   - "Every consuming component reaches the workspace through the single shared loader; no component re-implements loading (build-spec §6)."
   - "config.language and config.testFramework always validate against the ADR-0009 enum matrix."
-  - "A manifests.json store entry may carry sourcePath (project-root-relative with POSIX separators when present, e.g. src/order.ts — never an empty string for covered entries; legacy entries lacking it are preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable under the permissive low-confidence policy)."
+  - "A manifests.json store entry may carry sourcePath (project-root-relative with POSIX separators when present, e.g. src/order.ts — never an empty string for covered entries; legacy entries lacking it are preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable under the permissive low-confidence policy). A refreshed entry always carries the methods key — possibly {} — and only preserved legacy entries may lack it; the loader surfaces a present empty map exactly as stored (VERSAILLES-25 follow-up)."
   - "The loader surfaces sourcePath and methods on every ManifestsFile entry so downstream consumers (generate handler → emitter modulePaths + call shape) can read them directly from the loaded context."
 
 operations:
@@ -51,7 +53,7 @@ operations:
     ensures:
       - "Returns a single VersaillesContext with config, contracts, manifests, predicates, parsedContracts (contract ID → AST), parseErrors, validationErrors, validationWarnings, and isValid"
       - "Version gates are checked before any processing; a mismatch returns a hard error with an upgrade-path message"
-      - "ManifestsFile entries surface sourcePath and methods exactly as stored — the loader neither requires them on legacy entries nor strips them when present"
+      - "ManifestsFile entries surface sourcePath and methods exactly as stored — the loader neither requires them on legacy entries nor strips them when present; a present empty methods map ({} — the refreshed-entry zero-methods signal) is surfaced unchanged (VERSAILLES-25 follow-up)"
       - "Never throws on missing files, invalid JSON, malformed-shape files, or version/config mismatches — every failure path returns the VersaillesContext carrying structured LoaderErrors of the fixed code set (VERSION_MISMATCH | MISSING_FILE | INVALID_JSON | CONFIG_INVALID | INVALID_SHAPE)"
       - "The call never throws an unstructured exception; semantic validation results (ValidationResult { valid, errors, warnings }) are aggregated into validationErrors/validationWarnings, never raised"
       - "No file is interpreted on its own"
@@ -106,7 +108,7 @@ must:
   - "Orchestrate versailles check: fail on non-empty parseErrors/validationErrors; recompute every stored sourceHash and compare; honor config.staleness.blockOnStale; exit 0 clean, 1 on parse/validation error, 2 on blocking staleness, and warn-with-0 when staleness is non-blocking (build-spec §8)."
   - "Be the single shared loader: every consuming component (CLI commands, review UI, CI lint, generator) loads the workspace through this module, never re-implementing loading (build-spec §6)."
   - "Return every failure as structured errors inside the returned context or scoped view — never throw — for missing files (MISSING_FILE), invalid JSON (INVALID_JSON), malformed shapes (INVALID_SHAPE, shape-guard pass), version/config mismatches (VERSION_MISMATCH | CONFIG_INVALID), malformed expressions (ParseError), and unknown scoped targets (NOT_FOUND) (build-spec §6, ADR-0010)."
-  - "Acknowledge the manifests.json store entry shape: sourcePath (string; project-root-relative with POSIX separators when present, e.g. src/order.ts — never empty for covered entries; legacy entries lacking it preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable, permissive low-confidence policy) (build-spec §3.3, §7)."
+  - "Acknowledge the manifests.json store entry shape: sourcePath (string; project-root-relative with POSIX separators when present, e.g. src/order.ts — never empty for covered entries; legacy entries lacking it preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable, permissive low-confidence policy); a refreshed entry always carries the methods key — possibly {} — with only preserved legacy entries allowed to lack it (build-spec §3.3, §7, VERSAILLES-25 follow-up)."
   - "Surface sourcePath and methods on ManifestsFile entries so downstream consumers (generate handler → emitter modulePaths + call shape) can use them directly from the loaded context."
 
 must_not:
@@ -117,14 +119,14 @@ must_not:
   - "Must not return a whole file from scoped extraction — always the single sub-object plus its errors (build-spec §6.6)."
   - "Must not fail versailles check on staleness when config.staleness.blockOnStale is false — it warns and exits 0 (build-spec §8)."
   - "Must not throw unstructured exceptions on malformed input — missing/invalid/malformed files, malformed exprs, and degenerate contexts always produce structured error objects (ADR-0010)."
-  - "Must not require sourcePath or methods on any manifests.json entry — legacy entries lacking them load normally and are preserved as-is; recording them is manifest-extraction's job, not the loader's."
+  - "Must not require sourcePath or methods on any manifests.json entry — legacy entries lacking them load normally and are preserved as-is; recording them is manifest-extraction's job, not the loader's. Must not strip or invent a methods key either — a present empty map ({} — the refreshed-entry zero-methods signal) is surfaced exactly as stored (VERSAILLES-25 follow-up)."
   - "Must not invoke an LLM anywhere in loading or checking (ADR-0010)."
 
 can:
   - "May surface non-blocking validationWarnings to consumers (for example reviewer-awareness surfaces)."
   - "May emit a warning report (such as a CI annotation) when staleness is detected but blockOnStale is false."
   - "May cache or memoize loaded contexts within a single process as an optimization, provided the shared loader remains the only entry point."
-  - "May expose sourcePath and methods as optional typed fields on ManifestsFile entries, tolerated by the shape guard when absent."
+  - "May expose sourcePath and methods as optional typed fields on ManifestsFile entries, tolerated by the shape guard when absent; an empty methods map ({}) on a refreshed entry is a valid, meaningful value the shape guard accepts (VERSAILLES-25 follow-up)."
 
 limits:
   - "No implementation of the grammar, parser, or validator rules themselves — contract-language owns those; this context aggregates results."
@@ -144,6 +146,7 @@ asserts:
   - "assert: extract_scoped never throws on degenerate/partial contexts — it returns a ScopedView with an errors array, and reports an unknown component/operation as a structured NOT_FOUND error."
   - "assert: the semantic validation pass never throws on arbitrary ASTs/contexts — it returns ValidationResult { valid, errors, warnings } and the loader appends its errors to validationErrors and its warnings to validationWarnings (ADR-0010)."
   - "assert: load_workspace surfaces sourcePath and methods on ManifestsFile entries when present in manifests.json, and legacy entries lacking them load unchanged without INVALID_SHAPE errors."
+  - "assert: load_workspace surfaces a present empty methods map ({} — the refreshed-entry zero-methods signal) unchanged on ManifestsFile entries — never stripped, never INVALID_SHAPE (VERSAILLES-25 follow-up)."
 
 ---
 ## Changelog
@@ -154,3 +157,4 @@ asserts:
 | 2026-08-13 | general-manager | Pinned the loader never-throws guarantee (F3): invariants/ensures/must/must_not/asserts for structured LoaderErrors on missing/invalid-JSON/malformed-shape files, ScopedView errors for degenerate contexts, and ValidationResult aggregation for semantic validation (ADR-0010) |
 | 2026-08-17 | general-manager | Acknowledged the manifests.json store entry shape — sourcePath (never empty for covered entries; legacy entries lacking it preserved as-is) and per-component methods metadata ({ static, params, returnType? }, recorded where determinable, permissive low-confidence policy) — and that the loader surfaces both on ManifestsFile entries for downstream consumers (generate handler → emitter modulePaths + call shape). Aligns with the manifest-extraction/deterministic-generation extension (fix/generator-emitter-runnability); backs VERSAILLES-20/21/22/23 |
 | 2026-08-18 | general-manager | Acknowledged the canonical sourcePath semantic (VERSAILLES-24): covered entries store project-root-relative POSIX paths (src/order.ts); the loader surfaces them exactly as stored. Aligns with the manifest-extraction/deterministic-generation extension on fix/generator-emitter-runnability |
+| 2026-08-18 | general-manager | Pinned the methods-key presence semantics (VERSAILLES-25 review-warning follow-up): a refreshed manifest entry always carries the methods key — possibly {} — with only preserved legacy entries allowed to lack it; the loader surfaces a present empty map exactly as stored, never stripping or inventing it |
