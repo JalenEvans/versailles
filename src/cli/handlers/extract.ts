@@ -127,6 +127,10 @@ export async function handleExtractManifests(
 		}
 	> = {};
 	for (const [component, entry] of Object.entries(merged)) {
+		// W3 (workspace-context.contract.yaml, VERSAILLES-25 follow-up):
+		// distinguish covered (added OR refreshed by this run) from preserved
+		// legacy entries — only covered entries always carry the methods key.
+		const covered = component in extracted.manifests;
 		const storeEntry: {
 			sourceHash: string;
 			fields: Record<string, string>;
@@ -147,11 +151,19 @@ export async function handleExtractManifests(
 		if (entry.sourcePath.length > 0) {
 			storeEntry.sourcePath = entry.sourcePath;
 		}
-		// Method metadata (VERSAILLES-20 F1) persists only when non-empty: a
-		// preserved legacy entry without methods stays byte-identical
-		// ({ sourceHash, fields }) and the loader tolerates the absence for
-		// method-less covered entries (methods: {} in the extractor output).
-		if (Object.keys(entry.methods ?? {}).length > 0) {
+		if (covered) {
+			// A refreshed/covered entry ALWAYS carries the methods key — the
+			// empty map {} is the first-class "we know this component has
+			// zero methods" signal that distinguishes it from a preserved
+			// legacy entry, so the planner's UNPLANNABLE_OPERATION guard
+			// fires for every staged op instead of treating the component as
+			// full-legacy and silently emitting a dead static call. Today the
+			// key is dropped when the map is empty (the W3 hole).
+			storeEntry.methods = entry.methods ?? {};
+		} else if (Object.keys(entry.methods ?? {}).length > 0) {
+			// Preserved legacy entries keep their stored shape exactly
+			// (byte-compat): a methods map persists only when non-empty, so
+			// an entry that never carried the key stays without it.
 			storeEntry.methods = entry.methods;
 		}
 		mergedStore[component] = storeEntry;

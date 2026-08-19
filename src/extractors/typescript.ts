@@ -240,7 +240,11 @@ function inferProjectRoot(sourceRoots: string[]): string | undefined {
  * relative ("order.ts") and never absolute — so deriveModulePaths'
  * join(cwd, sourcePath) resolves to the real file. The project root is the
  * explicit projectRoot argument when provided (the CLI's cwd); otherwise it
- * is inferred as the common directory prefix of the source roots. POSIX
+ * is inferred as the common directory prefix of the source roots. When no
+ * project root is derivable (projectRoot omitted + disjoint source roots),
+ * the fallback is the file relative to sourceRoots[0] when that yields a
+ * relative path, or "" (the store-write omission sentinel) — the absolute
+ * file path is never emitted (VERSAILLES-24 follow-up, W2). POSIX
  * separators always (build-spec §3.3).
  */
 function sourcePathOf(
@@ -250,7 +254,19 @@ function sourcePathOf(
 ): string {
 	const file = decl.getSourceFile().fileName;
 	const root = projectRoot ?? inferProjectRoot(sourceRoots);
-	if (root === undefined || root === "") return file;
+	if (root === undefined || root === "") {
+		// W2 (manifest-extraction.contract.yaml, VERSAILLES-24 follow-up): no
+		// project root is derivable (projectRoot omitted and the source roots
+		// share no common prefix — disjoint roots). Fall back to the file
+		// relative to sourceRoots[0] when that yields a relative path, or
+		// return "" — the caller's omission sentinel (extract.ts never
+		// persists an empty sourcePath) — never the absolute file path, which
+		// would leak machine-specific absolute paths into the store. The CLI
+		// path (projectRoot passed) never reaches here.
+		if (sourceRoots.length === 0) return "";
+		const rel = relative(sourceRoots[0], file);
+		return rel === "" ? "" : rel.split(sep).join("/");
+	}
 	const rel = relative(root, file);
 	return rel === "" ? file : rel.split(sep).join("/");
 }

@@ -654,6 +654,74 @@ describe("extractManifests — sourcePath per covered component (VERSAILLES-21 F
 	});
 });
 
+// ── W2 (Center review finding): sourcePath fallback when the source roots are
+// disjoint and projectRoot is omitted ───────────────────────────────────────
+// manifest-extraction.contract.yaml + workspace-context.contract.yaml
+// (2026-08-18): the VERSAILLES-24 anchor ("sourcePath is project-root-
+// relative") assumes inferProjectRoot returns a real shared prefix. When the
+// source roots share NO common prefix (disjoint roots, e.g. one under /tmp and
+// one under /var/tmp) and projectRoot is omitted, the contract falls back to
+// relative(sourceRoots[0], file) when it yields a relative path — or OMITS the
+// sourcePath field — and NEVER records the absolute file path. Today
+// sourcePathOf returns `file` (absolute) when inferProjectRoot is undefined,
+// which leaks machine-specific absolute paths into the store (W2).
+//
+// NOTE on reproducing the bug: siblings under ONE mkdtemp(tmpdir()) parent are
+// NOT disjoint — they share the tmpdir prefix, so inferProjectRoot returns the
+// shared prefix and sourcePath stays relative. Truly disjoint roots need
+// different top-level parents; /var/tmp is writable on this Linux CI image.
+
+const W2_CART_SOURCE = `export class Cart {
+	total: number;
+}
+`;
+
+describe("extractManifests — disjoint source roots with no projectRoot never record an absolute sourcePath (W2, manifest-extraction.contract.yaml)", () => {
+	it("falls back to relative(sourceRoots[0], file) — never the absolute file path — when the roots share no common prefix", async () => {
+		// Truly disjoint roots: one under the OS temp dir, one under /var/tmp.
+		const rootA = await mkdtemp(join(tmpdir(), "versailles-w2-a-"));
+		const rootB = await mkdtemp(join("/var/tmp", "versailles-w2-b-"));
+		try {
+			await writeFile(join(rootA, "order.ts"), `${ORDER_SOURCE}\n`, "utf8");
+			await writeFile(join(rootB, "cart.ts"), `${W2_CART_SOURCE}\n`, "utf8");
+
+			const result = extractManifests([rootA, rootB]);
+
+			// Component under sourceRoots[0]: the contract fallback is
+			// relative(rootA, file) = "order.ts" — a relative path, never the
+			// absolute "/tmp/.../order.ts" recorded today.
+			const order = result.manifests.Order;
+			expect(order).toBeDefined();
+			expect(order.sourcePath).not.toMatch(/^[/\\]|[A-Za-z]:[\\/]/);
+			expect(order.sourcePath).toBe("order.ts");
+
+			// Component under the OTHER root: relative(rootA, file) is still
+			// a (dot-dot) relative path — the field is either that relative
+			// path or absent, never absolute.
+			const cart = result.manifests.Cart;
+			expect(cart).toBeDefined();
+			expect(cart.sourcePath).not.toMatch(/^[/\\]|[A-Za-z]:[\\/]/);
+		} finally {
+			await rm(rootA, { recursive: true, force: true });
+			await rm(rootB, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps sourcePath relative when projectRoot is omitted but inferable (single shared root) — the W2 fix never regresses the inferable case (guard)", async () => {
+		const dir = await fixtureDir("w2-relative");
+		await writeFixture(dir, "src/order.ts", ORDER_SOURCE);
+
+		const result = extractManifests([join(dir, "src")]);
+
+		// Single root → inferProjectRoot returns the root itself → relative
+		// stays relative. Never absolute.
+		expect(result.manifests.Order.sourcePath).toBe("order.ts");
+		for (const entry of Object.values(result.manifests)) {
+			expect(entry.sourcePath).not.toMatch(/^[/\\]|[A-Za-z]:[\\/]/);
+		}
+	});
+});
+
 /**
  * Method metadata recording (VERSAILLES-20 F1, manifest-extraction.contract.yaml
  * 2026-08-17, build-spec §7): every resolvable method is recorded with its

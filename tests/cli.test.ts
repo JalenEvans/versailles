@@ -1523,6 +1523,107 @@ describe("runCli extract-manifests — sourcePath persists through the store (VE
 	});
 });
 
+// ── W3 (Center review finding): zero-method components — methods: {} must
+// survive the store, and generate must warn instead of emitting dead calls ──
+// workspace-context.contract.yaml + manifest-extraction.contract.yaml
+// (2026-08-18, VERSAILLES-25 follow-up): the extractor records `methods: {}`
+// for a component with no methods, and the extract handler must PERSIST that
+// empty map on refreshed covered entries. An empty methods map is the
+// planner's authoritative "knows zero methods" signal: every staged op is
+// missing from it, so generate surfaces UNPLANNABLE_OPERATION (exit 0,
+// non-blocking) and never emits the legacy static options-object call
+// `<Component>.<op>({ ... })` — dead, unrunnable code (TypeError at runtime).
+// Today extract.ts writes the entry WITHOUT the methods key when the map is
+// empty, so the loader surfaces methods === undefined and the planner treats
+// the component as full-legacy → silent dead call (the W3 E2E-gate bug).
+
+const ZERO_METHOD_ORDER_SOURCE = `export class Order {
+	id: number;
+	total: number;
+}
+`;
+
+describe("runCli extract-manifests — persists an empty methods map on zero-method covered entries (W3, VERSAILLES-25 follow-up)", () => {
+	it("writes methods: {} for a refreshed zero-method entry — never drops the key (Red today: the store omits methods entirely)", async () => {
+		const cwd = await freshWorkspace("x-zero-methods");
+		await writeSource(cwd, "Order.ts", ZERO_METHOD_ORDER_SOURCE);
+
+		const result = await runCli(["extract-manifests"], { cwd });
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		const stored = JSON.parse(
+			await readFile(join(cwd, ".versailles", "manifests.json"), "utf8"),
+		) as {
+			manifests: Record<string, { methods?: unknown }>;
+		};
+		// The extractor records methods: {} for a zero-method component; the
+		// store write must persist it (the planner's "knows zero methods"
+		// signal). Today the key is absent → this is undefined, not {}.
+		expect(stored.manifests.Order.methods).toEqual({});
+	});
+});
+
+describe("runCli extract-manifests + generate — a zero-method component with a staged op warns, never emits a dead static call (W3, VERSAILLES-25 follow-up)", () => {
+	it("full chain: real extract over a zero-method component → generate surfaces UNPLANNABLE_OPERATION and emits no Order.<op>({...}) (Red today: warnings [] + dead call)", async () => {
+		const cwd = await freshWorkspace("g-zero-method");
+		await writeSource(cwd, "Order.ts", ZERO_METHOD_ORDER_SOURCE);
+		// Stage an operation that cannot exist in the zero-method source.
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				Order: {
+					invariants: [],
+					operations: {
+						setSubtotal: {
+							id: "Order.setSubtotal",
+							params: [{ name: "amount", type: "number" }],
+							preconditions: [
+								{ id: "Order.setSubtotal.pre0", expr: "amount >= 0" },
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "setsubtotal-hash",
+						},
+					},
+				},
+			},
+		});
+
+		const extract = await runCli(["extract-manifests"], { cwd });
+		expect(extract.ok).toBe(true);
+		expect(extract.exitCode).toBe(0);
+
+		const generate = await runCli(["generate"], { cwd });
+
+		// Generation still succeeds (exit 0) — the warning tier is
+		// non-blocking (ADR-0004), and the warning MUST surface once the
+		// store carries methods: {} (today the dropped key makes the planner
+		// treat the component as legacy → warnings []).
+		expect(generate.ok).toBe(true);
+		expect(generate.exitCode).toBe(0);
+		expect(generate.errors).toEqual([]);
+		expect(generate.warnings).toContainEqual(
+			expect.objectContaining({
+				code: "UNPLANNABLE_OPERATION",
+				field: "Order.setSubtotal",
+			}),
+		);
+
+		// No dead static options-object call in the generated surface (the
+		// file may legitimately be absent when every staged op is skipped).
+		const files = await generatedTestFiles(cwd);
+		if (files.includes("Order.test.ts")) {
+			const content = await readFile(
+				join(cwd, ".versailles", "generated", "Order.test.ts"),
+				"utf8",
+			);
+			expect(content).not.toContain("Order.setSubtotal(");
+			expect(content).not.toContain("setSubtotal({");
+		}
+	});
+});
+
 // ── F2.2: generate derives emitter modulePaths from manifest sourcePath ────
 // Current: the generate handler passes only { generatedDir } to emitSuite, so
 // the vitest emitter falls back to "../../src/<Component>.js" (wrong case +

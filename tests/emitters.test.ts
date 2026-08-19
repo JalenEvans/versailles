@@ -1478,6 +1478,157 @@ describe("emitSuite — a generated suite for a void-op invariant case RUNS (VER
 	});
 });
 
+// ── W1 (Center review finding): STATIC void ops with assertions must NOT
+// bind an instance or assert instance.<field> ───────────────────────────────
+// deterministic-generation.contract.yaml (2026-08-18) extends the V-26
+// instance-binding carve-out with the static variant: a STATIC void-returning
+// operation has no instance state to assert — `new <Component>()` is a
+// completely different object that the static call never touches. The FIXED
+// render is the bare static call `<Component>.<op>(...);` with NO instance
+// binding and NO instance.<field> assertion. Today the emitter binds the
+// instance anyway (the misleading `const instance = new Order();` +
+// `expect(instance.subtotal)...` shape) — a false-green/false-red test whose
+// assertion is silently meaningless.
+//
+// Non-void static ops are untouched by this carve-out: their return value is
+// the assertion receiver (const result + toBeDefined + result.<field>), and
+// instance void ops keep the V-26 instance-bound render (pinned above).
+
+/** An invariant PlannedCase on a STATIC VOID-returning operation (subject: subtotal). */
+function staticVoidInvariantSuite(): PlannedSuite {
+	return {
+		clauseIds: ["Order.inv0"],
+		operations: [],
+		invariantCases: [
+			{
+				id: "Order.reset.invariant-0",
+				kind: "invariant",
+				description:
+					"call Order.reset and assert invariant Order.inv0 still holds",
+				inputs: {},
+				expects: {
+					outcome: "accept",
+					postconditions: ["Order.inv0"],
+					assertions: [{ subject: "subtotal", op: ">=", literal: 0 }],
+				},
+				traces: ["Order.inv0"],
+			},
+		],
+	};
+}
+
+const ORDER_STATIC_VOID_METHODS = {
+	Order: {
+		reset: { static: true, params: [], returnType: "void" },
+	},
+};
+
+const ORDER_STATIC_NONVOID_METHODS = {
+	Order: {
+		reset: { static: true, params: [], returnType: "number" },
+	},
+};
+
+describe("emitSuite — STATIC void-op invariant cases emit the bare static call, never an instance assertion (W1, deterministic-generation.contract.yaml)", () => {
+	it("emits ONLY the bare static call for a static void op's invariant case — no const instance binding, no expect(instance.<field>) (Red today: binds the instance and asserts instance.subtotal)", () => {
+		const files = emitSuite(staticVoidInvariantSuite(), "vitest", {
+			methods: ORDER_STATIC_VOID_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// THE fix: the static void call is emitted bare — a static call has
+		// no instance state to assert, so no `const instance = new Order();`
+		// and no `expect(instance.<field>)` in the emitted surface.
+		expect(order?.content).toContain("Order.reset();");
+		expect(order?.content).not.toContain("const instance = new Order();");
+		expect(order?.content).not.toContain("expect(instance.subtotal)");
+		expect(order?.content).not.toContain("const result =");
+	});
+
+	it("keeps the result-bound render for a STATIC NON-void op's invariant case — const result + toBeDefined + result.<field>, never an instance binding (non-regression)", () => {
+		const files = emitSuite(staticVoidInvariantSuite(), "vitest", {
+			methods: ORDER_STATIC_NONVOID_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// returnType "number" — the return value is the assertion receiver,
+		// exactly like the instance non-void pin (V-26): const result, then
+		// toBeDefined, then result.<field>. The static call shape stays.
+		expect(order?.content).toContain("const result = Order.reset();");
+		expect(order?.content).toContain("expect(result).toBeDefined();");
+		expect(order?.content).toContain(
+			"expect(result.subtotal).toBeGreaterThanOrEqual(0)",
+		);
+		// The instance-binding form is void-only — a non-void op never uses it.
+		expect(order?.content).not.toContain("const instance =");
+		expect(order?.content).not.toContain("instance.reset(");
+	});
+});
+
+/**
+ * Real Order source for the W1 E2E runnability pin. subtotal starts at -5 —
+ * DELIBERATELY violating the "subtotal >= 0" invariant on a fresh instance.
+ * The current misleading render (`const instance = new Order(); Order.reset();
+ * expect(instance.subtotal)...`) FAILS at runtime: the fresh instance's
+ * subtotal (-5) is untouched by the static call, so the assertion is a false
+ * red. The FIXED bare-call render (`Order.reset();`) asserts nothing about a
+ * fresh instance and runs green.
+ */
+const W1_ORDER_SOURCE = `export class Order {
+	subtotal = -5;
+	static reset(): void {
+		// Static/global reset — never touches a particular instance.
+	}
+}
+`;
+
+describe("emitSuite — a generated STATIC void-op invariant suite RUNS (W1 E2E runnability gate)", () => {
+	it("executes the emitted static void-op invariant test with the REAL vitest runner — exit 0 (Red today: the misleading instance assertion fails on a fresh instance)", async () => {
+		const root = await mkdtemp(join(tmpdir(), "versailles-w1-"));
+		try {
+			await writeFile(join(root, "order.ts"), `${W1_ORDER_SOURCE}\n`, "utf8");
+
+			const files = emitSuite(staticVoidInvariantSuite(), "vitest", {
+				generatedDir: ".",
+				modulePaths: { Order: "./order" },
+				methods: ORDER_STATIC_VOID_METHODS,
+			});
+			const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+			expect(order).toBeDefined();
+			await writeFile(
+				join(root, "Order.test.ts"),
+				order?.content ?? "",
+				"utf8",
+			);
+
+			// The REAL vitest runner (vitest.mjs under process.execPath) —
+			// the established V-27 command. Today the emitted
+			// `expect(instance.subtotal).toBeGreaterThanOrEqual(0)` fails
+			// (-5 >= 0 is false) → exit 1 (Red). The FIXED bare static call
+			// must exit 0.
+			const vitestBin = join(
+				dirname(fileURLToPath(import.meta.url)),
+				"..",
+				"node_modules",
+				"vitest",
+				"vitest.mjs",
+			);
+			const run = spawnSync(process.execPath, [vitestBin, "run"], {
+				cwd: root,
+				encoding: "utf8",
+			});
+			expect(
+				run.status,
+				`generated static void-op invariant suite did not run clean:\n${run.stdout}\n${run.stderr}`,
+			).toBe(0);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});
+
 /**
  * VERSAILLES-24 module-path resolvability (deterministic-generation.contract.yaml
  * §9.4, build-spec §9.4): an emitted import specifier derived from a manifest

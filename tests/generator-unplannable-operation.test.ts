@@ -110,6 +110,7 @@ const WARNED_OP = "setSubtotal";
 const WARNED_OP_ID = "Order.setSubtotal";
 const WARNED_CLAUSE = "Order.setSubtotal.pre0";
 const COVERED_OP = "setTotal";
+const COVERED_OP_ID = "Order.setTotal";
 
 /**
  * Order stages TWO operations — setTotal (present in the manifest methods
@@ -406,5 +407,73 @@ describe("planTestCases — UNPLANNABLE_OPERATION determinism (ADR-0002)", () =>
 				field: WARNED_OP_ID,
 			}),
 		);
+	});
+});
+
+// ── W3 (Center review finding): a zero-method component's EMPTY methods map
+// must warn for every staged op ─────────────────────────────────────────────
+// workspace-context.contract.yaml + manifest-extraction.contract.yaml
+// (2026-08-18, VERSAILLES-25 follow-up): the extractor records `methods: {}`
+// for a component with no methods (the same always-present shape as fields),
+// and the store must PERSIST that empty map — an empty map still KNOWS the
+// component has zero methods, so EVERY staged op is missing from it and must
+// surface UNPLANNABLE_OPERATION (never a dead static options-object call).
+// Only a preserved legacy entry with NO `methods` key stays silent (the
+// existing backward-compat pin above).
+//
+// This suite pins the planner seam: given a context whose component entry
+// CARRIES methods: {} (what the loader surfaces once the store write is
+// fixed), the planner warns for every staged op. It is the planner-side guard
+// for the W3 store-write fix pinned in tests/cli.test.ts; the genuinely Red
+// tests for the current implementation are the STORE WRITE (extract.ts drops
+// the empty map) and the extract→generate chain — both in tests/cli.test.ts.
+
+/** W3 fixture: a component whose methods map is EMPTY — zero methods known. */
+function zeroMethodManifestsFixture(): ManifestsFile {
+	return {
+		version: "1.0",
+		manifests: {
+			[ORDER]: {
+				sourceHash: "man-order-zero",
+				fields: { subtotal: "number", total: "number" },
+				methods: {},
+			},
+		},
+	};
+}
+
+describe("planTestCases — a component with an EMPTY methods map warns for every staged op (W3, VERSAILLES-25 follow-up)", () => {
+	it("surfaces UNPLANNABLE_OPERATION for every staged op when methods is an empty map — never silent, never a dead static call", () => {
+		const suite = planTestCases(makeContext(zeroMethodManifestsFixture()));
+
+		// An empty map is authoritative "knows zero methods": BOTH staged ops
+		// (setTotal AND setSubtotal) are missing from it → both warn.
+		const warnings = suiteWarnings(suite);
+		expect(warnings).toContainEqual(
+			expect.objectContaining({
+				code: "UNPLANNABLE_OPERATION",
+				field: WARNED_OP_ID,
+			}),
+		);
+		expect(warnings).toContainEqual(
+			expect.objectContaining({
+				code: "UNPLANNABLE_OPERATION",
+				field: COVERED_OP_ID,
+			}),
+		);
+
+		// No planned case for any staged op — nothing to emit.
+		expect(
+			allCases(suite).filter((case_) => case_.id.startsWith("Order.")),
+		).toEqual([]);
+
+		// No invocation of either op in ANY emitted surface (must_not).
+		const files = emitSuite(suite, "vitest", {
+			methods: emitterMethods(zeroMethodManifestsFixture()),
+		});
+		for (const file of files) {
+			expect(file.content).not.toContain(`${COVERED_OP}(`);
+			expect(file.content).not.toContain(`${WARNED_OP}(`);
+		}
 	});
 });

@@ -13,10 +13,14 @@
  * methods render `new <Component>().<op>(<positional>)`, static methods render
  * `<Component>.<op>(<positional>)` with params in declared order, and
  * void-return accept cases carry no return-value assertion. Accept/invariant
- * cases on a void-returning operation WITH assertions bind the component
- * INSTANCE — `const instance = new <Component>(); instance.<op>(...);
+ * cases on a void-returning INSTANCE operation WITH assertions bind the
+ * component INSTANCE — `const instance = new <Component>(); instance.<op>(...);
  * expect(instance.<field>)...` — so assertions target instance state, never
- * the void return value (VERSAILLES-26). Without the `methods` option
+ * the void return value (VERSAILLES-26). A STATIC void operation with
+ * assertions renders the bare call `<Component>.<op>(...);` with no
+ * instance.<field> assertion — the static call never touches a constructed
+ * instance, so an instance assertion would be meaningless (VERSAILLES-26
+ * follow-up, W1). Without the `methods` option
  * (legacy) the historical static options-object call
  * `<Component>.<op>({ ...inputs })` with a toBeDefined assertion is preserved
  * byte-identically.
@@ -220,23 +224,30 @@ function renderCase(
 	} else {
 		const assertions = case_.expects.assertions ?? [];
 		if (voidAccept) {
-			if (assertions.length > 0) {
+			if (meta.static) {
+				// W1 (VERSAILLES-26 follow-up,
+				// deterministic-generation.contract.yaml): a STATIC void
+				// operation's accept/invariant case renders the bare call —
+				// `<Component>.<op>(...);` — with NO instance binding, NO
+				// result binding, and NO assertions. The static call never
+				// touches a constructed instance, so `const instance = new
+				// <Component>(); <Component>.<op>(...); expect(instance.<field>)`
+				// would assert state on an object the call cannot have
+				// modified — a silently meaningless assertion. Instance void
+				// ops keep the V-26 instance-state render below.
+				lines.push(`\t\t${call};`);
+			} else if (assertions.length > 0) {
 				// VERSAILLES-26: a void-returning operation's return value is
 				// undefined, so `const result = ...; expect(result.<field>)`
 				// throws TypeError at runtime. The case binds the component
 				// INSTANCE and asserts instance state — `const instance = new
 				// <Component>(); instance.<op>(...); expect(instance.<field>)`
-				// (§9.4). For a static void op the call stays on the component
-				// (`<Component>.<op>(...)` — no instance to call on) but the
-				// same rule applies: never bind a result for a void call. The
-				// instance is still constructed so invariant assertions can
-				// target component instance state (documented decision, V-26).
+				// (§9.4). Only INSTANCE void ops reach this branch (the static
+				// void carve-out above handles the static variant), so the
+				// call always runs on the bound instance.
 				lines.push(`\t\tconst instance = new ${component}();`);
-				const callee = meta.static
-					? `${component}.${operation}`
-					: `instance.${operation}`;
 				lines.push(
-					`\t\t${callee}${renderPositionalArgs(case_, component, operation, methods)};`,
+					`\t\tinstance.${operation}${renderPositionalArgs(case_, component, operation, methods)};`,
 				);
 				for (const assertion of assertions) {
 					lines.push(`\t\t${renderAssertion(assertion, "instance")};`);
