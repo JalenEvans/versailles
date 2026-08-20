@@ -89,6 +89,9 @@ drifts from what is committed.
   "generatedDir": ".versailles/generated",
   "staleness": {
     "blockOnStale": true
+  },
+  "rejection": {
+    "idiom": "throws"
   }
 }
 ```
@@ -100,6 +103,9 @@ drifts from what is committed.
 - `language`: selects the manifest extractor plugin (see §7).
 - `testFramework`: selects the generator's output emitter (see §9).
 - `staleness.blockOnStale`: whether CI fails on detected drift (see §8) or only warns.
+- `rejection.idiom`: how the generator's precondition-violation emitter asserts rejection —
+  `throws` expects the operation to throw (`toThrow`-style assertion), `returns` expects an
+  error return value; default `throws` (ADR-0007).
 
 ### 3.2 `contracts.json`
 
