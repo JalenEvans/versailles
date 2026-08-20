@@ -41,6 +41,7 @@ Chosen option: **external agent drives the CLI**, **because** it keeps Versaille
 - The repository contains no LLM client dependency, no prompt templates, and no code path that calls an LLM (no LLM HTTP call sites).
 - The CLI command surface has no `author` subcommand.
 - Every CLI command emits structured JSON output and deterministic exit codes (`0`/`1`/`2`).
+- The package exposes no importable library surface: `package.json` `exports` exposes only `.` (no deep import paths); `src/index.ts` exports only `packageName`. Integration is via the CLI binary as a subprocess (structured JSON + exit codes), never in-process imports.
 - Agent-iteration scenarios (write → validate → structured error → fix → re-run) are covered by integration tests that drive the CLI as an external agent would — not by in-tool LLM mocking.
 
 ## More Information / Links
@@ -57,3 +58,4 @@ Chosen option: **external agent drives the CLI**, **because** it keeps Versaille
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial proposal |
 | 2026-08-11 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-19 | general-manager | Confirmation added: no importable library surface — integration via CLI subprocess + structured JSON, never in-process imports |

@@ -136,14 +136,14 @@ describe("package.json lifecycle scripts (VERSAILLES-16 local install path)", ()
 
 // ── package.json publish metadata (VERSAILLES-19) ──────────────────────────
 // "Get Ready For Beta" sprint Phase 5 housekeeping: the ticket AC requires
-// "npm pkg checks clean; no publish warnings for license/repository".
-// package.json currently ships name/version/description/private/type/main/
-// types/exports/bin/files/scripts/devDependencies/packageManager/engines but
-// LACKS license, repository, author, and keywords — so `npm publish --dry-run`
-// warns on all four. The repo already carries a LICENSE file (MIT); the
-// manifest must declare it. These tests pin the four fields npm surfaces in
-// publish warnings, asserting presence/shape only — never content beyond the
-// license value — so a future URL/author/keyword wording change stays green.
+// license, repository, author, and keywords present — a complete npm registry
+// listing is the goal (publish hygiene), not warning suppression: npm ≤10
+// warned on the missing license/repository pair, but npm 11 emits no publish
+// warnings for absent metadata (only auth/auto-correct notices). The repo
+// already carries a LICENSE file (MIT); the manifest must declare it. These
+// tests pin the four fields a complete listing needs, asserting presence/
+// shape only — never content beyond the license value — so a future URL/
+// author/keyword wording change stays green.
 
 describe("package.json publish metadata (VERSAILLES-19)", () => {
 	it('declares `license` as "MIT" — the repo\'s LICENSE file is declared for npm publish', async () => {
