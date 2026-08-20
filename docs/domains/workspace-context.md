@@ -27,7 +27,7 @@ The `.versailles/` workspace as a **versioned, jointly-loaded unit** — the sha
 }
 ```
 
-**Config** (value object) — `grammarVersion`, `schemaVersion`, `sourceRoots`, `language`, `testFramework`, `generatedDir`, `staleness.blockOnStale`, rejection idiom.
+**Config** (value object) — `grammarVersion`, `schemaVersion`, `sourceRoots`, `language`, `testFramework`, `generatedDir`, `staleness.blockOnStale`, `rejection.idiom`.
 
 **Workspace** (the `.versailles/` directory) — the file set treated as one unit.
 
@@ -64,7 +64,6 @@ Uses from [glossary](../glossary.md): *`.versailles/` workspace, VersaillesConte
 ## Open questions
 
 - Whether `versailles init` also seeds a starter config or only scaffolds empty/default files (build-spec §12 lists empty/default).
-- Rejection-idiom and staleness flags live in `config.json` — exact field names to be pinned in the config contract (build-spec §3.1 shows `staleness`; rejection idiom is listed in §14 as configurable).
 
 ## Source of authority
 
