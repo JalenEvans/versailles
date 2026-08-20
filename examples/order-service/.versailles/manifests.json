@@ -1,0 +1,22 @@
+{
+  "version": "1.0",
+  "manifests": {
+    "OrderService": {
+      "sourceHash": "e6d9d945",
+      "fields": {
+        "balance": "number"
+      },
+      "sourcePath": "src/OrderService.ts",
+      "methods": {
+        "addItem": {
+          "static": false,
+          "params": [
+            "sku",
+            "price"
+          ],
+          "returnType": "void"
+        }
+      }
+    }
+  }
+}

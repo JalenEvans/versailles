@@ -24,7 +24,8 @@
 		"test:watch": "vitest",
 		"smoke": "vitest run tests/smoke.test.ts",
 		"lint": "biome check .",
-		"check": "biome check ."
+		"check": "biome check .",
+		"example:generate": "bun run build && (cd examples/order-service && node ../../bin/versailles extract-manifests && node ../../bin/versailles generate) && git diff --quiet -- examples || { echo 'ERROR: example:generate produced a diff under examples/ — regenerated output drifted from the committed workspace'; git diff --stat -- examples; exit 1; }"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",

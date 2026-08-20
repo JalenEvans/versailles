@@ -1,0 +1,16 @@
+{
+  "coverage": {
+    "OrderService.inv0": [
+      "OrderService.addItem.invariant-0"
+    ],
+    "OrderService.addItem.pre0": [
+      "OrderService.addItem.precondition-violation-0"
+    ],
+    "OrderService.addItem.pre1": [
+      "OrderService.addItem.precondition-violation-1"
+    ],
+    "OrderService.addItem.post0": [
+      "OrderService.addItem.postcondition-satisfaction-0"
+    ]
+  }
+}

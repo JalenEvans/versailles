@@ -1,0 +1,13 @@
+{
+  "grammarVersion": "1.0",
+  "schemaVersion": "1.0",
+  "sourceRoots": [
+    "src/**/*.ts"
+  ],
+  "language": "typescript",
+  "testFramework": "vitest",
+  "generatedDir": ".versailles/generated",
+  "staleness": {
+    "blockOnStale": true
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "invariants": [
+    {
+      "id": "OrderService.inv0",
+      "expr": "balance >= 0"
+    }
+  ],
+  "operations": {
+    "addItem": {
+      "id": "OrderService.addItem",
+      "params": [
+        {
+          "name": "sku",
+          "type": "string"
+        },
+        {
+          "name": "price",
+          "type": "number"
+        }
+      ],
+      "preconditions": [
+        {
+          "id": "OrderService.addItem.pre0",
+          "expr": "sku != \"\""
+        },
+        {
+          "id": "OrderService.addItem.pre1",
+          "expr": "isPositive(price)"
+        }
+      ],
+      "postconditions": [
+        {
+          "id": "OrderService.addItem.post0",
+          "expr": "balance == old(balance) + price"
+        }
+      ],
+      "effects": [
+        {
+          "field": "balance",
+          "kind": "mutate"
+        }
+      ],
+      "sourceHash": "e6d9d945"
+    }
+  }
+}
