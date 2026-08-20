@@ -27,6 +27,8 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - Multi-language grammar variants — grammar/validator/generator stay language-agnostic; only extractor/emitter plug in per language/framework.
 - Approval metadata (`approvedBy`/`approvedAt`) in the file schema — the audit trail is git history.
 
+**Programmatic surface (v1): CLI only.** The CLI — `bin versailles` plus the deterministic `runCli` envelope (`{ ok, errors, warnings, exitCode }`, build-spec §10) — is v1's programmatic interface. External agents, review UIs, and CI consume the CLI as a subprocess, never in-process imports (ADR-0010). There is no library API in v1: `src/index.ts` exports only `packageName`; parser/validator/loader/generator are internal implementation, not a public import surface. A programmatic library API is an explicit non-goal for v1, deferred to v2+ (VERSAILLES-19).
+
 ## Behavior
 
 ### Deterministic generation
@@ -98,3 +100,4 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 | 2026-08-11 | associate-head-coach | Linked Plans section added pointing to the v1 pipeline implementation plan |
 | 2026-08-11 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
 | 2026-08-11 | associate-head-coach | Architecture correction: CLI never drives an LLM; LLMs drive the CLI (ADR-0010) |
+| 2026-08-19 | general-manager | Programmatic surface pinned: CLI only, no library API in v1 (VERSAILLES-19) |

@@ -10,9 +10,22 @@ name `versailles` is already registered (unmaintained placeholder). CLI command 
 ```json
 {
   "name": "versailles-dbc",
-  "bin": { "versailles": "./dist/cli.js" }
+  "bin": { "versailles": "./bin/versailles" },
+  "scripts": {
+    "prepare": "tsc -p tsconfig.json",
+    "prepublishOnly": "bun run build && bun run smoke"
+  }
 }
 ```
+
+`bin/versailles` is a thin shim importing the built `dist/cli/index.js`, and `dist/` is
+gitignored — never committed. To keep install self-sufficient (VERSAILLES-16), the package
+ships two lifecycle hooks: `prepare` runs the same `tsc` build as `bun run build`, so
+git/root installs and the published tarball materialize `dist/` automatically — a fresh
+clone plus install yields a working CLI with no manual build (bun skips `prepare` for
+`file:` dependencies, so `bun add file:../versailles` needs a manual build) — and
+`prepublishOnly` runs the build + smoke suite as a publish guard, so a package whose CLI
+is broken never ships.
 
 ---
 
@@ -55,6 +68,11 @@ All four top-level files are versioned together and must be loaded as a single u
 file is valid to interpret in isolation because contracts reference manifests and
 predicates by name.
 
+A committed reference implementation of this layout lives at `examples/order-service/`:
+a real TypeScript service with a versioned `.versailles/` workspace and a generated vitest
+suite. `bun run example:generate` re-extracts and regenerates it, failing if the output
+drifts from what is committed.
+
 ---
 
 ## 3. File schemas
@@ -71,6 +89,9 @@ predicates by name.
   "generatedDir": ".versailles/generated",
   "staleness": {
     "blockOnStale": true
+  },
+  "rejection": {
+    "idiom": "throws"
   }
 }
 ```
@@ -82,6 +103,9 @@ predicates by name.
 - `language`: selects the manifest extractor plugin (see §7).
 - `testFramework`: selects the generator's output emitter (see §9).
 - `staleness.blockOnStale`: whether CI fails on detected drift (see §8) or only warns.
+- `rejection.idiom`: how the generator's precondition-violation emitter asserts rejection —
+  `throws` expects the operation to throw (`toThrow`-style assertion), `returns` expects an
+  error return value; default `throws` (ADR-0007).
 
 ### 3.2 `contracts.json`
 

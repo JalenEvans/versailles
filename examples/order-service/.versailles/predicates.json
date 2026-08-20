@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "predicates": {
+    "isPositive": {
+      "params": [
+        "amount"
+      ],
+      "paramTypes": [
+        "number"
+      ],
+      "returnType": "boolean",
+      "sourceRef": "OrderService.isPositive",
+      "sourceHash": "a2de326c",
+      "verifiedPure": true
+    }
+  }
+}

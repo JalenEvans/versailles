@@ -45,6 +45,7 @@ Chosen option: **`versailles-dbc`** (with scoped `@<org>/versailles` as the fall
 
 - `package.json` `name` is `versailles-dbc` and `bin` maps `versailles` → the CLI entry.
 - The published package is not the placeholder occupying the bare `versailles` name.
+- Implemented mapping (VERSAILLES-16): `bin` maps `versailles` → `./bin/versailles`, a thin shim importing the built `dist/cli/index.js` — the proposal-time `./dist/cli.js` example above is superseded (build-spec §2 documents the shim and its `prepare`/`prepublishOnly` hooks).
 
 ## More Information / Links
 
@@ -58,3 +59,4 @@ Chosen option: **`versailles-dbc`** (with scoped `@<org>/versailles` as the fall
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial proposal |
 | 2026-08-11 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-19 | general-manager | Confirmation updated: implemented bin mapping is the `./bin/versailles` shim importing `dist/cli/index.js` (VERSAILLES-16), superseding the proposal-time `./dist/cli.js` example |
