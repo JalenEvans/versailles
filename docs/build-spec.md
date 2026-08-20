@@ -68,6 +68,11 @@ All four top-level files are versioned together and must be loaded as a single u
 file is valid to interpret in isolation because contracts reference manifests and
 predicates by name.
 
+A committed reference implementation of this layout lives at `examples/order-service/`:
+a real TypeScript service with a versioned `.versailles/` workspace and a generated vitest
+suite. `bun run example:generate` re-extracts and regenerates it, failing if the output
+drifts from what is committed.
+
 ---
 
 ## 3. File schemas

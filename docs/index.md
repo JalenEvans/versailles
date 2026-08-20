@@ -17,6 +17,9 @@ versailles
 │   │                    emitters, review flow, predicate registry tooling, nine-command CLI (src/cli + bin/versailles)
 ├── tests/            ← implemented: init, config-schema enum, smoke, parser, validator, loader, generator,
 │                       extractor, CLI (unit + property, vitest)
+├── examples/         ← committed reference example: order-service/ — a real TypeScript service with a
+│                       versioned .versailles/ workspace + generated vitest suite; regenerated
+│                       deterministically by `bun run example:generate`
 ├── docs/             ← this layer (DDD knowledge base)
 │   ├── domains/      ← bounded contexts (contract-language, manifest-extraction,
 │   │                    workspace-context, deterministic-generation, review)
@@ -55,6 +58,8 @@ Each module maps to a [bounded context](domains/index.md); the shared vocabulary
 ## Run / Build / Test
 
 The v1 pipeline is implemented: parser/validator (`src/core`), joint loader (`src/loader`), TypeScript manifest extractor (`src/extractors`), deterministic generator with the vitest/xUnit/pytest emitters (`src/generator`), the human review flow (`src/review` + `versailles review`), predicate registry tooling (`src/predicates` + `register-predicate` / `verify-purity` / `remind-unverified`), and the nine-command machine-readable CLI (`src/cli` + `bin/versailles`). Tests cover each module (unit + property).
+
+A committed reference example lives at `examples/order-service/` — `bun run example:generate` rebuilds, re-extracts, regenerates, and asserts the output is byte-identical to the committed workspace.
 
 ```bash
 # docs + contract validation
