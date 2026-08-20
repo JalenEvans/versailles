@@ -120,6 +120,15 @@ import type {
  * 7. Emitter seam (ADR-0008/0009): emitSuite dispatches on framework across
  *    the full v1 matrix ("vitest" | "xunit" | "pytest"); an unknown framework
  *    string still throws at the seam (pinned in tests/emitters.test.ts).
+ * 8. Violation-case isolation (VERSAILLES-147, build-spec §9.1): a
+ *    precondition-violation case must satisfy ALL *other* clauses while
+ *    falsifying this one — the generic falsifier path
+ *    (planGenericViolationCase) must merge the falsifier OVER
+ *    buildValidParams so every non-falsified param carries a deterministic
+ *    valid value, never undefined. Pinned here on a generic `sku != ""`
+ *    clause coexisting with an unguarded numeric price:
+ *    pre0-violation inputs `{ sku: "", price: 0 }`. (The predicate-side of
+ *    the same ticket is pinned in tests/generator-predicate.test.ts.)
  */
 
 const ACCOUNT = "AccountService";
@@ -365,6 +374,62 @@ function makeOrderContext(): VersaillesContext {
 				OrderService: {
 					sourceHash: "man-order",
 					fields: { balance: "number" },
+				},
+			},
+		},
+		predicates: predicatesFixture(),
+		parsedContracts: parseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
+/**
+ * V-147 generic-side isolation fixture (VERSAILLES-147, build-spec §9.1):
+ * OrderService.addItem with a GENERIC falsifiable clause (`sku != ""` →
+ * planGenericViolationCase) coexisting with an unguarded numeric param
+ * (price). No predicate, no numeric compare — the pre0 violation case is the
+ * generic falsifier path and price is the "other clause" param that must keep
+ * a valid value. buildValidParams: sku (string, unconstrained) → "initial",
+ * price (number, unconstrained, no predicate guard) → 0, so the isolated
+ * pre0-violation inputs must be `{ sku: "", price: 0 }`. (The predicate-side
+ * of the same defect is pinned in tests/generator-predicate.test.ts.)
+ */
+function makeGenericViolationContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{ id: "OrderService.addItem.pre0", expr: 'sku != ""' },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "additem-generic-hash",
+					},
+				},
+			},
+		},
+	};
+	return {
+		config: makeConfig(),
+		contracts,
+		manifests: {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order-generic",
+					fields: {},
 				},
 			},
 		},
@@ -1170,5 +1235,27 @@ describe("emitSuite — output path configuration (Center W4)", () => {
 		expect(accountFile?.content).not.toContain(
 			'from "../../src/AccountService.js"',
 		);
+	});
+});
+
+describe("planTestCases — violation-case isolation (§9.1, VERSAILLES-147)", () => {
+	it("a generic precondition-violation case carries a valid value for the other param — never undefined (V-147)", () => {
+		const suite = planTestCases(makeGenericViolationContext());
+
+		// pre0 `sku != ""` violation via the generic falsifier path
+		// (planGenericViolationCase): falsifying input is sku = "". §9.1
+		// requires the case to satisfy all OTHER clauses — there are none
+		// beyond pre0, but the unguarded price param must still take
+		// buildValidParams' deterministic numeric default 0, never undefined.
+		// (The committed bug left it undefined, producing
+		// `addItem("", undefined)`.)
+		const violations = allCases(suite).filter(
+			(case_) =>
+				case_.kind === "precondition-violation" &&
+				case_.traces.includes("OrderService.addItem.pre0") &&
+				case_.expects.outcome === "reject",
+		);
+		expect(violations.length).toBeGreaterThan(0);
+		expect(violations[0].inputs).toEqual({ sku: "", price: 0 });
 	});
 });

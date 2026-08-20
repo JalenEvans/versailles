@@ -287,9 +287,20 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 						idiom,
 						warnings,
 						context,
+						operation,
+						preconditions,
 					);
 				} else {
-					planGenericViolationCase(ast, pre.id, cases, nextId, idiom);
+					planGenericViolationCase(
+						ast,
+						pre.id,
+						cases,
+						nextId,
+						idiom,
+						operation,
+						preconditions,
+						context,
+					);
 				}
 			}
 
@@ -580,6 +591,14 @@ function planEnumPartitionCases(
  * (v1 heuristic — no SMT solver, build-spec §9.5). Top-level predicate-call
  * clauses NEVER reach here (they are routed to planPredicateViolationCase, so
  * their coverage gap is never silent).
+ *
+ * Violation-case isolation (VERSAILLES-147, build-spec §9.1): the case must
+ * satisfy ALL *other* clauses while falsifying this one, so the falsifier is
+ * merged OVER buildValidParams — every non-falsified param keeps a
+ * deterministic valid value, never undefined (the committed example's
+ * `addItem("", undefined)` left price undefined, falsifying `isPositive(price)`
+ * too). Ordering matters: buildValidParams FIRST, falsifier OVERLAY LAST so
+ * the falsifier wins on its own param.
  */
 function planGenericViolationCase(
 	ast: Node,
@@ -587,16 +606,23 @@ function planGenericViolationCase(
 	cases: PlannedCase[],
 	nextId: (kind: CaseKind) => string,
 	idiom: string,
+	operation: ContractOperation,
+	preconditions: ContractClause[],
+	context: VersaillesContext,
 ): void {
 	const falsifier = falsifyingInput(ast);
 	if (falsifier === null) {
 		return;
 	}
+	const inputs = {
+		...buildValidParams(operation, preconditions, context),
+		...falsifier,
+	};
 	cases.push({
 		id: nextId("precondition-violation"),
 		kind: "precondition-violation",
 		description: `violates ${clauseId}`,
-		inputs: falsifier,
+		inputs,
 		expects: { outcome: "reject", rejectionIdiom: idiom },
 		traces: [clauseId],
 	});
@@ -611,6 +637,14 @@ function planGenericViolationCase(
  * from the registered predicate's paramTypes (no randomness, ADR-0002); the
  * case is a normal §9.1 violation case (kind "precondition-violation", traces
  * the clause id, outcome reject with the configured rejection idiom, ADR-0007).
+ *
+ * Violation-case isolation (VERSAILLES-147, build-spec §9.1): the case must
+ * satisfy ALL *other* clauses while falsifying this one, so the falsifier is
+ * merged OVER buildValidParams — every non-falsified param keeps a
+ * deterministic valid value, never undefined (the committed example's
+ * `addItem(undefined, -1)` left sku undefined, falsifying `sku != ""` too).
+ * Ordering matters: buildValidParams FIRST, falsifier OVERLAY LAST so the
+ * falsifier wins on its own param.
  */
 function planPredicateViolationCase(
 	ast: Extract<Node, { type: "predicateCall" }>,
@@ -620,6 +654,8 @@ function planPredicateViolationCase(
 	idiom: string,
 	warnings: LoaderWarning[],
 	context: VersaillesContext,
+	operation: ContractOperation,
+	preconditions: ContractClause[],
 ): void {
 	const entry = context.predicates?.predicates?.[ast.name];
 	if (entry === undefined) {
@@ -639,11 +675,15 @@ function planPredicateViolationCase(
 		});
 		return;
 	}
+	const inputs = {
+		...buildValidParams(operation, preconditions, context),
+		...{ [falsifier.argName]: falsifier.value },
+	};
 	cases.push({
 		id: nextId("precondition-violation"),
 		kind: "precondition-violation",
 		description: `violates ${clauseId} (predicate ${ast.name} falsified via ${falsifier.argName})`,
-		inputs: { [falsifier.argName]: falsifier.value },
+		inputs,
 		expects: { outcome: "reject", rejectionIdiom: idiom },
 		traces: [clauseId],
 	});

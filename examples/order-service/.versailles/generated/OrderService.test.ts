@@ -7,11 +7,11 @@ import { OrderService } from "../../src/OrderService.ts";
 
 describe("addItem", () => {
 	it("OrderService.addItem.precondition-violation-0 — violates OrderService.addItem.pre0", () => {
-		expect(() => new OrderService().addItem("", undefined)).toThrow();
+		expect(() => new OrderService().addItem("", 1)).toThrow();
 	});
 
 	it("OrderService.addItem.precondition-violation-1 — violates OrderService.addItem.pre1 (predicate isPositive falsified via price)", () => {
-		expect(() => new OrderService().addItem(undefined, -1)).toThrow();
+		expect(() => new OrderService().addItem("initial", -1)).toThrow();
 	});
 
 	it("OrderService.addItem.postcondition-satisfaction-0 — valid input asserting postconditions OrderService.addItem.post0", () => {
