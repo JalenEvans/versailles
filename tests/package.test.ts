@@ -41,6 +41,10 @@ const SHIM_PATH = join(REPO_ROOT, "bin", "versailles");
 type PackageJson = {
 	name?: string;
 	scripts?: Record<string, string>;
+	license?: string;
+	repository?: { url?: string };
+	author?: string | { name?: string };
+	keywords?: string[];
 };
 
 async function readPackageJson(): Promise<PackageJson> {
@@ -127,6 +131,54 @@ describe("package.json lifecycle scripts (VERSAILLES-16 local install path)", ()
 		// AND smoke (run the shipped-surface suite) before npm can publish.
 		expect(pkg.scripts?.prepublishOnly).toContain("build");
 		expect(pkg.scripts?.prepublishOnly).toContain("smoke");
+	});
+});
+
+// ── package.json publish metadata (VERSAILLES-19) ──────────────────────────
+// "Get Ready For Beta" sprint Phase 5 housekeeping: the ticket AC requires
+// "npm pkg checks clean; no publish warnings for license/repository".
+// package.json currently ships name/version/description/private/type/main/
+// types/exports/bin/files/scripts/devDependencies/packageManager/engines but
+// LACKS license, repository, author, and keywords — so `npm publish --dry-run`
+// warns on all four. The repo already carries a LICENSE file (MIT); the
+// manifest must declare it. These tests pin the four fields npm surfaces in
+// publish warnings, asserting presence/shape only — never content beyond the
+// license value — so a future URL/author/keyword wording change stays green.
+
+describe("package.json publish metadata (VERSAILLES-19)", () => {
+	it('declares `license` as "MIT" — the repo\'s LICENSE file is declared for npm publish', async () => {
+		const pkg = await readPackageJson();
+
+		expect(pkg.license).toBe("MIT");
+	});
+
+	it("declares a `repository` object with a `url` field — npm publish resolves the homepage without a warning", async () => {
+		const pkg = await readPackageJson();
+
+		expect(pkg.repository).toBeDefined();
+		expect(typeof pkg.repository?.url).toBe("string");
+	});
+
+	it("declares a non-empty `author` (string, or object with a name) — npm publish surfaces an author", async () => {
+		const pkg = await readPackageJson();
+
+		const author = pkg.author;
+		const authorIsNonEmptyString =
+			typeof author === "string" && author.trim().length > 0;
+		const authorIsObjectWithName =
+			typeof author === "object" &&
+			author !== null &&
+			typeof author.name === "string" &&
+			author.name.trim().length > 0;
+		expect(authorIsNonEmptyString || authorIsObjectWithName).toBe(true);
+	});
+
+	it("declares `keywords` as a non-empty string array — npm publish discovers the package by topic", async () => {
+		const pkg = await readPackageJson();
+
+		expect(Array.isArray(pkg.keywords)).toBe(true);
+		expect((pkg.keywords ?? []).length).toBeGreaterThan(0);
+		expect((pkg.keywords ?? []).every((k) => typeof k === "string")).toBe(true);
 	});
 });
 

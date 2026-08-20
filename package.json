@@ -2,6 +2,7 @@
 	"name": "versailles-dbc",
 	"version": "0.1.0",
 	"description": "Deterministic test generation from Design-by-Contract specifications",
+	"author": "Jalen Evans",
 	"private": false,
 	"type": "module",
 	"main": "./dist/index.js",
@@ -16,6 +17,18 @@
 		"versailles": "./bin/versailles"
 	},
 	"files": ["dist", "bin", "config.schema.json"],
+	"keywords": [
+		"design-by-contract",
+		"test-generation",
+		"contract-testing",
+		"deterministic",
+		"cli"
+	],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/JalenEvans/versailles.git"
+	},
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
 		"prepare": "tsc -p tsconfig.json",
