@@ -315,6 +315,68 @@ function makeInvalidContext(): VersaillesContext {
 	};
 }
 
+/**
+ * Dedicated VERSAILLES-146 fixture for an `old(...) + param` postcondition —
+ * the committed example shape (`examples/order-service/.versailles/generated/
+ * OrderService.test.ts`, `balance == old(balance) + price`). With the
+ * `price >= 1` precondition the planner's deterministic valid input is
+ * price=1 (buildValidParams lower bound); the pre-state balance defaults to
+ * PRE_STATE_NUMBER (50) with no adjustment needed (balance >= 0 already holds),
+ * so the expected post-state literal is old(balance) + price = 50 + 1 = 51.
+ */
+function makeOrderContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [{ id: "OrderService.inv0", expr: "balance >= 0" }],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{
+								id: "OrderService.addItem.pre0",
+								expr: "price >= 1",
+							},
+						],
+						postconditions: [
+							{
+								id: "OrderService.addItem.post0",
+								expr: "balance == old(balance) + price",
+							},
+						],
+						effects: [{ field: "balance", kind: "mutate" }],
+						sourceHash: "additem-hash",
+					},
+				},
+			},
+		},
+	};
+	return {
+		config: makeConfig(),
+		contracts,
+		manifests: {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order",
+					fields: { balance: "number" },
+				},
+			},
+		},
+		predicates: predicatesFixture(),
+		parsedContracts: parseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
 function operationCases(
 	suite: PlannedSuite,
 	component: string,
@@ -549,6 +611,65 @@ describe("planTestCases — postcondition-satisfaction cases (§9.1)", () => {
 		// the emitter can resolve old(balance) and build the pre-state.
 		expect(typeof satisfaction?.inputs.balance).toBe("number");
 		expect(satisfaction?.inputs.balance as number).toBeGreaterThanOrEqual(0);
+	});
+
+	it("derives real assertion descriptors from postconditions — subject is the effect field, literal resolves old() against the captured pre-state (VERSAILLES-146)", () => {
+		const suite = planTestCases(makeContext());
+
+		const satisfaction = operationCases(suite, ACCOUNT, "withdraw").find(
+			(case_) => case_.kind === "postcondition-satisfaction",
+		);
+		expect(satisfaction).toBeDefined();
+
+		// THE V-146 gap: the case today carries postconditions ids but never
+		// expects.assertions, so the emitter renders a bare call with NO
+		// assertion (the committed example shows
+		// `new OrderService().addItem("initial", 1);` — nothing asserted).
+		const assertions = satisfaction?.expects.assertions;
+		expect(assertions).toBeDefined();
+		expect(assertions?.length).toBeGreaterThan(0);
+
+		// post0 `old(balance) - amount == balance` must derive a descriptor on
+		// the EFFECT field (balance) with op "==" and a literal equal to the
+		// postcondition RHS resolved against the case's captured inputs:
+		// old(balance) - amount = inputs.balance - inputs.amount (verified:
+		// amount=55, pre-state balance=50 → literal -5).
+		const eq = assertions?.find(
+			(assertion) => assertion.subject === "balance" && assertion.op === "==",
+		);
+		expect(eq).toBeDefined();
+		const amount = satisfaction?.inputs.amount as number;
+		const balance = satisfaction?.inputs.balance as number;
+		expect(eq?.literal).toBe(balance - amount);
+	});
+
+	it("derives an `old(field) + param` postcondition into a literal assertion — old() resolved against the captured pre-state plus the valid param (VERSAILLES-146)", () => {
+		const suite = planTestCases(makeOrderContext());
+
+		const satisfaction = operationCases(suite, "OrderService", "addItem").find(
+			(case_) => case_.kind === "postcondition-satisfaction",
+		);
+		expect(satisfaction).toBeDefined();
+
+		const assertions = satisfaction?.expects.assertions;
+		expect(assertions).toBeDefined();
+		expect(assertions?.length).toBeGreaterThan(0);
+
+		// post0 `balance == old(balance) + price` must derive
+		// { subject: "balance", op: "==", literal } with the literal equal to
+		// old(balance) + price resolved from the case's captured inputs —
+		// never a bare call with no assertion.
+		const eq = assertions?.find(
+			(assertion) => assertion.subject === "balance" && assertion.op === "==",
+		);
+		expect(eq).toBeDefined();
+		const balance = satisfaction?.inputs.balance as number;
+		const price = satisfaction?.inputs.price as number;
+		expect(eq?.literal).toBe(balance + price);
+		// Deterministic fixture values (verified): pre-state balance = 50
+		// (PRE_STATE_NUMBER), valid price = 1 (price >= 1 lower bound) →
+		// literal 51 — the committed example's expected post-state.
+		expect(eq?.literal).toBe(51);
 	});
 });
 

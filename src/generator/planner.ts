@@ -38,7 +38,11 @@
  *   methods key stays fully legacy — byte-identical options-object emission.
  * - Postcondition-satisfaction cases: valid inputs asserted against every
  *   postcondition, with the captured pre-call state stored in `inputs` under
- *   the manifest field names so `old(field)` resolves.
+ *   the manifest field names so `old(field)` resolves. Simple
+ *   `field op expr` postconditions also derive real matcher assertions
+ *   (`expects.assertions`) with old() + arithmetic resolved against the
+ *   captured pre-state and valid params, so the emitter asserts the effect
+ *   field instead of a bare call (VERSAILLES-146).
  *
  * §9.2 per-component invariant tests (only for components WITH invariants):
  * - Invariant cases per operation: valid pre-state, call with valid inputs,
@@ -323,12 +327,25 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 					...invariants,
 				]);
 				const postIds = postconditions.map((post) => post.id);
+				// VERSAILLES-146: derive real matcher assertions from the
+				// postconditions (old() + arithmetic resolved against the
+				// captured pre-state and valid params) so the emitter never
+				// reduces a satisfaction case to a bare call with no
+				// assertion. Same preState/validParams objects the case inputs
+				// are built from — the assertions must pin exactly the
+				// post-state those inputs derive.
+				const assertions = postconditionAssertions(
+					postconditions,
+					preState,
+					validParams,
+					context,
+				);
 				cases.push({
 					id: nextId("postcondition-satisfaction"),
 					kind: "postcondition-satisfaction",
 					description: `valid input asserting postconditions ${postIds.join(", ")}`,
 					inputs: { ...validParams, ...preState },
-					expects: { outcome: "accept", postconditions: postIds },
+					expects: { outcome: "accept", postconditions: postIds, assertions },
 					traces: postIds,
 				});
 			}
@@ -978,6 +995,84 @@ function invariantAssertions(
 		if (descriptor !== null) {
 			assertions.push(descriptor);
 		}
+	}
+	return assertions;
+}
+
+/**
+ * Center W2b counterpart for postconditions (VERSAILLES-146): derives
+ * renderable assertion descriptors from simple postcondition compares
+ * (`field op expr` / `expr op field`) so a postcondition-satisfaction case
+ * asserts the effect field with a real matcher instead of a bare call with no
+ * assertion. The expected literal is the OTHER side evaluated against the
+ * captured pre-state and the valid params — old() resolves to the captured
+ * pre-state, and a bare field ref resolves params → post → pre with post ===
+ * preState (DbC post-state resolution, Center W3): in a postcondition a bare
+ * field IS the post-state, so while PLANNING the captured pre-state is the
+ * only deterministic value available. E.g. `balance == old(balance) + price`
+ * with pre-state balance 50 and valid price 1 derives
+ * { subject: "balance", op: "==", literal: 51 } — the exact post-call value
+ * the assertion must pin. Non-computable expressions (predicateCall,
+ * unresolvable refs) contribute no descriptor — never a bad literal (mirrors
+ * invariantAssertions' conservative skip).
+ */
+function postconditionAssertions(
+	postconditions: ContractClause[],
+	preState: Record<string, unknown>,
+	validParams: Record<string, unknown>,
+	context: VersaillesContext,
+): AssertionDescriptor[] {
+	const assertions: AssertionDescriptor[] = [];
+	const env: EvalEnv = { params: validParams, pre: preState, post: preState };
+	for (const post of postconditions) {
+		const ast = context.parsedContracts[post.id];
+		if (
+			ast === undefined ||
+			ast.type !== "compare" ||
+			!SIMPLE_COMPARE_OPS.has(ast.op)
+		) {
+			continue;
+		}
+		const leftVar = fieldRefName(ast.left);
+		const rightVar = fieldRefName(ast.right);
+		// Exactly ONE side is a single-segment fieldRef (the assertion
+		// subject); the other side is the expected-value expression. Both-side
+		// fieldRef compares (e.g. `status == newStatus`) are skipped — with no
+		// unique field subject the descriptor would be ambiguous (mirrors
+		// simpleCompareDescriptor's literal-only shape).
+		let subject: string;
+		let expr: Node;
+		let inverted = false;
+		if (leftVar !== null && rightVar === null) {
+			subject = leftVar;
+			expr = ast.right;
+		} else if (rightVar !== null && leftVar === null) {
+			subject = rightVar;
+			expr = ast.left;
+			inverted = true;
+		} else {
+			continue;
+		}
+		const literal = evaluate(expr, env);
+		if (literal === undefined) {
+			continue;
+		}
+		// Invert numeric ops when the subject sits on the RIGHT
+		// (`old(balance) >= balance` → subject balance, op <=, literal 50);
+		// == and != pass through. `balance != 0` keeps op "!=" and the
+		// emitter's not.toEqual(0).
+		const op =
+			ast.op === "==" || ast.op === "!=" || !inverted
+				? ast.op
+				: INVERTED_NUMERIC_OP[ast.op];
+		if (op === undefined) {
+			continue;
+		}
+		assertions.push({
+			subject,
+			op: op as AssertionDescriptor["op"],
+			literal,
+		});
 	}
 	return assertions;
 }

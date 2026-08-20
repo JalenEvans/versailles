@@ -15,7 +15,9 @@ describe("addItem", () => {
 	});
 
 	it("OrderService.addItem.postcondition-satisfaction-0 — valid input asserting postconditions OrderService.addItem.post0", () => {
-		new OrderService().addItem("initial", 1);
+		const instance = new OrderService();
+		instance.addItem("initial", 1);
+		expect(instance.balance).toEqual(51);
 	});
 
 });
