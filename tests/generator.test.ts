@@ -442,6 +442,164 @@ function makeGenericViolationContext(): VersaillesContext {
 	};
 }
 
+/**
+ * V-148 boundary-path isolation fixture (VERSAILLES-148, build-spec §9.1):
+ * OrderService.addItem(sku, price) with ONE numeric precondition (`price >= 1`
+ * classifies as the "numeric" clause shape) and no postconditions/invariants,
+ * so the only planned cases are the three boundary ones. buildValidParams
+ * here: sku (unconstrained string) → "initial", price (lower bound 1) → 1.
+ */
+function makeBoundaryIsolationContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{ id: "OrderService.addItem.pre0", expr: "price >= 1" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "additem-boundary-hash",
+					},
+				},
+			},
+		},
+	};
+	return {
+		config: makeConfig(),
+		contracts,
+		manifests: {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order-boundary",
+					fields: {},
+				},
+			},
+		},
+		predicates: predicatesFixture(),
+		parsedContracts: parseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
+/**
+ * V-148 partition-path isolation fixture (VERSAILLES-148, build-spec §9.1):
+ * same two-param shape but the precondition is an `in` clause over numbers
+ * (`price in [1, 2, 3]` classifies as the "in" clause shape), planning three
+ * member accepts plus one outside-set reject. An `in` clause contributes NO
+ * numeric bounds, so buildValidParams' price default is the unconstrained 0 —
+ * every case's real value must come from the target overlay.
+ */
+function makePartitionIsolationContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{ id: "OrderService.addItem.pre0", expr: "price in [1, 2, 3]" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "additem-partition-hash",
+					},
+				},
+			},
+		},
+	};
+	return {
+		config: makeConfig(),
+		contracts,
+		manifests: {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order-partition",
+					fields: {},
+				},
+			},
+		},
+		predicates: predicatesFixture(),
+		parsedContracts: parseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
+/**
+ * V-148 enum-partition isolation fixture (VERSAILLES-148, build-spec §9.1):
+ * CatalogService.setTier(tier, sku) where tier is enum-typed
+ * (`enum<GOLD,SILVER>` → one partition case per member + one outside) and the
+ * `tier != null` precondition gives findTraceClause a referencing clause.
+ * buildValidParams here: tier (enum) → first member "GOLD", sku
+ * (unconstrained string) → "initial".
+ */
+function makeEnumPartitionIsolationContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			CatalogService: {
+				invariants: [],
+				operations: {
+					setTier: {
+						id: "CatalogService.setTier",
+						params: [
+							{ name: "tier", type: "enum<GOLD,SILVER>" },
+							{ name: "sku", type: "string" },
+						],
+						preconditions: [
+							{ id: "CatalogService.setTier.pre0", expr: "tier != null" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "settier-hash",
+					},
+				},
+			},
+		},
+	};
+	return {
+		config: makeConfig(),
+		contracts,
+		manifests: {
+			version: "1.0",
+			manifests: {
+				CatalogService: {
+					sourceHash: "man-catalog",
+					fields: {},
+				},
+			},
+		},
+		predicates: predicatesFixture(),
+		parsedContracts: parseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
 function operationCases(
 	suite: PlannedSuite,
 	component: string,
@@ -1257,5 +1415,89 @@ describe("planTestCases — violation-case isolation (§9.1, VERSAILLES-147)", (
 		);
 		expect(violations.length).toBeGreaterThan(0);
 		expect(violations[0].inputs).toEqual({ sku: "", price: 0 });
+	});
+});
+
+describe("planner — boundary/partition cases isolate the target param with valid siblings (VERSAILLES-148)", () => {
+	it("boundary cases carry the FULL input object — the non-target param keeps its deterministic valid value (V-148)", () => {
+		const suite = planTestCases(makeBoundaryIsolationContext());
+
+		const cases = boundaryCases(
+			suite,
+			"OrderService",
+			"addItem",
+			"OrderService.addItem.pre0",
+		);
+		expect(cases.length).toBe(3);
+		// Full-object toEqual: ANY missing sibling fails. Root cause (V-148):
+		// planBoundaryCases builds inputs from the target param alone
+		// (`{ [shape.variable]: item.value }`), leaving sku undefined — the
+		// emitted call rejects/crashes for the WRONG reason and the accept
+		// cases violate the unguarded param's validity. Doctrine (V-147
+		// precedent): merge buildValidParams UNDER the target value so every
+		// sibling keeps its deterministic default.
+		expect(cases.map((case_) => case_.inputs)).toEqual([
+			{ sku: "initial", price: 0 },
+			{ sku: "initial", price: 1 },
+			{ sku: "initial", price: 2 },
+		]);
+		// Value-derived outcomes stay intact: 0 falsifies `price >= 1`.
+		expect(cases.map((case_) => case_.expects.outcome)).toEqual([
+			"reject",
+			"accept",
+			"accept",
+		]);
+	});
+
+	it("partition cases — members AND the outside-set reject — carry the FULL input object (V-148)", () => {
+		const suite = planTestCases(makePartitionIsolationContext());
+
+		const cases = operationCases(suite, "OrderService", "addItem").filter(
+			(case_) =>
+				case_.kind === "partition" &&
+				case_.traces.includes("OrderService.addItem.pre0"),
+		);
+		expect(cases.length).toBe(4);
+		// Same V-148 root cause via planPartitionCases
+		// (`{ [shape.variable]: member }`): sku must keep buildValidParams'
+		// deterministic "initial" on every member accept AND on the
+		// outside-set reject (outsideValue([1,2,3]) → 4), not undefined.
+		expect(cases.map((case_) => case_.inputs)).toEqual([
+			{ sku: "initial", price: 1 },
+			{ sku: "initial", price: 2 },
+			{ sku: "initial", price: 3 },
+			{ sku: "initial", price: 4 },
+		]);
+		expect(cases.map((case_) => case_.expects.outcome)).toEqual([
+			"accept",
+			"accept",
+			"accept",
+			"reject",
+		]);
+	});
+
+	it("enum-partition cases carry the sibling param's deterministic valid value (V-148)", () => {
+		const suite = planTestCases(makeEnumPartitionIsolationContext());
+
+		const cases = operationCases(suite, "CatalogService", "setTier").filter(
+			(case_) =>
+				case_.kind === "partition" &&
+				case_.traces.includes("CatalogService.setTier.pre0"),
+		);
+		expect(cases.length).toBe(3);
+		// Same V-148 root cause via planEnumPartitionCases
+		// (`{ [paramName]: member }`): sku must keep "initial" on both enum
+		// member accepts and on the outside-enum reject
+		// (outsideValue(["GOLD","SILVER"]) → "INVALID").
+		expect(cases.map((case_) => case_.inputs)).toEqual([
+			{ sku: "initial", tier: "GOLD" },
+			{ sku: "initial", tier: "SILVER" },
+			{ sku: "initial", tier: "INVALID" },
+		]);
+		expect(cases.map((case_) => case_.expects.outcome)).toEqual([
+			"accept",
+			"accept",
+			"reject",
+		]);
 	});
 });

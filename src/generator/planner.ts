@@ -272,9 +272,27 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 				}
 				const shape = classifyClause(ast);
 				if (shape.kind === "numeric") {
-					planBoundaryCases(shape, pre.id, cases, nextId, idiom);
+					planBoundaryCases(
+						shape,
+						pre.id,
+						cases,
+						nextId,
+						idiom,
+						operation,
+						preconditions,
+						context,
+					);
 				} else if (shape.kind === "in") {
-					planPartitionCases(shape, pre.id, cases, nextId, idiom);
+					planPartitionCases(
+						shape,
+						pre.id,
+						cases,
+						nextId,
+						idiom,
+						operation,
+						preconditions,
+						context,
+					);
 				} else if (shape.kind === "predicateCall") {
 					// classifyClause returns "predicateCall" exactly when
 					// ast.type === "predicateCall", so the cast is safe and
@@ -326,6 +344,9 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 					cases,
 					nextId,
 					idiom,
+					operation,
+					preconditions,
+					context,
 				);
 			}
 
@@ -469,6 +490,13 @@ function allCases(suite: PlannedSuite): PlannedCase[] {
  * with value-derived outcomes. For `x >= b`, boundary−1 rejects; for
  * `x <= b`, boundary+1 rejects. The reject case doubles as the clause's
  * precondition-violation case.
+ *
+ * Case-input isolation (VERSAILLES-148, build-spec §9.1): a boundary case must
+ * satisfy every OTHER param while this one probes the boundary, so each input
+ * merges buildValidParams UNDER the target value — buildValidParams FIRST,
+ * boundary value LAST so the overlay wins (the reject needs price=0 while the
+ * base gives price=1); siblings keep deterministic valid values, never
+ * undefined.
  */
 function planBoundaryCases(
 	shape: Extract<ClauseShape, { kind: "numeric" }>,
@@ -476,7 +504,11 @@ function planBoundaryCases(
 	cases: PlannedCase[],
 	nextId: (kind: CaseKind) => string,
 	idiom: string,
+	operation: ContractOperation,
+	preconditions: ContractClause[],
+	context: VersaillesContext,
 ): void {
+	const base = buildValidParams(operation, preconditions, context);
 	const b = shape.boundary;
 	const spec: { value: number; outcome: "accept" | "reject"; label: string }[] =
 		[];
@@ -507,7 +539,7 @@ function planBoundaryCases(
 			id: nextId("boundary"),
 			kind: "boundary",
 			description: `${item.label} (${item.outcome}): ${shape.variable}=${item.value} ${item.outcome === "reject" ? "falsifies" : "satisfies"} ${clauseId}`,
-			inputs: { [shape.variable]: item.value },
+			inputs: { ...base, [shape.variable]: item.value },
 			expects:
 				item.outcome === "reject"
 					? { outcome: "reject", rejectionIdiom: idiom }
@@ -521,6 +553,12 @@ function planBoundaryCases(
  * §9.1 equivalence partitions for an `in` clause: one case per member
  * (accept) plus one outside the set (reject, configured idiom — this also
  * serves as the clause's violation input).
+ *
+ * Case-input isolation (VERSAILLES-148, build-spec §9.1): a partition case
+ * must satisfy every OTHER param while this one probes the member set, so each
+ * input merges buildValidParams UNDER the target value — buildValidParams
+ * FIRST, member/outside value LAST so the overlay wins; siblings keep
+ * deterministic valid values, never undefined.
  */
 function planPartitionCases(
 	shape: Extract<ClauseShape, { kind: "in" }>,
@@ -528,13 +566,17 @@ function planPartitionCases(
 	cases: PlannedCase[],
 	nextId: (kind: CaseKind) => string,
 	idiom: string,
+	operation: ContractOperation,
+	preconditions: ContractClause[],
+	context: VersaillesContext,
 ): void {
+	const base = buildValidParams(operation, preconditions, context);
 	for (const member of shape.members) {
 		cases.push({
 			id: nextId("partition"),
 			kind: "partition",
 			description: `member ${String(member)} of ${clauseId}`,
-			inputs: { [shape.variable]: member },
+			inputs: { ...base, [shape.variable]: member },
 			expects: { outcome: "accept" },
 			traces: [clauseId],
 		});
@@ -543,7 +585,7 @@ function planPartitionCases(
 		id: nextId("partition"),
 		kind: "partition",
 		description: `value outside the set of ${clauseId}`,
-		inputs: { [shape.variable]: outsideValue(shape.members) },
+		inputs: { ...base, [shape.variable]: outsideValue(shape.members) },
 		expects: { outcome: "reject", rejectionIdiom: idiom },
 		traces: [clauseId],
 	});
@@ -555,6 +597,12 @@ function planPartitionCases(
  * the set (reject). Traces the first clause that constrains the param (or the
  * operation's first precondition / the component's first invariant) so traces
  * stay non-empty and machine-checkable.
+ *
+ * Case-input isolation (VERSAILLES-148, build-spec §9.1): an enum-partition
+ * case must satisfy every OTHER param while this one probes the enum, so each
+ * input merges buildValidParams UNDER the target value — buildValidParams
+ * FIRST, member/outside value LAST so the overlay wins; siblings keep
+ * deterministic valid values, never undefined.
  */
 function planEnumPartitionCases(
 	paramName: string,
@@ -563,13 +611,17 @@ function planEnumPartitionCases(
 	cases: PlannedCase[],
 	nextId: (kind: CaseKind) => string,
 	idiom: string,
+	operation: ContractOperation,
+	preconditions: ContractClause[],
+	context: VersaillesContext,
 ): void {
+	const base = buildValidParams(operation, preconditions, context);
 	for (const member of members) {
 		cases.push({
 			id: nextId("partition"),
 			kind: "partition",
 			description: `enum member ${String(member)} of ${paramName}`,
-			inputs: { [paramName]: member },
+			inputs: { ...base, [paramName]: member },
 			expects: { outcome: "accept" },
 			traces: [clauseId],
 		});
@@ -578,7 +630,7 @@ function planEnumPartitionCases(
 		id: nextId("partition"),
 		kind: "partition",
 		description: `value outside enum ${paramName}`,
-		inputs: { [paramName]: outsideValue(members) },
+		inputs: { ...base, [paramName]: outsideValue(members) },
 		expects: { outcome: "reject", rejectionIdiom: idiom },
 		traces: [clauseId],
 	});

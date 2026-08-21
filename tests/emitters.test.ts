@@ -2111,3 +2111,130 @@ describe("emitSuite — postcondition-satisfaction seeds captured pre-state onto
 		}
 	});
 });
+
+/**
+ * V-148 isolation context: OrderService.addItem(sku, price) with ONE numeric
+ * precondition (`price >= 1`) and no postconditions/invariants, so §9.1 plans
+ * ONLY the three boundary cases — the minimal shape that reproduces the
+ * boundary-path input-isolation bug end to end (contract → plan → emit → run).
+ */
+function makeV148IsolationContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{ id: "OrderService.addItem.pre0", expr: "price >= 1" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "additem-v148-hash",
+					},
+				},
+			},
+		},
+	};
+	return {
+		config: makeConfig(),
+		contracts,
+		manifests: {
+			version: "1.0",
+			manifests: {
+				OrderService: { sourceHash: "man-order-v148", fields: {} },
+			},
+		},
+		predicates: predicatesFixture(),
+		parsedContracts: parseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
+// V-148 root cause: planBoundaryCases builds each case's inputs from the
+// TARGET param alone (`{ [shape.variable]: item.value }`), so the emitter
+// renders `addItem(undefined, <price>)` — every sibling param is undefined.
+// The fixture below DEREFERENCES sku (`sku.trim()`) BEFORE guarding price on
+// purpose: a loose `sku === ""` comparison silently tolerates undefined
+// (evaluates false, no crash), which would let today's broken emission run
+// green by accident. The early dereference forces the missing sibling into
+// the WRONG failure mode — a raw TypeError before the guarded price clause is
+// ever reached — so this gate can only turn green once the planner emits full
+// input objects and every boundary case exercises its INTENDED clause.
+describe("emitted suite — boundary/partition cases run green against a real component (VERSAILLES-148)", () => {
+	it("executes the emitted boundary-case tests with the REAL vitest runner — exit 0 (Red today: undefined siblings crash via TypeError before reaching the guarded clause)", async () => {
+		const root = await mkdtemp(join(tmpdir(), "versailles-v148-"));
+		try {
+			await writeFile(
+				join(root, "order.ts"),
+				`export class OrderService {
+	private balance = 0;
+	addItem(sku: string, price: number): void {
+		if (sku.trim() === "") throw new Error("sku must not be empty");
+		if (!(price >= 1)) throw new Error("price must be positive");
+		this.balance += price;
+	}
+}
+`,
+				"utf8",
+			);
+
+			const suite = planTestCases(makeV148IsolationContext());
+			const files = emitSuite(suite, "vitest", {
+				generatedDir: ".",
+				modulePaths: { OrderService: "./order" },
+				methods: {
+					OrderService: {
+						addItem: {
+							static: false,
+							params: ["sku", "price"],
+							returnType: "void",
+						},
+					},
+				},
+			});
+			const order = files.find((file) =>
+				file.path.endsWith("OrderService.test.ts"),
+			);
+			expect(order).toBeDefined();
+			await writeFile(
+				join(root, "OrderService.test.ts"),
+				order?.content ?? "",
+				"utf8",
+			);
+
+			// The REAL vitest runner (same harness as the V-27/B1 E2E gates):
+			// bun's own test-runner shim is more forgiving than the established
+			// `vitest run` command, so it cannot stand in here.
+			const vitestBin = join(
+				dirname(fileURLToPath(import.meta.url)),
+				"..",
+				"node_modules",
+				"vitest",
+				"vitest.mjs",
+			);
+			const run = spawnSync(process.execPath, [vitestBin, "run"], {
+				cwd: root,
+				encoding: "utf8",
+			});
+			expect(
+				run.status,
+				`emitted boundary-case suite did not run clean:\n${run.stdout}\n${run.stderr}`,
+			).toBe(0);
+			// The runner SUMMARY must independently show zero failures — the
+			// gate pins the observable output, not just the exit code.
+			expect(run.stdout).not.toMatch(/\d+ failed/);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});
