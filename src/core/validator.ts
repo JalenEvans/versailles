@@ -422,12 +422,19 @@ function resolveFieldPath(state: WalkState, path: FieldPath): TermResolved {
 
 	const rootResolved = resolveRoot(state, root);
 	if (rootResolved.type === null) {
-		addError(
-			state,
-			"UNKNOWN_FIELD",
-			root,
-			`Field "${root}" does not exist in the ${scopeName(state)} scope`,
-		);
+		// ADR-0011 (contract-first emission): when manifests is null (greenfield
+		// workspace), skip UNKNOWN_FIELD errors for field references that are not
+		// params. The fields will be derived from contracts at emit time, or the
+		// user will add them to manifests later. Param references still validate
+		// correctly because resolveRoot checks params first.
+		if (state.context.manifests !== null) {
+			addError(
+				state,
+				"UNKNOWN_FIELD",
+				root,
+				`Field "${root}" does not exist in the ${scopeName(state)} scope`,
+			);
+		}
 		return { resolved: null, descriptor: root };
 	}
 	if (rootResolved.confidence === "inferred") {

@@ -614,6 +614,30 @@ export async function loadWorkspace(
 			loadJsonFile(workspaceDir, "predicates.json", validationErrors),
 		]);
 
+	// ADR-0011 (contract-first emission): manifests.json and predicates.json
+	// are optional when BOTH are missing and contracts.json is present (greenfield
+	// workspace). If only one is missing, it's a brownfield workspace with a
+	// missing file, and MISSING_FILE should be reported.
+	// config.json and contracts.json remain required.
+	if (contractsRaw !== null) {
+		const manifestsMissing = manifestsRaw === null;
+		const predicatesMissing = predicatesRaw === null;
+		// Greenfield: both manifests and predicates are missing
+		if (manifestsMissing && predicatesMissing) {
+			// Filter out MISSING_FILE errors for manifests.json and predicates.json
+			for (let i = validationErrors.length - 1; i >= 0; i--) {
+				const error = validationErrors[i];
+				if (
+					error.code === "MISSING_FILE" &&
+					(error.field === "manifests.json" ||
+						error.field === "predicates.json")
+				) {
+					validationErrors.splice(i, 1);
+				}
+			}
+		}
+	}
+
 	// Runtime shape guard (chunk 3.4a, F1): records INVALID_SHAPE errors for
 	// valid-JSON/wrong-shape files and reports which stores are safe to use.
 	// Runs BEFORE withRecordKey / parseContracts so a degenerate shape can
