@@ -321,6 +321,77 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 			}
 		});
 
+		// ── IT 4b: asymmetric workspace — manifests present, predicates missing ─────
+		// Regression pin (VERSAILLES-149): loadWorkspace only tolerates MISSING_FILE
+		// for manifests.json AND predicates.json when BOTH are absent (greenfield).
+		// If ONLY ONE is missing, it's a brownfield-with-a-hole and the loader MUST
+		// report MISSING_FILE for the absent file. This pins that predicates.json
+		// absence alone flips isValid=false with a MISSING_FILE error.
+		it("asymmetric workspace: contracts + manifests present but predicates.json missing → MISSING_FILE for predicates.json, isValid=false (VERSAILLES-149)", async () => {
+			const cwd = await mkdtemp(
+				join(tmpdir(), "versailles-cf-it4b-asymmetric-"),
+			);
+			try {
+				await mkdir(join(cwd, ".versailles"), { recursive: true });
+				await writeJsonFile(
+					join(cwd, ".versailles", "config.json"),
+					SEEDED_CONFIG,
+				);
+				await writeJsonFile(
+					join(cwd, ".versailles", "contracts.json"),
+					cartContracts(),
+				);
+				// manifests.json present (brownfield half) — minimal valid shape.
+				await writeJsonFile(join(cwd, ".versailles", "manifests.json"), {
+					version: "1.0",
+					manifests: {
+						[CART]: {
+							sourceHash: "cart-hash",
+							fields: {},
+							methods: {
+								addItem: {
+									static: false,
+									params: [
+										{ name: "sku", type: "string" },
+										{ name: "price", type: "number" },
+									],
+									returnType: "void",
+								},
+							},
+						},
+					},
+				});
+				// predicates.json deliberately NOT written — asymmetric hole.
+
+				const context = await loadWorkspace(join(cwd, ".versailles"));
+
+				// Mirror the assertion style of loader.test.ts "f: loader-level
+				// MISSING_FILE and semantic UNKNOWN_FIELD coexist".
+				const missingPredicates = context.validationErrors.find(
+					(e) => e.code === "MISSING_FILE" && e.field === "predicates.json",
+				);
+				expect(
+					missingPredicates,
+					"expected MISSING_FILE for predicates.json in asymmetric workspace",
+				).toBeDefined();
+				// manifests.json must NOT be reported missing (it is present).
+				const missingManifests = context.validationErrors.find(
+					(e) => e.code === "MISSING_FILE" && e.field === "manifests.json",
+				);
+				expect(
+					missingManifests,
+					"manifests.json is present — must NOT be reported MISSING_FILE",
+				).toBeUndefined();
+				// isValid must be false because the hole is not tolerated.
+				expect(
+					context.isValid,
+					`expected isValid=false for asymmetric workspace but got errors: ${JSON.stringify(context.validationErrors)}`,
+				).toBe(false);
+			} finally {
+				await rm(cwd, { recursive: true, force: true });
+			}
+		});
+
 		it("when manifests.json IS present with methods map, an op missing from it still warns+skips (brownfield regression pin)", async () => {
 			// This is the existing V-25 behavior — the brownfield path. The test constructs
 			// a context with manifests present but the op missing from the methods map.

@@ -433,6 +433,8 @@ CLI subcommand: `versailles check` — intended for CI.
 
 CLI subcommand: `versailles generate` — only runs against a context where `isValid: true`.
 
+Two entry points, distinguished by manifest presence (ADR-0011): **contract-first** (greenfield) — when no `manifests.json`/`predicates.json` exist, `generate` works from `contracts.json` alone; the module surface (import paths, method metadata) is derived from the contract, and generated tests fail at import until the module exists, a legitimate TDD Red. **extract-first** (brownfield) — `manifests.json` is required; full semantic validation, `sourceHash` staleness checks, and V-25 method-map gating apply. Manifests remain authoritative whenever present.
+
 ### 9.1 Per-operation test cases (from preconditions/postconditions)
 
 For each operation:
@@ -573,7 +575,7 @@ The CLI is a tool an external LLM/agent can *control* — the tool itself never 
 | `versailles extract-manifests` | Run manifest extractor, update `manifests.json` |
 | `versailles validate` | Run parser + semantic validator across all of `contracts.json`, print structured report |
 | `versailles check` | CI-mode: validate + staleness check, proper exit codes |
-| `versailles generate` | Run deterministic test generator, write to `generated/` |
+| `versailles generate` | Run deterministic test generator — contract-first from `contracts.json` alone (greenfield) or extract-first against `manifests.json` (brownfield); write to `generated/` |
 | `versailles review <component> [operation]` | Launch scoped review flow for a staged/pending contract (`--approve` merges the single object; `--reject` writes nothing) |
 | `versailles register-predicate <name> --source <Module.functionName>` | Register/update one predicate entry with mechanically verified `sourceRef`/`sourceHash`; `--verifiedPure` is the human registration gate |
 | `versailles verify-purity <name>` | Flip `verifiedPure` true for a registered predicate after manual lint (never recomputes `sourceRef`/`sourceHash`) |
@@ -619,4 +621,5 @@ The CLI is a tool an external LLM/agent can *control* — the tool itself never 
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-08-21 | general-manager | §9/§12 now describe both `generate` entry points — contract-first (greenfield, contracts-only) and extract-first (brownfield, manifests required) — per ADR-0011 Neutral consequence |
 | 2026-08-20 | general-manager | Corrected the overstated postcondition-satisfaction guarantee in §9.1 (Center review, PR fix/generator-postcondition-violation): satisfaction cases assert only the simple field-compare postconditions (`field op expr`) — predicate-call, both-side-fieldRef, and uncomputable clauses contribute no assertion (conservative skip; the case is still emitted and traced) — and void-returning instance operations assert instance state, not "the result"; the §9.4 canonical instance snippet now includes the captured pre-state seed line (`instance.<field> = <captured>;`) the emitter writes before the call |
