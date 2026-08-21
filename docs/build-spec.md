@@ -437,9 +437,11 @@ CLI subcommand: `versailles generate` — only runs against a context where `isV
 
 For each operation:
 - **Boundary values**: for every numeric comparison in preconditions (`x >= 0`, `x < 100`),
-  generate cases at the boundary, boundary−1, boundary+1.
+  generate cases at the boundary, boundary−1, boundary+1 — each case's input satisfies every
+  *other* param while this one probes the boundary.
 - **Equivalence partitions**: for every `in` clause or enum-typed field, generate one case
-  per partition member plus one case outside the set.
+  per partition member plus one case outside the set — each case's input satisfies every
+  *other* param while this one probes the partition.
 - **Precondition-violation cases**: for each precondition clause individually, generate an
   input that satisfies all *other* clauses but falsifies this one; assert the operation
   rejects (throws / returns error / whatever the language's rejection idiom is — configurable

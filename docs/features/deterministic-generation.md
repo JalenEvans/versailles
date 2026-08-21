@@ -16,8 +16,8 @@ The core value proposition: **same approved contract in, same test suite out —
 
 1. Load the workspace via [workspace-context](../domains/workspace-context.md). If the context is **not** `isValid: true`, the command is a [rejected command](command-rejection.md) — generation does not run.
 2. For each operation, generate **per-operation test cases** (build-spec §9.1):
-   - **boundary values** at numeric comparison thresholds (threshold, threshold−1, threshold+1);
-   - **equivalence partitions** for every `in` clause / enum-typed field (one case per member + one outside);
+    - **boundary values** at numeric comparison thresholds (threshold, threshold−1, threshold+1) — each case satisfies every *other* param while this one probes the boundary;
+    - **equivalence partitions** for every `in` clause / enum-typed field (one case per member + one outside) — each case satisfies every *other* param while this one probes the partition;
    - **precondition-violation cases** — inputs satisfying all *other* clauses but falsifying the one under test, asserting rejection per the configured rejection idiom;
    - **postcondition-satisfaction cases** — valid inputs asserting the simple field-compare postconditions (`field op expr`), resolving `old(...)` against captured pre-call state; non-computable clauses contribute no assertion (conservative skip, still traced).
 3. For each component with invariants, generate **per-component invariant tests** (build-spec §9.2): build a valid pre-state, call the operation, assert every invariant still holds; flag postcondition/invariant interaction cases as *expected-rejection*.
