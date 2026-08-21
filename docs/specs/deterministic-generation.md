@@ -1,7 +1,7 @@
 # Spec: Deterministic Generation
 
 **ID:** SPEC-dg
-**Lifecycle:** draft
+**Lifecycle:** implemented
 **Owner:** associate-head-coach
 **Threshold:** data (generated test files + `generated/coverage.json` are pipeline artifacts), public-api (the emitter plugin seam and the generated test surface), state (the `generated/` directory is tool-owned state, regenerated full-file; regeneration is an irreversible, idempotent transition)
 **Linked contract:** `docs/contracts/deterministic-generation.contract.yaml`
@@ -165,3 +165,4 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 | 2026-08-18 | general-manager | Mirrored contract changes (PR fix/generator-emitter-runnability): (V-24) emitted import specifiers must resolve to the real source file from project-root-relative POSIX sourcePath; (V-25) planned operations with no matching source method surface a non-silent UNPLANNABLE_OPERATION warning and never emit an unrunnable static call; (V-26) void-operation accept/invariant cases assert component instance state — backs VERSAILLES-24/25/26 |
 | 2026-08-18 | general-manager | Mirrored the review-warning contract follow-ups (fix/generator-emitter-runnability): (W3/VERSAILLES-25) the UNPLANNABLE_OPERATION guard fires whenever the component's entry carries a methods key — empty or not — missing the planned op, so a refreshed zero-method component's methods: {} is never treated as a legacy entry; (W1/VERSAILLES-26) a static void operation with assertions renders the bare call with no instance.<field> assertion — instance-state assertions stay reserved for instance void operations |
 | 2026-08-20 | general-manager | Corrected the overstated postcondition-satisfaction guarantee (Center review, PR fix/generator-postcondition-violation): satisfaction cases derive real assertions ONLY from simple field-compare postconditions (`field op expr`) — predicate-call, both-side-fieldRef, and uncomputable clauses contribute no assertion (conservative skip; the case is still emitted and traced) — and void-returning instance operations assert instance state, not "the result"; canonical emitted-shape snippets now include the captured pre-state seed line (`instance.<field> = <captured>;`) the vitest emitter writes before the call |
+| 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |

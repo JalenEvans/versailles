@@ -1,7 +1,7 @@
 # Spec: Review
 
 **ID:** SPEC-rv
-**Lifecycle:** draft
+**Lifecycle:** implemented
 **Owner:** associate-head-coach
 **Threshold:** data (approval mutates `contracts.json`, the tool's data layer), state (staged → approved is an irreversible state transition; rejection must write nothing)
 **Linked contract:** `docs/contracts/review.contract.yaml`
@@ -101,3 +101,4 @@ Human review is the human-in-the-loop gate between staged contract objects and a
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §11; ADR-0003/0010 |
 | 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
 | 2026-08-16 | associate-head-coach | Added traversal-target confinement behavior (INVALID_TARGET guard) — shipped with the review flow (PR feat/review-ecosystem) |
+| 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |

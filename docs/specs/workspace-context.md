@@ -1,7 +1,7 @@
 # Spec: Workspace Context
 
 **ID:** SPEC-wc
-**Lifecycle:** draft
+**Lifecycle:** implemented
 **Owner:** associate-head-coach
 **Threshold:** data (the `.versailles/` file set is the tool's versioned data layer; `config.schema.json` gates it), public-api (the `VersaillesContext` object, scoped extraction helper, and `versailles check` exit codes are consumed by every other component, the review UI, CI, and external agents)
 **Linked contract:** `docs/contracts/workspace-context.contract.yaml`
@@ -108,3 +108,4 @@ The `.versailles/` workspace — `config.json`, `contracts.json`, `manifests.jso
 | 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
 | 2026-08-17 | general-manager | Acknowledged the manifests.json store entry shape — `sourcePath` (never empty for covered entries; legacy entries lacking it preserved as-is) and per-component `methods` metadata — and that the loader surfaces both on `ManifestsFile` entries for downstream consumers (generate handler → emitter modulePaths + call shape). Aligns with the manifest-extraction/deterministic-generation extension (fix/generator-emitter-runnability) |
 | 2026-08-18 | general-manager | Mirrored the review-warning contract follow-up (fix/generator-emitter-runnability): the store shape's `methods` key is always present on refreshed entries — possibly `{}`, the first-class zero-methods signal — with only preserved legacy entries allowed to lack it; the loader surfaces a present empty map exactly as stored, never stripping or inventing it (VERSAILLES-25 follow-up) |
+| 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |

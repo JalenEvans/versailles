@@ -1,7 +1,7 @@
 # Spec: Predicate Registry
 
 **ID:** SPEC-pr
-**Lifecycle:** draft
+**Lifecycle:** implemented
 **Owner:** associate-head-coach
 **Threshold:** data (predicates.json is part of the tool's versioned data layer; registration mutates it), public-api (the registration CLI surface and the purity-check reminder are agent- and reviewer-facing)
 **Linked contract:** `docs/contracts/predicate-registry.contract.yaml`
@@ -102,3 +102,4 @@ cross-referencing boundary stays with contract-language. The tool never invokes 
 |------|--------|--------|
 | 2026-08-14 | associate-head-coach | Initial draft from build-spec §3.4, §13 milestone 8, §14; ADR-0003/0006/0010 |
 | 2026-08-16 | associate-head-coach | Made the shipped CLI command names concrete (`register-predicate`, `verify-purity`, `remind-unverified`) — milestone 8 tooling is shipped (PR feat/review-ecosystem) |
+| 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
