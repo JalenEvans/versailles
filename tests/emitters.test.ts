@@ -1972,3 +1972,142 @@ describe("emitSuite — a generated suite containing an EMPTY operation group RU
 		}
 	});
 });
+
+// B1 root cause: the vitest emitter's instance-binding branch constructs a
+// FRESH `const instance = new Order();` but never seeds the planner's
+// captured pre-call state (inputs.balance = 50) onto it before the operation
+// runs — so the postcondition assertion reads the constructor's default
+// state (balance = 1) instead of the captured pre-state, and every emitted
+// postcondition-satisfaction case fails at runtime (got 1, expected 51).
+describe("emitSuite — postcondition-satisfaction seeds captured pre-state onto the bound instance (B1)", () => {
+	it("emits an instance.balance = 50 seed line BEFORE the instance.addItem call in the rendered postcondition-satisfaction test", () => {
+		const suite: PlannedSuite = {
+			clauseIds: ["Order.post0"],
+			operations: [
+				{
+					component: "Order",
+					operation: "addItem",
+					cases: [
+						{
+							id: "Order.addItem.postcondition-satisfaction-0",
+							kind: "postcondition-satisfaction",
+							description: "valid input asserting postconditions Order.post0",
+							inputs: { sku: "initial", price: 1, balance: 50 },
+							expects: {
+								outcome: "accept",
+								postconditions: ["Order.post0"],
+								assertions: [{ subject: "balance", op: "==", literal: 51 }],
+							},
+							traces: ["Order.post0"],
+						},
+					],
+				},
+			],
+			invariantCases: [],
+		};
+		const files = emitSuite(suite, "vitest", {
+			methods: {
+				Order: {
+					addItem: {
+						static: false,
+						params: ["sku", "price"],
+						returnType: "void",
+					},
+				},
+			},
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+		const content = order?.content ?? "";
+		// The REQUIRED render seeds the captured pre-state onto the fresh
+		// instance before the call, so the postcondition assertion observes
+		// balance transition 50 → 51 rather than the constructor's default.
+		expect(content).toContain("instance.balance = 50;");
+		expect(content.indexOf("instance.balance = 50;")).toBeLessThan(
+			content.indexOf('instance.addItem("initial", 1);'),
+		);
+	});
+
+	it("executes the emitted postcondition-satisfaction test with the REAL vitest runner — exit 0 (Red today: fresh instance starts at balance 0, not the captured pre-state 50)", async () => {
+		const root = await mkdtemp(join(tmpdir(), "versailles-b1-"));
+		try {
+			await writeFile(
+				join(root, "order.ts"),
+				`export class Order {
+	private balance = 0;
+	addItem(sku: string, price: number): void {
+		if (sku === "") throw new Error("sku must not be empty");
+		this.balance += price;
+	}
+}
+`,
+				"utf8",
+			);
+
+			const suite: PlannedSuite = {
+				clauseIds: ["Order.post0"],
+				operations: [
+					{
+						component: "Order",
+						operation: "addItem",
+						cases: [
+							{
+								id: "Order.addItem.postcondition-satisfaction-0",
+								kind: "postcondition-satisfaction",
+								description: "valid input asserting postconditions Order.post0",
+								inputs: { sku: "initial", price: 1, balance: 50 },
+								expects: {
+									outcome: "accept",
+									postconditions: ["Order.post0"],
+									assertions: [{ subject: "balance", op: "==", literal: 51 }],
+								},
+								traces: ["Order.post0"],
+							},
+						],
+					},
+				],
+				invariantCases: [],
+			};
+			const files = emitSuite(suite, "vitest", {
+				generatedDir: ".",
+				modulePaths: { Order: "./order" },
+				methods: {
+					Order: {
+						addItem: {
+							static: false,
+							params: ["sku", "price"],
+							returnType: "void",
+						},
+					},
+				},
+			});
+			const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+			expect(order).toBeDefined();
+			await writeFile(
+				join(root, "Order.test.ts"),
+				order?.content ?? "",
+				"utf8",
+			);
+
+			// B1: the assertion literal derives from fabricated pre-state;
+			// without seeding, generated suite is red at runtime.
+			const vitestBin = join(
+				dirname(fileURLToPath(import.meta.url)),
+				"..",
+				"node_modules",
+				"vitest",
+				"vitest.mjs",
+			);
+			const run = spawnSync(process.execPath, [vitestBin, "run"], {
+				cwd: root,
+				encoding: "utf8",
+			});
+			expect(
+				run.status,
+				`generated postcondition-satisfaction suite did not run clean:\n${run.stdout}\n${run.stderr}`,
+			).toBe(0);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});

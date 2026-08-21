@@ -16,6 +16,7 @@ describe("addItem", () => {
 
 	it("OrderService.addItem.postcondition-satisfaction-0 — valid input asserting postconditions OrderService.addItem.post0", () => {
 		const instance = new OrderService();
+		instance.balance = 50;
 		instance.addItem("initial", 1);
 		expect(instance.balance).toEqual(51);
 	});
@@ -25,6 +26,7 @@ describe("addItem", () => {
 describe("OrderService invariants", () => {
 	it("OrderService.addItem.invariant-0 — call OrderService.addItem and assert invariant OrderService.inv0 still holds", () => {
 		const instance = new OrderService();
+		instance.balance = 50;
 		instance.addItem("initial", 1);
 		expect(instance.balance).toBeGreaterThanOrEqual(0);
 	});
