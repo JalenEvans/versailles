@@ -246,6 +246,18 @@ function renderCase(
 				// void carve-out above handles the static variant), so the
 				// call always runs on the bound instance.
 				lines.push(`\t\tconst instance = new ${component}();`);
+				// B1: the assertion literal is derived by the planner from its
+				// captured pre-call state, so the emitter must establish that
+				// state on the bound instance before the call runs.
+				const paramNames = new Set(meta.params);
+				for (const key of Object.keys(case_.inputs)) {
+					if (!paramNames.has(key)) {
+						assertIdentifier(key, "pre-state input key");
+						lines.push(
+							`\t\tinstance.${key} = ${renderValue(case_.inputs[key])};`,
+						);
+					}
+				}
 				lines.push(
 					`\t\tinstance.${operation}${renderPositionalArgs(case_, component, operation, methods)};`,
 				);

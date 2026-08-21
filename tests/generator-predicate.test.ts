@@ -107,6 +107,17 @@ import type {
  *    predicate) must NOT produce spurious PREDICATE_UNPLANNABLE warnings and
  *    must not crash — the warning channel is reserved for genuinely
  *    unplannable VIOLATION synthesis (decision 3), never accept synthesis.
+ * 8. Violation-case isolation (VERSAILLES-147, build-spec §9.1): each
+ *    precondition-violation case must satisfy ALL *other* clauses while
+ *    falsifying this one — so the planner merges the falsifier OVER
+ *    buildValidParams, giving every non-falsified param a deterministic
+ *    valid value (never undefined). The committed example broke this:
+ *    `addItem("", undefined)` falsifies BOTH pre0 and pre1 (undefined price
+ *    is not isPositive), and `addItem(undefined, -1)` has no legitimate sku.
+ *    The addItem fixture below pins the isolated inputs EXACTLY:
+ *    pre0-violation `{ sku: "", price: 1 }` (predicate-guarded price keeps
+ *    the predicate-valid 1), pre1-violation `{ sku: "initial", price: -1 }`
+ *    (sku keeps the deterministic valid string default "initial").
  */
 
 const ORDER = "OrderService";
@@ -117,6 +128,10 @@ const PRED_CLAUSE = "OrderService.setSubtotal.pre0";
 
 /** The clause id the F3 bug hit in production: a numeric predicate-call precondition. */
 const PRED_CLAUSE_ACCOUNT = "AccountService.withdraw.pre1";
+
+/** V-147 (§9.1 isolation): the committed example's addItem clause ids. */
+const ADD_ITEM_PRE0 = "OrderService.addItem.pre0";
+const ADD_ITEM_PRE1 = "OrderService.addItem.pre1";
 
 function contractsFixture(): ContractsFile {
 	return {
@@ -470,6 +485,62 @@ function degeneratePredicateContext(): VersaillesContext {
 	};
 }
 
+/**
+ * V-147 isolation fixture (VERSAILLES-147, build-spec §9.1): mirrors the
+ * committed example's OrderService.addItem — params sku (string) and price
+ * (number), pre0 `sku != ""` (a GENERIC clause → planGenericViolationCase)
+ * and pre1 `isPositive(price)` (a PREDICATE clause →
+ * planPredicateViolationCase). The shared makeContext() fixtures are
+ * single-param ops, which cannot expose the isolation defect (a single param
+ * has no "other clause" to leave undefined) — so this is a dedicated fixture.
+ * A violation case for EITHER clause must carry a valid value for the other
+ * param: `{ sku: "", price: 1 }` for pre0 and `{ sku: "initial", price: -1 }`
+ * for pre1 (buildValidParams: string → "initial", isPositive-guarded number →
+ * 1).
+ */
+function addItemIsolationContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			[ORDER]: {
+				invariants: [],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{ id: ADD_ITEM_PRE0, expr: 'sku != ""' },
+							{ id: ADD_ITEM_PRE1, expr: "isPositive(price)" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "additem-isolation-hash",
+					},
+				},
+			},
+		},
+	};
+	return {
+		config: makeConfig(),
+		contracts,
+		manifests: {
+			version: "1.0",
+			manifests: {
+				[ORDER]: { sourceHash: "man-order-isolation", fields: {} },
+			},
+		},
+		predicates: predicatesFixture(),
+		parsedContracts: parseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
 describe("planTestCases — predicate-call preconditions (§9.1, VERSAILLES-22 F3)", () => {
 	it("plans at least one precondition-violation case for a numeric predicate-call precondition", () => {
 		const suite = planTestCases(makeContext());
@@ -674,5 +745,40 @@ describe("planTestCases — predicate-aware valid-input synthesis (§9.1, VERSAI
 		// synthesis (F3). A number paramType is always plannable on the accept
 		// side, even when the predicate's false-set is empty / unknown.
 		expect(suiteWarnings(suite)).toEqual([]);
+	});
+});
+
+describe("planTestCases — violation-case isolation (§9.1, VERSAILLES-147)", () => {
+	it("predicate-violation case satisfies the OTHER clause — sku takes the deterministic valid string, never undefined (V-147)", () => {
+		const suite = planTestCases(addItemIsolationContext());
+
+		// pre1 `isPositive(price)` violation: the falsifying input is
+		// price = -1. §9.1 requires the case to satisfy all OTHER clauses, so
+		// sku must carry buildValidParams' deterministic valid string
+		// default "initial" — never undefined (the committed example's
+		// `addItem(undefined, -1)` left sku undefined, which itself falsifies
+		// pre0 `sku != ""` and breaks isolation).
+		const violations = predicateViolationCases(suite, ADD_ITEM_PRE1);
+		expect(violations.length).toBeGreaterThan(0);
+		expect(violations[0].inputs).toEqual({ sku: "initial", price: -1 });
+	});
+
+	it("generic-violation case satisfies the OTHER clause — price takes the registered-predicate-valid value 1, never undefined (V-147)", () => {
+		const suite = planTestCases(addItemIsolationContext());
+
+		// pre0 `sku != ""` violation: the falsifying input is sku = "" (the
+		// generic planGenericViolationCase path). §9.1 requires the case to
+		// satisfy all OTHER clauses, so the predicate-guarded price must keep
+		// the predicate-valid value 1 — never undefined (the committed
+		// example's `addItem("", undefined)` left price undefined, which
+		// itself falsifies pre1 `isPositive(price)` and breaks isolation).
+		const violations = allCases(suite).filter(
+			(case_) =>
+				case_.kind === "precondition-violation" &&
+				case_.traces.includes(ADD_ITEM_PRE0) &&
+				case_.expects.outcome === "reject",
+		);
+		expect(violations.length).toBeGreaterThan(0);
+		expect(violations[0].inputs).toEqual({ sku: "", price: 1 });
 	});
 });

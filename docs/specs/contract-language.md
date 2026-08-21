@@ -1,7 +1,7 @@
 # Spec: Contract Language
 
 **ID:** SPEC-cl
-**Lifecycle:** draft
+**Lifecycle:** implemented
 **Owner:** associate-head-coach
 **Threshold:** public-api (the expression grammar, AST node contract, and structured error contract are consumed by external agents, review UI, and CI), data (the parsed AST and validation results gate what enters `contracts.json`)
 **Linked contract:** `docs/contracts/contract-language.contract.yaml`
@@ -95,3 +95,4 @@ The contract language is the boolean-valued expression grammar (build-spec §4.1
 |------|--------|--------|
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §4–§5, ADR-0006/0008/0010 |
 | 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
+| 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |

@@ -1,7 +1,7 @@
 # Spec: Manifest Extraction
 
 **ID:** SPEC-me
-**Lifecycle:** draft
+**Lifecycle:** implemented
 **Owner:** associate-head-coach
 **Threshold:** data (the field manifest is `manifests.json`, the grounding layer everything downstream reads), public-api (the extractor plugin seam and the `versailles extract-manifests` command surface)
 **Linked contract:** `docs/contracts/manifest-extraction.contract.yaml`
@@ -129,3 +129,4 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 | 2026-08-17 | general-manager | Mirrored contract changes (PR fix/generator-emitter-runnability): method metadata recording, sourcePath persistence, sourceHash covers sorted field pairs + sorted method-signature records (method bodies still excluded) — backs VERSAILLES-20/21 |
 | 2026-08-18 | general-manager | Pinned the canonical sourcePath semantic (VERSAILLES-24): covered entries store project-root-relative POSIX paths (src/order.ts), never source-root-relative and never absolute — so the generator's join(cwd, sourcePath) resolves to the real source file |
 | 2026-08-18 | general-manager | Mirrored the review-warning contract follow-ups (fix/generator-emitter-runnability): (W3/VERSAILLES-25) refreshed entries always persist the methods key — possibly {} — as the first-class zero-methods signal, only preserved legacy entries may lack it; (W2/VERSAILLES-24) the disjoint-roots sourcePath fallback is relative(sourceRoots[0], file) or omission of the field — never the absolute file path |
+| 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |

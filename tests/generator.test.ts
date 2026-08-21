@@ -120,6 +120,15 @@ import type {
  * 7. Emitter seam (ADR-0008/0009): emitSuite dispatches on framework across
  *    the full v1 matrix ("vitest" | "xunit" | "pytest"); an unknown framework
  *    string still throws at the seam (pinned in tests/emitters.test.ts).
+ * 8. Violation-case isolation (VERSAILLES-147, build-spec §9.1): a
+ *    precondition-violation case must satisfy ALL *other* clauses while
+ *    falsifying this one — the generic falsifier path
+ *    (planGenericViolationCase) must merge the falsifier OVER
+ *    buildValidParams so every non-falsified param carries a deterministic
+ *    valid value, never undefined. Pinned here on a generic `sku != ""`
+ *    clause coexisting with an unguarded numeric price:
+ *    pre0-violation inputs `{ sku: "", price: 0 }`. (The predicate-side of
+ *    the same ticket is pinned in tests/generator-predicate.test.ts.)
  */
 
 const ACCOUNT = "AccountService";
@@ -312,6 +321,124 @@ function makeInvalidContext(): VersaillesContext {
 			} as ParseError,
 		],
 		isValid: false,
+	};
+}
+
+/**
+ * Dedicated VERSAILLES-146 fixture for an `old(...) + param` postcondition —
+ * the committed example shape (`examples/order-service/.versailles/generated/
+ * OrderService.test.ts`, `balance == old(balance) + price`). With the
+ * `price >= 1` precondition the planner's deterministic valid input is
+ * price=1 (buildValidParams lower bound); the pre-state balance defaults to
+ * PRE_STATE_NUMBER (50) with no adjustment needed (balance >= 0 already holds),
+ * so the expected post-state literal is old(balance) + price = 50 + 1 = 51.
+ */
+function makeOrderContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [{ id: "OrderService.inv0", expr: "balance >= 0" }],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{
+								id: "OrderService.addItem.pre0",
+								expr: "price >= 1",
+							},
+						],
+						postconditions: [
+							{
+								id: "OrderService.addItem.post0",
+								expr: "balance == old(balance) + price",
+							},
+						],
+						effects: [{ field: "balance", kind: "mutate" }],
+						sourceHash: "additem-hash",
+					},
+				},
+			},
+		},
+	};
+	return {
+		config: makeConfig(),
+		contracts,
+		manifests: {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order",
+					fields: { balance: "number" },
+				},
+			},
+		},
+		predicates: predicatesFixture(),
+		parsedContracts: parseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
+/**
+ * V-147 generic-side isolation fixture (VERSAILLES-147, build-spec §9.1):
+ * OrderService.addItem with a GENERIC falsifiable clause (`sku != ""` →
+ * planGenericViolationCase) coexisting with an unguarded numeric param
+ * (price). No predicate, no numeric compare — the pre0 violation case is the
+ * generic falsifier path and price is the "other clause" param that must keep
+ * a valid value. buildValidParams: sku (string, unconstrained) → "initial",
+ * price (number, unconstrained, no predicate guard) → 0, so the isolated
+ * pre0-violation inputs must be `{ sku: "", price: 0 }`. (The predicate-side
+ * of the same defect is pinned in tests/generator-predicate.test.ts.)
+ */
+function makeGenericViolationContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{ id: "OrderService.addItem.pre0", expr: 'sku != ""' },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "additem-generic-hash",
+					},
+				},
+			},
+		},
+	};
+	return {
+		config: makeConfig(),
+		contracts,
+		manifests: {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order-generic",
+					fields: {},
+				},
+			},
+		},
+		predicates: predicatesFixture(),
+		parsedContracts: parseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
 	};
 }
 
@@ -549,6 +676,65 @@ describe("planTestCases — postcondition-satisfaction cases (§9.1)", () => {
 		// the emitter can resolve old(balance) and build the pre-state.
 		expect(typeof satisfaction?.inputs.balance).toBe("number");
 		expect(satisfaction?.inputs.balance as number).toBeGreaterThanOrEqual(0);
+	});
+
+	it("derives real assertion descriptors from postconditions — subject is the effect field, literal resolves old() against the captured pre-state (VERSAILLES-146)", () => {
+		const suite = planTestCases(makeContext());
+
+		const satisfaction = operationCases(suite, ACCOUNT, "withdraw").find(
+			(case_) => case_.kind === "postcondition-satisfaction",
+		);
+		expect(satisfaction).toBeDefined();
+
+		// THE V-146 gap: the case today carries postconditions ids but never
+		// expects.assertions, so the emitter renders a bare call with NO
+		// assertion (the committed example shows
+		// `new OrderService().addItem("initial", 1);` — nothing asserted).
+		const assertions = satisfaction?.expects.assertions;
+		expect(assertions).toBeDefined();
+		expect(assertions?.length).toBeGreaterThan(0);
+
+		// post0 `old(balance) - amount == balance` must derive a descriptor on
+		// the EFFECT field (balance) with op "==" and a literal equal to the
+		// postcondition RHS resolved against the case's captured inputs:
+		// old(balance) - amount = inputs.balance - inputs.amount (verified:
+		// amount=55, pre-state balance=50 → literal -5).
+		const eq = assertions?.find(
+			(assertion) => assertion.subject === "balance" && assertion.op === "==",
+		);
+		expect(eq).toBeDefined();
+		const amount = satisfaction?.inputs.amount as number;
+		const balance = satisfaction?.inputs.balance as number;
+		expect(eq?.literal).toBe(balance - amount);
+	});
+
+	it("derives an `old(field) + param` postcondition into a literal assertion — old() resolved against the captured pre-state plus the valid param (VERSAILLES-146)", () => {
+		const suite = planTestCases(makeOrderContext());
+
+		const satisfaction = operationCases(suite, "OrderService", "addItem").find(
+			(case_) => case_.kind === "postcondition-satisfaction",
+		);
+		expect(satisfaction).toBeDefined();
+
+		const assertions = satisfaction?.expects.assertions;
+		expect(assertions).toBeDefined();
+		expect(assertions?.length).toBeGreaterThan(0);
+
+		// post0 `balance == old(balance) + price` must derive
+		// { subject: "balance", op: "==", literal } with the literal equal to
+		// old(balance) + price resolved from the case's captured inputs —
+		// never a bare call with no assertion.
+		const eq = assertions?.find(
+			(assertion) => assertion.subject === "balance" && assertion.op === "==",
+		);
+		expect(eq).toBeDefined();
+		const balance = satisfaction?.inputs.balance as number;
+		const price = satisfaction?.inputs.price as number;
+		expect(eq?.literal).toBe(balance + price);
+		// Deterministic fixture values (verified): pre-state balance = 50
+		// (PRE_STATE_NUMBER), valid price = 1 (price >= 1 lower bound) →
+		// literal 51 — the committed example's expected post-state.
+		expect(eq?.literal).toBe(51);
 	});
 });
 
@@ -1049,5 +1235,27 @@ describe("emitSuite — output path configuration (Center W4)", () => {
 		expect(accountFile?.content).not.toContain(
 			'from "../../src/AccountService.js"',
 		);
+	});
+});
+
+describe("planTestCases — violation-case isolation (§9.1, VERSAILLES-147)", () => {
+	it("a generic precondition-violation case carries a valid value for the other param — never undefined (V-147)", () => {
+		const suite = planTestCases(makeGenericViolationContext());
+
+		// pre0 `sku != ""` violation via the generic falsifier path
+		// (planGenericViolationCase): falsifying input is sku = "". §9.1
+		// requires the case to satisfy all OTHER clauses — there are none
+		// beyond pre0, but the unguarded price param must still take
+		// buildValidParams' deterministic numeric default 0, never undefined.
+		// (The committed bug left it undefined, producing
+		// `addItem("", undefined)`.)
+		const violations = allCases(suite).filter(
+			(case_) =>
+				case_.kind === "precondition-violation" &&
+				case_.traces.includes("OrderService.addItem.pre0") &&
+				case_.expects.outcome === "reject",
+		);
+		expect(violations.length).toBeGreaterThan(0);
+		expect(violations[0].inputs).toEqual({ sku: "", price: 0 });
 	});
 });

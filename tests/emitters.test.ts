@@ -1430,6 +1430,86 @@ describe("emitSuite — void-op accept/invariant cases assert INSTANCE state, ne
 	});
 });
 
+// ── VERSAILLES-146: a postcondition-satisfaction case WITH assertions on a
+// void INSTANCE op renders the instance binding + real matcher ───────────────
+//
+// V-146 root cause is the PLANNER: planTestCases sets
+// `expects: { outcome: "accept", postconditions: postIds }` for the
+// postcondition-satisfaction case but never `expects.assertions`, so the
+// emitter renders a bare `new <Component>().<op>(...)` call with NO assertion.
+// The FIXED planner must derive renderable AssertionDescriptors from the
+// postconditions (resolving old(field) + arithmetic against the captured
+// pre-state and valid params). The emitter side ALREADY renders real matchers
+// for void instance ops with assertions (the V-26 branch at vitest.ts
+// L239-254) — this pin freezes that contract so the fix cannot regress it: a
+// postcondition-satisfaction case carrying assertions must render
+// `const instance = new <Component>(); instance.<op>(...);
+// expect(instance.<field>).toEqual(...)` — never a bare call, never a
+// `const result` binding on a void return value.
+
+/** A postcondition-satisfaction PlannedCase WITH assertions on a VOID instance op. */
+function voidPostconditionSuite(): PlannedSuite {
+	return {
+		clauseIds: ["Order.addItem.post0"],
+		operations: [
+			{
+				component: "Order",
+				operation: "addItem",
+				cases: [
+					{
+						id: "Order.addItem.postcondition-satisfaction-0",
+						kind: "postcondition-satisfaction",
+						description:
+							"valid input asserting postconditions Order.addItem.post0",
+						inputs: { sku: "initial", price: 1, balance: 50 },
+						expects: {
+							outcome: "accept",
+							postconditions: ["Order.addItem.post0"],
+							// The V-146 planner output: old(balance) + price
+							// resolved against the captured pre-state (50) and
+							// the valid param (1) → literal 51.
+							assertions: [{ subject: "balance", op: "==", literal: 51 }],
+						},
+						traces: ["Order.addItem.post0"],
+					},
+				],
+			},
+		],
+		invariantCases: [],
+	};
+}
+
+const ORDER_VOID_POSTCONDITION_METHODS = {
+	Order: {
+		addItem: { static: false, params: ["sku", "price"], returnType: "void" },
+	},
+};
+
+describe("emitSuite — a postcondition-satisfaction case WITH assertions on a void INSTANCE op renders the instance binding + real matcher (VERSAILLES-146, §9.4)", () => {
+	it("binds the INSTANCE, calls the op on it, and asserts instance.<field> with a real matcher — never a bare call, never result.<field> on a void return", () => {
+		const files = emitSuite(voidPostconditionSuite(), "vitest", {
+			methods: ORDER_VOID_POSTCONDITION_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// The V-26 void-with-assertions render — the V-146 fix's target shape:
+		// const instance = new Order(); instance.addItem("initial", 1);
+		// expect(instance.balance).toEqual(51). The bare-call render
+		// (`new Order().addItem("initial", 1);` — today's V-146 output) has
+		// NO assertion and must never be emitted for a case WITH assertions.
+		expect(order?.content).toContain("const instance = new Order();");
+		expect(order?.content).toContain('instance.addItem("initial", 1);');
+		expect(order?.content).toContain("expect(instance.balance).toEqual(51)");
+
+		// A void call's return value is undefined — result.<field> would throw
+		// TypeError at runtime; the void-with-assertions path must not bind it.
+		expect(order?.content).not.toContain("const result =");
+		expect(order?.content).not.toContain("result.balance");
+		expect(order?.content).not.toContain("expect(result)");
+	});
+});
+
 /** Real Order source for the V-26 E2E runnability pin — addItem mutates state and returns void. */
 const V26_ORDER_SOURCE = `export class Order {
 	subtotal = 0;
@@ -1887,6 +1967,145 @@ describe("emitSuite — a generated suite containing an EMPTY operation group RU
 			).toBe(0);
 			// The reported hard-fail shape is gone — no empty-suite rejection.
 			expect(run.stdout + run.stderr).not.toContain("No test found in suite");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});
+
+// B1 root cause: the vitest emitter's instance-binding branch constructs a
+// FRESH `const instance = new Order();` but never seeds the planner's
+// captured pre-call state (inputs.balance = 50) onto it before the operation
+// runs — so the postcondition assertion reads the constructor's default
+// state (balance = 1) instead of the captured pre-state, and every emitted
+// postcondition-satisfaction case fails at runtime (got 1, expected 51).
+describe("emitSuite — postcondition-satisfaction seeds captured pre-state onto the bound instance (B1)", () => {
+	it("emits an instance.balance = 50 seed line BEFORE the instance.addItem call in the rendered postcondition-satisfaction test", () => {
+		const suite: PlannedSuite = {
+			clauseIds: ["Order.post0"],
+			operations: [
+				{
+					component: "Order",
+					operation: "addItem",
+					cases: [
+						{
+							id: "Order.addItem.postcondition-satisfaction-0",
+							kind: "postcondition-satisfaction",
+							description: "valid input asserting postconditions Order.post0",
+							inputs: { sku: "initial", price: 1, balance: 50 },
+							expects: {
+								outcome: "accept",
+								postconditions: ["Order.post0"],
+								assertions: [{ subject: "balance", op: "==", literal: 51 }],
+							},
+							traces: ["Order.post0"],
+						},
+					],
+				},
+			],
+			invariantCases: [],
+		};
+		const files = emitSuite(suite, "vitest", {
+			methods: {
+				Order: {
+					addItem: {
+						static: false,
+						params: ["sku", "price"],
+						returnType: "void",
+					},
+				},
+			},
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+		const content = order?.content ?? "";
+		// The REQUIRED render seeds the captured pre-state onto the fresh
+		// instance before the call, so the postcondition assertion observes
+		// balance transition 50 → 51 rather than the constructor's default.
+		expect(content).toContain("instance.balance = 50;");
+		expect(content.indexOf("instance.balance = 50;")).toBeLessThan(
+			content.indexOf('instance.addItem("initial", 1);'),
+		);
+	});
+
+	it("executes the emitted postcondition-satisfaction test with the REAL vitest runner — exit 0 (Red today: fresh instance starts at balance 0, not the captured pre-state 50)", async () => {
+		const root = await mkdtemp(join(tmpdir(), "versailles-b1-"));
+		try {
+			await writeFile(
+				join(root, "order.ts"),
+				`export class Order {
+	private balance = 0;
+	addItem(sku: string, price: number): void {
+		if (sku === "") throw new Error("sku must not be empty");
+		this.balance += price;
+	}
+}
+`,
+				"utf8",
+			);
+
+			const suite: PlannedSuite = {
+				clauseIds: ["Order.post0"],
+				operations: [
+					{
+						component: "Order",
+						operation: "addItem",
+						cases: [
+							{
+								id: "Order.addItem.postcondition-satisfaction-0",
+								kind: "postcondition-satisfaction",
+								description: "valid input asserting postconditions Order.post0",
+								inputs: { sku: "initial", price: 1, balance: 50 },
+								expects: {
+									outcome: "accept",
+									postconditions: ["Order.post0"],
+									assertions: [{ subject: "balance", op: "==", literal: 51 }],
+								},
+								traces: ["Order.post0"],
+							},
+						],
+					},
+				],
+				invariantCases: [],
+			};
+			const files = emitSuite(suite, "vitest", {
+				generatedDir: ".",
+				modulePaths: { Order: "./order" },
+				methods: {
+					Order: {
+						addItem: {
+							static: false,
+							params: ["sku", "price"],
+							returnType: "void",
+						},
+					},
+				},
+			});
+			const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+			expect(order).toBeDefined();
+			await writeFile(
+				join(root, "Order.test.ts"),
+				order?.content ?? "",
+				"utf8",
+			);
+
+			// B1: the assertion literal derives from fabricated pre-state;
+			// without seeding, generated suite is red at runtime.
+			const vitestBin = join(
+				dirname(fileURLToPath(import.meta.url)),
+				"..",
+				"node_modules",
+				"vitest",
+				"vitest.mjs",
+			);
+			const run = spawnSync(process.execPath, [vitestBin, "run"], {
+				cwd: root,
+				encoding: "utf8",
+			});
+			expect(
+				run.status,
+				`generated postcondition-satisfaction suite did not run clean:\n${run.stdout}\n${run.stderr}`,
+			).toBe(0);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

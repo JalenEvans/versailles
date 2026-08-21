@@ -1,7 +1,7 @@
 # Spec: Versailles contract pipeline
 
 **ID:** SPEC-ver
-**Lifecycle:** draft
+**Lifecycle:** implemented
 **Owner:** associate-head-coach
 **Threshold:** public-api (the CLI surface, `.versailles/` file formats, generated test files), data (contracts/manifests/predicates are the tool's data layer)
 **Linked contract:** `docs/contracts/versailles.contract.yaml`
@@ -101,3 +101,4 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 | 2026-08-11 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
 | 2026-08-11 | associate-head-coach | Architecture correction: CLI never drives an LLM; LLMs drive the CLI (ADR-0010) |
 | 2026-08-19 | general-manager | Programmatic surface pinned: CLI only, no library API in v1 (VERSAILLES-19) |
+| 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
