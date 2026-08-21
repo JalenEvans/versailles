@@ -19,7 +19,7 @@ The core value proposition: **same approved contract in, same test suite out —
    - **boundary values** at numeric comparison thresholds (threshold, threshold−1, threshold+1);
    - **equivalence partitions** for every `in` clause / enum-typed field (one case per member + one outside);
    - **precondition-violation cases** — inputs satisfying all *other* clauses but falsifying the one under test, asserting rejection per the configured rejection idiom;
-   - **postcondition-satisfaction cases** — valid inputs asserting every postcondition holds, resolving `old(...)` against captured pre-call state.
+   - **postcondition-satisfaction cases** — valid inputs asserting the simple field-compare postconditions (`field op expr`), resolving `old(...)` against captured pre-call state; non-computable clauses contribute no assertion (conservative skip, still traced).
 3. For each component with invariants, generate **per-component invariant tests** (build-spec §9.2): build a valid pre-state, call the operation, assert every invariant still holds; flag postcondition/invariant interaction cases as *expected-rejection*.
 4. Attach a **traceability comment** to every generated test (`// versailles: <clauseId> (case kind)`), refresh `generated/coverage.json`.
 5. Render via the **emitter plugin** for `config.testFramework`, full-file and idempotent.

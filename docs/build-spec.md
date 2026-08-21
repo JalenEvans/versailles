@@ -464,8 +464,12 @@ For each operation:
   signal. Only an entry lacking the `methods` key entirely (a preserved legacy entry the
   extractor never touched) keeps the legacy default (VERSAILLES-25 follow-up).
 - **Postcondition-satisfaction cases**: for valid inputs (satisfying all preconditions),
-  generate a case and assert every postcondition clause holds on the result, resolving
-  `old(field)` against captured pre-call state.
+  generate a case asserting the simple field-compare postconditions (`field op expr`) —
+  on the result, or on the bound instance state for a void-returning instance operation —
+  resolving `old(field)` against captured pre-call state. Clauses that cannot yield a
+  computable literal (predicate calls, both-side field refs, uncomputable expressions)
+  contribute no assertion — a conservative skip; the case is still emitted and its clause
+  IDs stay traced in `coverage.json`.
 
 ### 9.2 Per-component invariant tests
 
@@ -498,8 +502,11 @@ For each operation:
   `<Component>.<operation>(...)`, params passed positionally in declared order, and no
   return-value assertion for void-returning operations. Accept/invariant cases on
   **instance** void-returning operations bind the component **instance** — `const instance
-  = new <Component>(); instance.<op>(...); expect(instance.<field>)...` — so assertions
-  target instance state, never the void return value (VERSAILLES-26). For a **static**
+  = new <Component>(); instance.<field> = <captured>; instance.<op>(...);
+  expect(instance.<field>)...` — so assertions target instance state, never the void
+  return value (VERSAILLES-26); the captured non-param inputs are seeded onto the bound
+  instance before the call because assertion literals derive from the planner's captured
+  pre-call state, which a fresh instance does not carry. For a **static**
   void operation with assertions, the case renders the bare call without any
   `instance.<field>` assertion — the static call never touches a constructed instance, so
   asserting on one would be misleading (VERSAILLES-26 follow-up).
@@ -603,3 +610,11 @@ The CLI is a tool an external LLM/agent can *control* — the tool itself never 
 | Rejection idiom for precondition-violation tests | Configurable in `config.json`, default "throws" |
 | Multi-language support | Manifest extractor pluggable per-language; grammar/validator/generator stay language-agnostic |
 | Package/CLI naming | Package `versailles-dbc` (or scoped), CLI binary `versailles` via `bin` field |
+
+---
+
+## Changelog
+
+| Date | Author | Change |
+|------|--------|--------|
+| 2026-08-20 | general-manager | Corrected the overstated postcondition-satisfaction guarantee in §9.1 (Center review, PR fix/generator-postcondition-violation): satisfaction cases assert only the simple field-compare postconditions (`field op expr`) — predicate-call, both-side-fieldRef, and uncomputable clauses contribute no assertion (conservative skip; the case is still emitted and traced) — and void-returning instance operations assert instance state, not "the result"; the §9.4 canonical instance snippet now includes the captured pre-state seed line (`instance.<field> = <captured>;`) the emitter writes before the call |
