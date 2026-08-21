@@ -14,5 +14,6 @@ Architecture decision records (ADRs). Immutable once accepted — a new decision
 | [0008](0008-language-agnostic-core-pluggable-plugins.md) | Language-agnostic core; pluggable extractor/emitter | accepted | — |
 | [0009](0009-v1-language-and-framework-matrix.md) | v1 targets TS/C#/Python + vitest/xUnit/pytest, TS first | accepted | build-spec §7/§9.4/§14 single-language assumptions |
 | [0010](0010-cli-never-drives-llm.md) | The CLI never drives an LLM; LLMs drive the CLI | accepted | ADR-0002 (authoring-loop aspect) |
+| [0011](0011-contract-first-emission.md) | Contract-first emission: generate from contracts.json; extract-manifests optional for brownfield | proposed | — |
 
 See also: [Contracts](../contracts/index.md) · [Specs](../specs/index.md) · [Build spec](../build-spec.md)
