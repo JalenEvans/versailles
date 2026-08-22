@@ -28,44 +28,44 @@ cd examples/order-service && bun run test   # 4 generated tests pass
 
 ### 2. The full loop, step by step
 
-The example ships a fully-authored workspace, so every step is re-runnable in
-place and stays byte-identical to what's committed:
+The example ships a fully-authored workspace (contract + inline predicate
+declaration already in `contracts.json`), so every step is re-runnable in place
+and stays byte-identical to what's committed:
 
 ```bash
 cd examples/order-service
 
-versailles extract-manifests          # 1. derive manifests.json from source
-# 2. author the contract — the staged object is already at
-#    .versailles/staged/OrderService.json; edit it to change the contract
-versailles register-predicate isPositive \
-  --source OrderService.isPositive --params amount --paramTypes number \
-  --verifiedPure                     # 3. register the pure predicate the contract calls
-versailles review OrderService       # 4. inspect the staged contract (expr + parsed AST)
-versailles review OrderService --approve   # 5. validate + merge the staged object into contracts.json
-versailles validate                  # 6. validate the whole workspace
-versailles generate                  # 7. write the deterministic suite to .versailles/generated/
-versailles check                     # 8. CI lint: validate + staleness (exit 0)
-bun run test                         # 9. run the generated tests (4 pass)
+versailles extract-manifests          # 1. derive manifests.json from source (brownfield only)
+versailles validate                   # 2. parse + semantic + predicate checks
+versailles generate                   # 3. write the deterministic suite to .versailles/generated/
+versailles check                      # 4. CI lint: validate + staleness (exit 0)
+bun run test                          # 5. run the generated tests (4 pass)
+# git commit the workspace — the commit IS the approval
 ```
+
+The committed contract (`examples/order-service/.versailles/contracts.json`)
+declares the `isPositive` predicate inline in the top-level `"predicates"` map —
+no separate `predicates.json`, no staged directory, no review step.
 
 For a **new** project, prepend `versailles init` (scaffolds `.versailles/` with a
 default config + empty stores — it re-seeds the schema files, so don't run it on
-an authored workspace) and write your contract to
-`.versailles/staged/<Component>.json` before the `review … --approve` step.
+an authored workspace) and write your contract directly into
+`.versailles/contracts.json`, declaring any predicates in the top-level
+`"predicates"` map (see the contract expression cheat-sheet below).
 
-## The nine commands
+**Greenfield (no source yet, ADR-0011):** skip `extract-manifests` entirely —
+write the contract first, `generate` emits tests that fail via import error
+(legitimate TDD Red), then implement the source until the tests pass.
+
+## The five commands
 
 | Command | Purpose |
 |---|---|
 | `init` | Scaffold `.versailles/` — default config + empty stores (new projects only) |
-| `extract-manifests` | Derive `manifests.json` from source (`--prune` removes entries no longer in source) |
-| `validate` | Parse + semantically validate the whole workspace; structured report, exit 0/1 |
+| `extract-manifests` | Derive `manifests.json` from source (brownfield only; `--prune` removes entries no longer in source) |
+| `validate` | Parse + semantically validate the whole workspace; structured report, exit 0/1. Use `--verbose` to see raw expr + parsed AST per clause |
+| `generate` | Deterministic tests from contracts → `.versailles/generated/` |
 | `check` | CI lint: validate + staleness; exit `0` clean · `1` parse/validation · `2` blocking staleness |
-| `generate` | Deterministic tests from approved contracts → `generated/` |
-| `review <Component> [operation]` | Human review of a staged contract; `--approve` merges the single object, `--reject` writes nothing |
-| `register-predicate <name> --source <Module.functionName>` | Register a predicate with verified `sourceRef`/`sourceHash`; `--verifiedPure` is the human purity gate |
-| `verify-purity <name>` | Flip `verifiedPure` true after a manual lint (never recomputes hashes) |
-| `remind-unverified` | List predicates missing `verifiedPure`; never writes |
 
 ## Contract expression cheat-sheet
 
@@ -76,7 +76,7 @@ clauses (`examples/order-service/.versailles/contracts.json`):
 ```text
 invariant      balance >= 0
 precondition   sku != ""
-precondition   isPositive(price)          # registered, verified-pure predicate call
+precondition   isPositive(price)          # predicate declared in the contracts.json predicates map
 postcondition  balance == old(balance) + price   # old(field) is postconditions ONLY
 ```
 
@@ -90,8 +90,9 @@ field paths    order.items[].sku             # [] = any element · [0] = by inde
 ```
 
 `old(field)` anywhere but a postcondition is a parse error; predicate calls must
-resolve to a registered `verifiedPure: true` predicate; single `=` is a parse
-error (`==` only).
+resolve to a predicate declared in the top-level `"predicates"` map of
+`contracts.json` with `verifiedPure: true`; single `=` is a parse error
+(`==` only).
 
 ## Using in CI
 
