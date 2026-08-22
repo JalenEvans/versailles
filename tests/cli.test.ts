@@ -28,8 +28,7 @@ import { extractManifests } from "../src/extractors/index.js";
  * ```ts
  * export type CliError = {
  *   code: string;          // e.g. UNKNOWN_COMMAND | USAGE | PARSE_ERROR |
- *                          // MISSING_FILE | CONFIG_INVALID | STALE |
- *                          // REVIEW_NOT_AVAILABLE | ...
+ *                          // MISSING_FILE | CONFIG_INVALID | STALE | ...
  *   field?: string;        // file / path the error is about
  *   detail: string;        // human-readable, agent-consumable detail
  *   ids?: string[];        // present on STALE errors: stale entry IDs (§8)
@@ -61,7 +60,6 @@ import { extractManifests } from "../src/extractors/index.js";
  * | validate          | { valid: boolean }                                     |
  * | check             | { staleIds: string[] }                                 |
  * | generate          | { files: string[] }  (paths written, relative to cwd)   |
- * | review            | (view/approve/reject payloads — pinned in tests/review.test.ts) |
  *
  * updated   = components covered by the fresh extraction (added OR refreshed)
  * preserved = components in the previous manifests.json the extraction did not
@@ -73,11 +71,10 @@ import { extractManifests } from "../src/extractors/index.js";
  * ── Command behaviors pinned (exit codes are the contract) ────────────────
  *
  * 1. Routing (§12): argv[0] routes to init | extract-manifests | validate |
- *    check | generate | review <component> [operation]. Unknown commands
- *    (`author`, `bogus`) → { code: "UNKNOWN_COMMAND" } exit 1 — never exit 2.
- * 2. Usage errors: commands other than review accept NO unexpected
- *    positionals; review accepts exactly 1 required positional (component)
- *    plus an optional second (operation); any other shape → USAGE exit 1.
+ *    check | generate. Unknown commands (`author`, `bogus`, `review`) →
+ *    { code: "UNKNOWN_COMMAND" } exit 1 — never exit 2.
+ * 2. Usage errors: commands accept NO unexpected positionals; any other
+ *    shape → USAGE exit 1.
  * 3. init: scaffolds .versailles/ (config.json + empty stores) and exits 0.
  * 4. validate: ok true/exit 0 on a valid workspace; ok false/exit 1 with
  *    structured errors on parse or validation errors or load failures —
@@ -92,12 +89,7 @@ import { extractManifests } from "../src/extractors/index.js";
  *    ADR-0007). Routes through src/generator/index.js (planTestCases /
  *    emitSuite / coverageManifest) — the generator surface is pinned in the
  *    dedicated describe below and the PF integrates feat/generator-core.
- * 7. review: arg validation happens at the CLI boundary; valid arg shapes
- *    (component [operation]) route to the review handler. A valid shape with
- *    NO staged object returns NOT_FOUND (exit 1) — never REVIEW_NOT_AVAILABLE,
- *    never UNKNOWN_COMMAND. The full flow (scoped view / --approve /
- *    --reject) is pinned in tests/review.test.ts.
- * 8. Determinism (ADR-0002): same argv + same workspace → byte-identical
+ * 7. Determinism (ADR-0002): same argv + same workspace → byte-identical
  *    JSON (no timestamps / randomness) — no LLM is ever invoked (ADR-0010).
  *
  * ── Fixture strategy ──────────────────────────────────────────────────────
@@ -349,7 +341,6 @@ describe("runCli — command routing (build-spec §12)", () => {
 			["validate"],
 			["check"],
 			["generate"],
-			["review", ACCOUNT],
 		];
 
 		for (const argv of commands) {
@@ -375,6 +366,22 @@ describe("runCli — command routing (build-spec §12)", () => {
 	it("routes an unknown command (`bogus`) to a structured UNKNOWN_COMMAND usage error, exit 1 — never exit 2", async () => {
 		const cwd = await freshWorkspace("a-bogus");
 		const result = await runCli(["bogus"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(result.errors).toContainEqual(
+			expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
+		);
+	});
+
+	// ── ADR-0012 Red-phase pin: `review` is no longer a registered command ──
+	// The in-tool human review gate is removed; the commit IS the approval.
+	// `review` must route to UNKNOWN_COMMAND (exit 1). This test FAILS against
+	// the current implementation (review is still registered) — the Power
+	// Forward must remove the review command so this test turns green.
+	it("routes `review` to a structured UNKNOWN_COMMAND usage error, exit 1 — the review command is removed (ADR-0012)", async () => {
+		const cwd = await freshWorkspace("a-review-removed");
+		const result = await runCli(["review", "SomeComponent"], { cwd });
 
 		expect(result.ok).toBe(false);
 		expect(result.exitCode).toBe(1);
@@ -415,28 +422,6 @@ describe("runCli — usage errors (build-spec §12)", () => {
 	it("rejects an unknown flag (`--bogus`) for extract-manifests as a USAGE error, exit 1", async () => {
 		const cwd = await freshWorkspace("u-bogus-flag");
 		const result = await runCli(["extract-manifests", "--bogus"], { cwd });
-
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(1);
-		expect(result.errors).toContainEqual(
-			expect.objectContaining({ code: "USAGE" }),
-		);
-	});
-
-	it("rejects `review` with no component as a USAGE error, exit 1", async () => {
-		const cwd = await seedGeneratorWorkspace("u-review-no-component");
-		const result = await runCli(["review"], { cwd });
-
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(1);
-		expect(result.errors).toContainEqual(
-			expect.objectContaining({ code: "USAGE" }),
-		);
-	});
-
-	it("rejects `review` with three positionals as a USAGE error, exit 1", async () => {
-		const cwd = await seedGeneratorWorkspace("u-review-three");
-		const result = await runCli(["review", "A", "B", "C"], { cwd });
 
 		expect(result.ok).toBe(false);
 		expect(result.exitCode).toBe(1);
@@ -1057,41 +1042,6 @@ describe("runCli generate — non-silent UNPLANNABLE_OPERATION warnings for stag
 		);
 		expect(content).not.toContain("Order.setSubtotal(");
 		expect(content).not.toContain("setSubtotal({");
-	});
-});
-
-// ── review (valid arg routing; no staged object → NOT_FOUND, exit 1 — real flow) ─
-
-describe("runCli review — valid arg shapes route to the handler; no staged object → NOT_FOUND, exit 1 (flow pinned in tests/review.test.ts)", () => {
-	it("valid args (component + operation) route to the review handler — no staged object → NOT_FOUND, exit 1, never REVIEW_NOT_AVAILABLE, never UNKNOWN_COMMAND", async () => {
-		const cwd = await seedGeneratorWorkspace("r-two-args");
-		const result = await runCli(["review", ACCOUNT, "withdraw"], { cwd });
-
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(1);
-		expect(result.errors).toContainEqual(
-			expect.objectContaining({ code: "NOT_FOUND" }),
-		);
-		expect(result.errors).not.toContainEqual(
-			expect.objectContaining({ code: "REVIEW_NOT_AVAILABLE" }),
-		);
-		expect(result.errors).not.toContainEqual(
-			expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
-		);
-	});
-
-	it("valid args (component only) also route to the review handler — no staged object → NOT_FOUND, exit 1, never REVIEW_NOT_AVAILABLE", async () => {
-		const cwd = await seedGeneratorWorkspace("r-one-arg");
-		const result = await runCli(["review", ACCOUNT], { cwd });
-
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(1);
-		expect(result.errors).toContainEqual(
-			expect.objectContaining({ code: "NOT_FOUND" }),
-		);
-		expect(result.errors).not.toContainEqual(
-			expect.objectContaining({ code: "REVIEW_NOT_AVAILABLE" }),
-		);
 	});
 });
 

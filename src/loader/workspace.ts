@@ -137,14 +137,6 @@ export type VersaillesContext = {
 	isValid: boolean;
 };
 
-export type ScopedView = {
-	component: string;
-	operation: string | null;
-	contract: ComponentContract | ContractOperation | null;
-	errors: (ParseError | LoaderError | ValidationError)[];
-	warnings: LoaderWarning[];
-};
-
 type ConfigValidator = {
 	validate: (data: unknown) => boolean;
 	errors: ValidateFunction["errors"];
@@ -500,10 +492,9 @@ function validatePredicatesShape(
  * The schema-store types declare their record keys as required (build-spec
  * §3.2–§3.4), but init.ts seeds the three stores as bare `{ "version": "1.0" }`
  * without the key. The semantic validator indexes `manifests.manifests`
- * unguarded (validator.ts getManifestEntry) and extractScoped indexes
- * `contracts.contracts` the same way, so a degenerate shape would crash them —
- * violating the loader's never-throws promise (ADR-0010). Default an absent
- * record key to an empty record so downstream consumers always see the
+ * unguarded (validator.ts getManifestEntry), so a degenerate shape would crash
+ * it — violating the loader's never-throws promise (ADR-0010). Default an
+ * absent record key to an empty record so downstream consumers always see the
  * declared shape. `key in file` throws on primitives (chunk 3.4a, F1), so a
  * non-object file is returned untouched — the shape-guard pass has already
  * flagged it as INVALID_SHAPE and loadWorkspace skips downstream use.
@@ -713,10 +704,9 @@ export async function loadWorkspace(
 		if (shape.manifests && shape.predicates) {
 			// The §5.1 checks run over every successfully-parsed clause with
 			// the clauseKind + scope recorded during parsing. Semantic errors
-			// carry the clause contractId (so extractScoped attributes them to
-			// the owning component/operation); ADR-0004 warnings are
-			// non-blocking and never flip isValid. The arrays are shared with
-			// the loader-level errors above — appends, never a replace.
+			// carry the clause contractId; ADR-0004 warnings are non-blocking
+			// and never flip isValid. The arrays are shared with the
+			// loader-level errors above — appends, never a replace.
 			for (const clauseId of Object.keys(context.parsedContracts)) {
 				const meta = result.clauseMeta[clauseId];
 				if (meta === undefined) {
@@ -739,99 +729,4 @@ export async function loadWorkspace(
 		context.parseErrors.length === 0 && context.validationErrors.length === 0;
 
 	return context;
-}
-
-/**
- * Returns just the requested sub-object (never the whole file), with only the
- * errors that belong to it by contractId prefix. Loader-level errors (which
- * carry no contractId) are excluded from scoped views.
- */
-export function extractScoped(
-	context: VersaillesContext,
-	component: string,
-	operation?: string,
-): ScopedView {
-	const target =
-		operation === undefined ? component : `${component}.${operation}`;
-	const contract = findContract(context.contracts, component, operation);
-	if (contract === null) {
-		return {
-			component,
-			operation: operation ?? null,
-			contract: null,
-			errors: [
-				{
-					code: "NOT_FOUND",
-					field: target,
-					detail: `Contract "${target}" not found in the workspace`,
-				},
-			],
-			warnings: [],
-		};
-	}
-	return {
-		component,
-		operation: operation ?? null,
-		contract,
-		errors: scopedErrors(context, target),
-		warnings: [],
-	};
-}
-
-function findContract(
-	contracts: ContractsFile | null,
-	component: string,
-	operation: string | undefined,
-): ComponentContract | ContractOperation | null {
-	// B2 (chunk 3.4b): a shape-invalid primitive contracts.json (42, true)
-	// reaches extractScoped via withRecordKey untouched; indexing
-	// `contracts.contracts[component]` on a primitive throws a raw TypeError
-	// (reading the component property of undefined). Mirror the isRecord
-	// helper — a non-object store is simply not found, never a crash
-	// (ADR-0010).
-	if (
-		contracts === null ||
-		typeof contracts !== "object" ||
-		Array.isArray(contracts)
-	) {
-		return null;
-	}
-	const componentContract = contracts.contracts[component];
-	if (componentContract === undefined) {
-		return null;
-	}
-	if (operation === undefined) {
-		return componentContract;
-	}
-	// `operations` is optional per the declared shape but a degenerate
-	// component (chunk 3.4a, C9) may lack it — treat as not found, never throw.
-	return componentContract.operations?.[operation] ?? null;
-}
-
-function scopedErrors(
-	context: VersaillesContext,
-	prefix: string,
-): (ParseError | LoaderError | ValidationError)[] {
-	const parseScoped = context.parseErrors.filter(
-		(error) =>
-			// An id-less failing clause (chunk 3.4a, C6) produces a ParseError
-			// whose contractId is undefined at runtime — guard the read.
-			typeof error.contractId === "string" &&
-			error.contractId.startsWith(prefix),
-	);
-	const validationScoped = context.validationErrors.filter((error) =>
-		belongsTo(error, prefix),
-	);
-	return [...parseScoped, ...validationScoped];
-}
-
-function belongsTo(
-	error: ParseError | LoaderError | ValidationError,
-	prefix: string,
-): boolean {
-	return (
-		"contractId" in error &&
-		typeof error.contractId === "string" &&
-		error.contractId.startsWith(prefix)
-	);
 }

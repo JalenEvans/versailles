@@ -9,7 +9,7 @@ import { initWorkspace } from "../src/cli/init.js";
 // over every successfully-parsed clause and aggregates its errors/warnings
 // into validationErrors/validationWarnings, which feed the aggregated isValid
 // flag (build-spec §6.5) alongside parse, version, and config errors.
-import { extractScoped, loadWorkspace } from "../src/loader/workspace.js";
+import { loadWorkspace } from "../src/loader/workspace.js";
 
 /**
  * Loader/context — pinned against build-spec §6, §2, §3.1 and the
@@ -31,7 +31,7 @@ import { extractScoped, loadWorkspace } from "../src/loader/workspace.js";
  * ── Module contract ────────────────────────────────────────────────────────
  *
  * Module: src/loader/workspace.ts
- * Exports: loadWorkspace, extractScoped, SUPPORTED_GRAMMAR_VERSION,
+ * Exports: loadWorkspace, SUPPORTED_GRAMMAR_VERSION,
  *          SUPPORTED_SCHEMA_VERSION (+ the types below)
  *
  * ```ts
@@ -92,8 +92,7 @@ import { extractScoped, loadWorkspace } from "../src/loader/workspace.js";
  *   | "MISSING_FILE"     // one of the four jointly-loaded files absent
  *   | "INVALID_JSON"     // a present file fails JSON.parse
  *   | "CONFIG_INVALID"   // config.schema.json / ADR-0009 rejection
- *   | "INVALID_SHAPE"    // valid-JSON/wrong-shape file (chunk 3.4a, ADR-0010)
- *   | "NOT_FOUND";       // extractScoped target missing
+ *   | "INVALID_SHAPE";   // valid-JSON/wrong-shape file (chunk 3.4a, ADR-0010)
  *
  * export type LoaderError = { code: LoaderErrorCode; field: string; detail: string };
  * export type LoaderWarning = { code: string; field: string; detail: string };
@@ -110,20 +109,7 @@ import { extractScoped, loadWorkspace } from "../src/loader/workspace.js";
  *   isValid: boolean;                      // parseErrors empty AND validationErrors empty
  * };
  *
- * export type ScopedView = {
- *   component: string;
- *   operation: string | null;
- *   contract: ComponentContract | ContractOperation | null;
- *   errors: (ParseError | LoaderError)[]; // scoped by contractId prefix; loader-level errors excluded
- *   warnings: LoaderWarning[];
- * };
- *
  * export declare function loadWorkspace(workspaceDir: string): Promise<VersaillesContext>;
- * export declare function extractScoped(
- *   context: VersaillesContext,
- *   component: string,
- *   operation?: string,
- * ): ScopedView;
  * ```
  *
  * ── Ambiguities resolved by these tests ────────────────────────────────────
@@ -493,130 +479,6 @@ describe("loadWorkspace — config validation against the ADR-0009 matrix", () =
 	});
 });
 
-describe("extractScoped — scoped views for human review (build-spec §6.6)", () => {
-	it("returns just the operation sub-object with only its own errors — never the whole file", async () => {
-		const ws = await seedWorkspace("f-scoped-operator");
-		await writeWorkspaceFile(ws, "contracts.json", {
-			version: "1.0",
-			contracts: {
-				OrderService: {
-					invariants: [{ id: "OrderService.inv0", expr: "total >= 0" }],
-					operations: {
-						placeOrder: {
-							id: "OrderService.placeOrder",
-							params: [{ name: "customerId", type: "string" }],
-							preconditions: [
-								{
-									id: "OrderService.placeOrder.pre0",
-									expr: 'customerId != ""',
-								},
-							],
-							postconditions: [
-								{ id: "OrderService.placeOrder.post0", expr: "total = 100" },
-							],
-							effects: [],
-							sourceHash: "abc123",
-						},
-					},
-				},
-				CustomerService: {
-					invariants: [],
-					operations: {
-						register: {
-							id: "CustomerService.register",
-							params: [{ name: "email", type: "string" }],
-							preconditions: [
-								{ id: "CustomerService.register.pre0", expr: 'email != ""' },
-							],
-							postconditions: [],
-							effects: [],
-							sourceHash: "def456",
-						},
-					},
-				},
-			},
-		});
-
-		const context = await loadWorkspace(ws);
-		const view = extractScoped(context, "OrderService", "placeOrder");
-
-		expect(view.component).toBe("OrderService");
-		expect(view.operation).toBe("placeOrder");
-		expect(view.contract).not.toBeNull();
-		const contract = view.contract as Record<string, unknown>;
-		expect(contract).toMatchObject({
-			id: "OrderService.placeOrder",
-			params: [{ name: "customerId", type: "string" }],
-			sourceHash: "abc123",
-		});
-		// Never the whole file: an operation sub-object has no operations map.
-		expect(contract).not.toHaveProperty("operations");
-		expect(contract).not.toHaveProperty("contracts");
-		// Its errors: only the parse error that belongs to this operation.
-		expect(view.errors).toHaveLength(1);
-		expect(view.errors[0]).toMatchObject({
-			contractId: "OrderService.placeOrder.post0",
-			field: "postconditions[0]",
-		});
-	});
-
-	it("scopes by prefix: a clean operation has no errors; component scope aggregates its operations", async () => {
-		const ws = await seedWorkspace("f2-scoped-clean");
-		await writeWorkspaceFile(ws, "contracts.json", {
-			version: "1.0",
-			contracts: {
-				OrderService: {
-					invariants: [],
-					operations: {
-						placeOrder: {
-							id: "OrderService.placeOrder",
-							params: [],
-							preconditions: [],
-							postconditions: [
-								{ id: "OrderService.placeOrder.post0", expr: "total = 100" },
-							],
-							effects: [],
-							sourceHash: "abc123",
-						},
-					},
-				},
-				CustomerService: {
-					invariants: [],
-					operations: {
-						register: {
-							id: "CustomerService.register",
-							params: [{ name: "email", type: "string" }],
-							preconditions: [
-								{ id: "CustomerService.register.pre0", expr: 'email != ""' },
-							],
-							postconditions: [],
-							effects: [],
-							sourceHash: "def456",
-						},
-					},
-				},
-			},
-		});
-
-		const context = await loadWorkspace(ws);
-
-		const clean = extractScoped(context, "CustomerService", "register");
-		expect(clean.contract).not.toBeNull();
-		expect(clean.contract).toMatchObject({ id: "CustomerService.register" });
-		expect(clean.errors).toEqual([]);
-
-		const componentView = extractScoped(context, "OrderService");
-		expect(componentView.operation).toBeNull();
-		expect(componentView.contract).not.toBeNull();
-		const component = componentView.contract as Record<string, unknown>;
-		expect(component).toHaveProperty("operations");
-		expect(component).toHaveProperty("invariants");
-		// Not the whole file: no top-level "contracts" key.
-		expect(component).not.toHaveProperty("contracts");
-		expect(componentView.errors).toHaveLength(1);
-	});
-});
-
 describe("loadWorkspace — repeatability", () => {
 	it("returns the same structure across repeated loadWorkspace calls", async () => {
 		const ws = await seedRichWorkspace("g-idempotent");
@@ -854,28 +716,6 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 		expect(context.isValid).toBe(true);
 	});
 
-	it("e: extractScoped includes the semantic error for the owning component/operation only", async () => {
-		const ws = await seedSemanticErrorWorkspace("e-scoped-semantic");
-
-		const context = await loadWorkspace(ws);
-
-		const opView = extractScoped(context, "svc", "op");
-		expect(opView.errors).toContainEqual(
-			expect.objectContaining({
-				code: "UNKNOWN_FIELD",
-				contractId: "svc.op.pre0",
-			}),
-		);
-
-		const otherView = extractScoped(context, "otherComp");
-		expect(otherView.errors).not.toContainEqual(
-			expect.objectContaining({
-				code: "UNKNOWN_FIELD",
-				contractId: "svc.op.pre0",
-			}),
-		);
-	});
-
 	it("f: loader-level MISSING_FILE and semantic UNKNOWN_FIELD coexist in validationErrors (append, not replace)", async () => {
 		const ws = await seedWorkspace("f-loader-plus-semantic");
 		await writeWorkspaceFile(
@@ -917,9 +757,8 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
  * never-throws promise (src/loader/workspace.ts:10-11). Each test seeds a
  * valid workspace from the base fixtures below (mirroring
  * contractsFixture/manifestsFixture) and corrupts ONE file, then pins the
- * post-fix outcome contract: a structured INVALID_SHAPE loader error, or —
- * for the degenerate extractScoped cases (C6/C9) — a non-throwing scoped
- * view carrying an errors array. The tests must genuinely reject today with
+ * post-fix outcome contract: a structured INVALID_SHAPE loader error. The
+ * tests must genuinely reject today with
  * the raw TypeError/RangeError; the assertions below are the structured
  * outcomes the fix must produce (no lazy try/catch can satisfy them).
  *
@@ -1200,58 +1039,6 @@ describe("loadWorkspace — malformed-shape workspace files never throw (ADR-001
 		);
 	});
 
-	it("extractScoped returns a scoped view with an errors array for a component lacking operations (C9) — never throws", async () => {
-		const contracts = {
-			version: "1.0",
-			contracts: { Svc: { invariants: [] } },
-		};
-
-		const ws = await seedShapeWorkspace("s8-extract-scoped-no-operations", {
-			contracts,
-		});
-
-		const load = loadWorkspace(ws);
-		await expect(load).resolves.toBeDefined();
-		const context = await load;
-
-		const view = extractScoped(context, "Svc", "op");
-		expect(view).toBeDefined();
-		expect(Array.isArray(view.errors)).toBe(true);
-	});
-
-	it("extractScoped returns a scoped view with an errors array after an id-less failing clause (C6) — never throws", async () => {
-		const contracts = {
-			version: "1.0",
-			contracts: {
-				Svc: {
-					invariants: [],
-					operations: {
-						op: {
-							id: "Svc.op",
-							params: [],
-							preconditions: [{ expr: "total = 100" }],
-							postconditions: [],
-							effects: [],
-							sourceHash: "abc123",
-						},
-					},
-				},
-			},
-		};
-
-		const ws = await seedShapeWorkspace("s9-idless-failing-clause", {
-			contracts,
-		});
-
-		const load = loadWorkspace(ws);
-		await expect(load).resolves.toBeDefined();
-		const context = await load;
-
-		const view = extractScoped(context, "Svc", "op");
-		expect(view).toBeDefined();
-		expect(Array.isArray(view.errors)).toBe(true);
-	});
-
 	it("never throws when a manifest typeRef nests 20000 levels deep (F2) — result keeps validationErrors/isValid", async () => {
 		// F2: today the validator's recursive parseTypeRef overflows the call
 		// stack at depth 20000 (RangeError: Maximum call stack size exceeded).
@@ -1281,11 +1068,10 @@ describe("loadWorkspace — malformed-shape workspace files never throw (ADR-001
 
 /**
  * Re-review crash holes (chunk 3.4b): the Center's re-review of the 3.4a
- * robustness fix found four holes the 3.4a fixtures could not reach — none of
- * them mutated `operation.params`, and none combined a primitive store with
- * extractScoped. Each test must genuinely reject today with the raw
- * TypeError/RangeError noted in its comment; the assertions below pin the
- * structured outcome the fix must produce (no lazy try/catch can satisfy
+ * robustness fix found three holes the 3.4a fixtures could not reach — none of
+ * them mutated `operation.params`. Each test must genuinely reject today with
+ * the raw TypeError/RangeError noted in its comment; the assertions below pin
+ * the structured outcome the fix must produce (no lazy try/catch can satisfy
  * them).
  *
  * B1 — operation.params non-array / null element: findOperationParam
@@ -1295,11 +1081,6 @@ describe("loadWorkspace — malformed-shape workspace files never throw (ADR-001
  *   it already passes, so it is not pinned.) Post-fix: a shape-guard check on
  *   operation.params (mirrors the per-entry predicates check) records
  *   INVALID_SHAPE with a field naming the params path.
- * B2 — extractScoped on a shape-invalid primitive contracts.json: findContract
- *   (src/loader/workspace.ts) does `contracts.contracts[component]` where
- *   `contracts` is the primitive 42/true → TypeError: Cannot read properties
- *   of undefined (reading 'Svc'). Post-fix: a non-throwing scoped view with an
- *   errors array.
  * W1 — compatible recursion on deep same-family typeRefs: the 3.4a F2 test
  *   compared a scalar literal to the deep list (returns false, no recursion);
  *   a same-family compare (`total == total`) makes compatible recurse per
@@ -1348,32 +1129,6 @@ describe("loadWorkspace — re-review crash holes close (chunk 3.4b)", () => {
 					field: expect.stringContaining("params"),
 				}),
 			);
-		},
-	);
-
-	it.each([
-		{ dir: "s12-b2-number", label: "the number 42", value: 42 },
-		{ dir: "s12-b2-boolean", label: "the boolean true", value: true },
-	])(
-		"extractScoped returns a scoped view with an errors array when contracts.json is $label (B2) — never throws",
-		async ({ dir, value }) => {
-			const ws = await seedShapeWorkspace(dir, { contracts: value });
-
-			const load = loadWorkspace(ws);
-			await expect(load).resolves.toBeDefined();
-			const context = await load;
-
-			expect(context.isValid).toBe(false);
-			expect(context.validationErrors).toContainEqual(
-				expect.objectContaining({
-					code: "INVALID_SHAPE",
-					field: "contracts.json",
-				}),
-			);
-
-			const view = extractScoped(context, "Svc", "op");
-			expect(view).toBeDefined();
-			expect(Array.isArray(view.errors)).toBe(true);
 		},
 	);
 

@@ -199,7 +199,7 @@ describe("reference example — idempotent regeneration (VERSAILLES-17)", () => 
 // ── CLI flow commands guard (docs/build-spec.md §12) ───────────────────────
 
 describe("reference example — CLI flow commands (guard, build-spec §12)", () => {
-	it("dispatches every example-flow command in src/cli/index.ts's COMMANDS set — init → extract-manifests → validate → review --approve → generate → check, plus register-predicate / verify-purity / remind-unverified", async () => {
+	it("dispatches every example-flow command in src/cli/index.ts's COMMANDS set — init → extract-manifests → validate → generate → check, plus register-predicate / verify-purity / remind-unverified", async () => {
 		const source = await readFile(DISPATCH_SOURCE_PATH, "utf8");
 		const setMatch = source.match(
 			/const COMMANDS = new Set\(\[([\s\S]*?)\]\);/,
@@ -216,7 +216,6 @@ describe("reference example — CLI flow commands (guard, build-spec §12)", () 
 			"validate",
 			"check",
 			"generate",
-			"review",
 			"register-predicate",
 			"verify-purity",
 			"remind-unverified",
