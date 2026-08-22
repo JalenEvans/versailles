@@ -8,7 +8,7 @@ schema_version: 1
 context: workspace-context
 
 owns:
-  - "Joint loading and JSON-parsing of the four top-level .versailles/ files — config.json, contracts.json, manifests.json, predicates.json — as a single unit (build-spec §2, §6)"
+  - "Joint loading and JSON-parsing of the three top-level .versailles/ data files — config.json, contracts.json (with its top-level predicates map), manifests.json — as a single unit (build-spec §2, §6)"
   - "The version gates on config.grammarVersion and config.schemaVersion with hard-error + upgrade-path behavior (build-spec §3.1)"
   - "config.schema.json machine-checkable validation against the ADR-0009 enum matrix"
   - "The VersaillesContext object (build-spec §6.5): config, contracts, manifests, predicates, parsedContracts, parseErrors, validationErrors, validationWarnings, isValid"
@@ -25,7 +25,7 @@ purpose: |
   grammarVersion and schemaVersion (a mismatch is a hard error with an upgrade-path message,
   never a silent best-effort parse), parses and validates every expr against the full context,
   and returns one VersaillesContext with an aggregated isValid. It validates config against the
-  ADR-0009 matrix, exposes the scoped extraction helper used by human review, and orchestrates
+  ADR-0009 matrix, exposes the scoped extraction helper used by validate --verbose, and orchestrates
   the CI staleness check with distinct exit codes 0, 1, and 2. A single shared loader serves
   every component — no component re-implements loading — and the tool never invokes an LLM
   (ADR-0010). The loader also owns the manifests.json store entry shape: entries may carry
@@ -49,7 +49,7 @@ invariants:
 operations:
   load_workspace:
     requires:
-      - "the directory contains all four versioned files: config.json, contracts.json, manifests.json, predicates.json"
+      - "the directory contains all three versioned data files: config.json, contracts.json, manifests.json"
     ensures:
       - "Returns a single VersaillesContext with config, contracts, manifests, predicates, parsedContracts (contract ID → AST), parseErrors, validationErrors, validationWarnings, and isValid"
       - "Version gates are checked before any processing; a mismatch returns a hard error with an upgrade-path message"
@@ -100,19 +100,19 @@ operations:
         output: "hard failure listing stale IDs, exit 2"
 
 must:
-  - "Read and JSON-parse all four top-level files together as one unit; never interpret any file on its own (build-spec §2)."
+  - "Read and JSON-parse all three top-level data files together as one unit; never interpret any file on its own (build-spec §2)."
   - "Check config.grammarVersion and config.schemaVersion against the tool's supported versions before any processing; on mismatch return a hard error with an explicit upgrade-path message (build-spec §3.1)."
   - "Validate config against the ADR-0009 enum matrix: language accepts typescript | csharp | python and testFramework accepts vitest | xunit | pytest; reject jest and any value outside the matrix (ADR-0009)."
   - "Parse every expr string in contracts.json into an AST, collect structured parse errors, run the semantic validator against the full context, and aggregate everything into one VersaillesContext with an isValid flag (build-spec §6)."
   - "Expose the scoped extraction helper that returns a single component/operation sub-object plus its errors and warnings (build-spec §6.6)."
   - "Orchestrate versailles check: fail on non-empty parseErrors/validationErrors; recompute every stored sourceHash and compare; honor config.staleness.blockOnStale; exit 0 clean, 1 on parse/validation error, 2 on blocking staleness, and warn-with-0 when staleness is non-blocking (build-spec §8)."
-  - "Be the single shared loader: every consuming component (CLI commands, review UI, CI lint, generator) loads the workspace through this module, never re-implementing loading (build-spec §6)."
+  - "Be the single shared loader: every consuming component (CLI commands, CI lint, generator) loads the workspace through this module, never re-implementing loading (build-spec §6)."
   - "Return every failure as structured errors inside the returned context or scoped view — never throw — for missing files (MISSING_FILE), invalid JSON (INVALID_JSON), malformed shapes (INVALID_SHAPE, shape-guard pass), version/config mismatches (VERSION_MISMATCH | CONFIG_INVALID), malformed expressions (ParseError), and unknown scoped targets (NOT_FOUND) (build-spec §6, ADR-0010)."
   - "Acknowledge the manifests.json store entry shape: sourcePath (string; project-root-relative with POSIX separators when present, e.g. src/order.ts — never empty for covered entries; legacy entries lacking it preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable, permissive low-confidence policy); a refreshed entry always carries the methods key — possibly {} — with only preserved legacy entries allowed to lack it (build-spec §3.3, §7, VERSAILLES-25 follow-up)."
   - "Surface sourcePath and methods on ManifestsFile entries so downstream consumers (generate handler → emitter modulePaths + call shape) can use them directly from the loaded context."
 
 must_not:
-  - "Must not interpret any of the four top-level files in isolation — they are versioned together and loaded as one unit (build-spec §2)."
+  - "Must not interpret any of the three top-level data files in isolation — they are versioned together and loaded as one unit (build-spec §2)."
   - "Must not silently best-effort parse on a grammarVersion or schemaVersion mismatch — it is a hard error with an upgrade-path message (build-spec §3.1)."
   - "Must not accept language or testFramework values outside the ADR-0009 enum matrix — jest is rejected, vitest is accepted (ADR-0009)."
   - "Must not let consumers re-implement loading — the shared loader is the only path into the context (build-spec §6)."
@@ -123,7 +123,7 @@ must_not:
   - "Must not invoke an LLM anywhere in loading or checking (ADR-0010)."
 
 can:
-  - "May surface non-blocking validationWarnings to consumers (for example reviewer-awareness surfaces)."
+  - "May surface non-blocking validationWarnings to consumers (for example validate --verbose parser-sanity views)."
   - "May emit a warning report (such as a CI annotation) when staleness is detected but blockOnStale is false."
   - "May cache or memoize loaded contexts within a single process as an optimization, provided the shared loader remains the only entry point."
   - "May expose sourcePath and methods as optional typed fields on ManifestsFile entries, tolerated by the shape guard when absent; an empty methods map ({}) on a refreshed entry is a valid, meaningful value the shape guard accepts (VERSAILLES-25 follow-up)."
@@ -132,7 +132,7 @@ limits:
   - "No implementation of the grammar, parser, or validator rules themselves — contract-language owns those; this context aggregates results."
   - "No manifest derivation from source — manifest-extraction owns that."
   - "No test-case planning or test emission — deterministic-generation owns that."
-  - "No review merge or approval write-back to contracts.json — review owns that; this context supplies the scoped view only."
+  - "No review merge or approval write-back to contracts.json — retired by ADR-0012; the git commit is the approval."
   - "No recording or derivation of sourcePath or method metadata — manifest-extraction writes those fields; this context only loads and surfaces them."
   - "No LLM client, prompt templates, or in-tool LLM invocation (ADR-0010)."
 

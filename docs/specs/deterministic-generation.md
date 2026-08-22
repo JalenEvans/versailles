@@ -100,7 +100,7 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 
 ### Planned operations missing from source warn, never emit dead calls
 
-- **Given** a planned operation with no matching method in the source manifest (no method metadata and no resolvable source method, e.g. staged `Order.setSubtotal` with no `setSubtotal` in `src/order.ts`)
+- **Given** a planned operation with no matching method in the source manifest (no method metadata and no resolvable source method, e.g. `Order.setSubtotal` with no `setSubtotal` in `src/order.ts`)
 - **When** the generator plans/emits the suite
 - **Then** a non-silent non-blocking `UNPLANNABLE_OPERATION` warning appears in `CliResult.warnings` (exit 0 — same tier as `PREDICATE_UNPLANNABLE`) and the generated surface contains no unrunnable static options-object call for that operation (build-spec §9.1; VERSAILLES-25)
 

@@ -1,6 +1,6 @@
 # Features — Versailles
 
-User-visible capabilities mapped from the [build spec](../build-spec.md). Each capability is phrased as behavior a user (developer, CI pipeline, or reviewer) experiences, with the vocab of the shared [ubiquitous language](../glossary.md).
+User-visible capabilities mapped from the [build spec](../build-spec.md). Each capability is phrased as behavior a user (developer or CI pipeline) experiences, with the vocab of the shared [ubiquitous language](../glossary.md).
 
 ## Feature map
 
@@ -8,14 +8,12 @@ User-visible capabilities mapped from the [build spec](../build-spec.md). Each c
 |---|---|---|---|---|
 | Deterministic generation | `versailles generate` | deterministic-generation, workspace-context | §9 | [deterministic-generation.md](deterministic-generation.md) |
 | Staleness check (CI lint) | `versailles check` | workspace-context, contract-language, manifest-extraction | §8 | [staleness-check.md](staleness-check.md) |
-| Agent-driven contract authoring | no `author` command — an external agent authors drafts and drives `validate` / `check` on them | cross-cutting (CLI), contract-language, workspace-context | §10 | [llm-authoring.md](llm-authoring.md) |
-| Human review & approval | `versailles review <component> [operation]` | review, workspace-context | §11 | [human-review.md](human-review.md) |
-| Predicate registry tooling | `versailles register-predicate <name> --source <Module.functionName>`, `verify-purity <name>`, `remind-unverified` | predicate-registry, workspace-context | §3.4, §13 m8 | [predicate-registry.md](predicate-registry.md) |
+| Predicate declarations | declared inline in `contracts.json`; verified by `validate` | predicate-registry, contract-language, workspace-context | §3.4, §13 m8 | [predicate-registry.md](predicate-registry.md) |
 | Rejected-command output | any command on an invalid/stale/version-mismatched context | cross-cutting (CLI) | §4.4, §5.2, §8, §12 | [command-rejection.md](command-rejection.md) |
 | Manifest extraction | `versailles extract-manifests` | manifest-extraction, workspace-context | §7 | [manifest-extraction.md](manifest-extraction.md) |
 | Workspace init | `versailles init` | workspace-context | §12 | (scaffolds `.versailles/`; see [workspace-context](../domains/workspace-context.md)) |
 
-The five headline capabilities of this layer are **deterministic generation**, **staleness check via sourceHash**, **agent-driven contract authoring**, **human review**, and **rejected-command output** — the rest complete the CLI surface.
+The headline capabilities of this layer are **deterministic generation**, **staleness check via sourceHash**, **declarative predicate verification**, and **rejected-command output** — the rest complete the five-command CLI surface. Human review happens in the git layer (PR/diff); the git commit is the approval (ADR-0003, ADR-0012).
 
 ## How features map to contexts
 

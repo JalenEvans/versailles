@@ -3,23 +3,19 @@ import { messageOf } from "./context.js";
  * The machine-readable CLI surface (build-spec §10, §12,
  * docs/contracts/versailles.contract.yaml) — runCli routes argv to exactly
  * one of the subcommands (init | extract-manifests | validate | check |
- * generate | review <component> [operation] | register-predicate |
- * verify-purity | remind-unverified), validates arguments at the boundary,
- * and resolves with the structured CliResult envelope. Pure-ish and testable:
- * no process.exit, no stdout writes. Never throws — every failure surface
- * (unknown command, malformed args, load errors, parse/validation errors,
- * staleness, internal failures) is a structured error (ADR-0010).
+ * generate), validates arguments at the boundary, and resolves with the
+ * structured CliResult envelope. Pure-ish and testable: no process.exit, no
+ * stdout writes. Never throws — every failure surface (unknown command,
+ * malformed args, load errors, parse/validation errors, staleness, internal
+ * failures) is a structured error (ADR-0010).
+ *
+ * ADR-0013 (Phase 3): the predicate CLI trio (register-predicate, verify-purity,
+ * remind-unverified) is REMOVED. Predicates are now declarative in contracts.json.
  */
 import { handleCheck } from "./handlers/check.js";
 import { handleExtractManifests } from "./handlers/extract.js";
 import { handleGenerate } from "./handlers/generate.js";
 import { handleInit } from "./handlers/init.js";
-import {
-	handleRegisterPredicate,
-	handleRemindUnverified,
-	handleVerifyPurity,
-} from "./handlers/registerPredicate.js";
-import { type ReviewFlag, handleReview } from "./handlers/review.js";
 import { handleValidate } from "./handlers/validate.js";
 import type { CliResult } from "./types.js";
 
@@ -29,10 +25,6 @@ const COMMANDS = new Set([
 	"validate",
 	"check",
 	"generate",
-	"review",
-	"register-predicate",
-	"verify-purity",
-	"remind-unverified",
 ]);
 
 function usageError(
@@ -79,13 +71,13 @@ async function dispatch(argv: string[], cwd: string): Promise<CliResult> {
 	if (command === undefined) {
 		return usageError(
 			"USAGE",
-			"Missing command — expected one of: init, extract-manifests, validate, check, generate, review <component> [operation], register-predicate <name> --source <Module.functionName>, verify-purity <name>, remind-unverified",
+			"Missing command — expected one of: init, extract-manifests, validate, check, generate",
 		);
 	}
 	if (!COMMANDS.has(command)) {
 		return usageError(
 			"UNKNOWN_COMMAND",
-			`Unknown command "${command}" — expected one of: init, extract-manifests, validate, check, generate, review <component> [operation], register-predicate <name> --source <Module.functionName>, verify-purity <name>, remind-unverified`,
+			`Unknown command "${command}" — expected one of: init, extract-manifests, validate, check, generate`,
 		);
 	}
 
@@ -100,13 +92,18 @@ async function dispatch(argv: string[], cwd: string): Promise<CliResult> {
 			return handleInit(cwd);
 		}
 		case "validate": {
-			if (rest.length > 0) {
+			let verbose = false;
+			for (const arg of rest) {
+				if (arg === "--verbose") {
+					verbose = true;
+					continue;
+				}
 				return usageError(
 					"USAGE",
-					`"validate" accepts no arguments — unexpected "${rest[0]}"`,
+					`Unexpected argument "${arg}" for validate — only --verbose is supported`,
 				);
 			}
-			return handleValidate(cwd);
+			return handleValidate(cwd, verbose);
 		}
 		case "check": {
 			if (rest.length > 0) {
@@ -140,141 +137,12 @@ async function dispatch(argv: string[], cwd: string): Promise<CliResult> {
 			}
 			return handleExtractManifests(cwd, prune);
 		}
-		case "review": {
-			let flag: ReviewFlag = null;
-			const positionals: string[] = [];
-			for (const arg of rest) {
-				if (arg === "--approve" || arg === "--reject") {
-					if (flag !== null) {
-						return usageError(
-							"USAGE",
-							`"review" flags --approve and --reject are mutually exclusive — pass only one`,
-						);
-					}
-					flag = arg === "--approve" ? "approve" : "reject";
-					continue;
-				}
-				if (arg.startsWith("-")) {
-					return usageError(
-						"USAGE",
-						`Unexpected flag "${arg}" for review — only --approve and --reject are supported`,
-					);
-				}
-				positionals.push(arg);
-			}
-			if (positionals.length < 1 || positionals.length > 2) {
-				return usageError(
-					"USAGE",
-					`review requires exactly one component and an optional operation — got ${positionals.length} argument(s)`,
-				);
-			}
-			return handleReview(cwd, positionals[0], positionals[1], flag);
-		}
-		case "register-predicate": {
-			const flags = new Set([
-				"--source",
-				"--params",
-				"--paramTypes",
-				"--sourceHash",
-			]);
-			let source: string | undefined;
-			let params: string[] = [];
-			let paramTypes: string[] = [];
-			let sourceHash: string | undefined;
-			let verifiedPure = false;
-			const positionals: string[] = [];
-			let index = 0;
-			while (index < rest.length) {
-				const arg = rest[index];
-				if (arg === "--verifiedPure") {
-					verifiedPure = true;
-					index += 1;
-					continue;
-				}
-				if (flags.has(arg)) {
-					const value = rest[index + 1];
-					if (value === undefined || value.startsWith("-")) {
-						return usageError(
-							"USAGE",
-							`"${arg}" requires a value for register-predicate`,
-						);
-					}
-					if (arg === "--source") {
-						source = value;
-					} else if (arg === "--params") {
-						params = value === "" ? [] : value.split(",");
-					} else if (arg === "--paramTypes") {
-						paramTypes = value === "" ? [] : value.split(",");
-					} else {
-						sourceHash = value;
-					}
-					index += 2;
-					continue;
-				}
-				if (arg.startsWith("-")) {
-					return usageError(
-						"USAGE",
-						`Unexpected flag "${arg}" for register-predicate — supported flags: --source <Module.functionName>, --params <csv>, --paramTypes <csv>, --sourceHash <hash>, --verifiedPure`,
-					);
-				}
-				positionals.push(arg);
-				index += 1;
-			}
-			if (positionals.length !== 1) {
-				return usageError(
-					"USAGE",
-					`register-predicate requires exactly one predicate name — got ${positionals.length} argument(s)`,
-				);
-			}
-			if (source === undefined) {
-				return usageError(
-					"USAGE",
-					"register-predicate requires --source <Module.functionName>",
-				);
-			}
-			return handleRegisterPredicate(cwd, {
-				name: positionals[0],
-				source,
-				params,
-				paramTypes,
-				sourceHash,
-				verifiedPure,
-			});
-		}
-		case "verify-purity": {
-			const positionals: string[] = [];
-			for (const arg of rest) {
-				if (arg.startsWith("-")) {
-					return usageError(
-						"USAGE",
-						`Unexpected flag "${arg}" for verify-purity — the command takes only a predicate name`,
-					);
-				}
-				positionals.push(arg);
-			}
-			if (positionals.length !== 1) {
-				return usageError(
-					"USAGE",
-					`verify-purity requires exactly one predicate name — got ${positionals.length} argument(s)`,
-				);
-			}
-			return handleVerifyPurity(cwd, positionals[0]);
-		}
-		case "remind-unverified": {
-			if (rest.length > 0) {
-				return usageError(
-					"USAGE",
-					`"remind-unverified" accepts no arguments — unexpected "${rest[0]}"`,
-				);
-			}
-			return handleRemindUnverified(cwd);
-		}
 		default: {
 			// Unreachable: COMMANDS membership was checked above and every
 			// command case returns. TS needs an explicit end path for string.
 			return usageError(
 				"UNKNOWN_COMMAND",
-				`Unknown command "${command}" — expected one of: init, extract-manifests, validate, check, generate, review <component> [operation], register-predicate <name> --source <Module.functionName>, verify-purity <name>, remind-unverified`,
+				`Unknown command "${command}" — expected one of: init, extract-manifests, validate, check, generate`,
 			);
 		}
 	}

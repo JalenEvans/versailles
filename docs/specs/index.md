@@ -9,7 +9,6 @@ Behavioral specs, one per bounded context. A spec is written where the change to
 | manifest-extraction | [manifest-extraction.md](manifest-extraction.md) | implemented | data, public-api |
 | workspace-context | [workspace-context.md](workspace-context.md) | implemented | data, public-api |
 | deterministic-generation | [deterministic-generation.md](deterministic-generation.md) | implemented | data, public-api, state |
-| review | [review.md](review.md) | implemented | data, state |
 | predicate-registry | [predicate-registry.md](predicate-registry.md) | implemented | data, public-api |
 
 See also: [Contracts](../contracts/index.md) · [Decisions](../decisions/index.md) · [Build spec](../build-spec.md)

@@ -44,7 +44,7 @@ A canonical **semantic error** shape (build-spec §5.2):
 
 ## User story
 
-> As a CI pipeline or an external LLM/agent, I want every failure to arrive as a machine-readable structured result with a distinct exit code, so I can render it, re-inject it, or branch on it programmatically.
+> As a CI pipeline or external tool, I want every failure to arrive as a machine-readable structured result with a distinct exit code, so I can render it, re-inject it, or branch on it programmatically.
 
 ## Flow
 
@@ -60,12 +60,12 @@ A canonical **semantic error** shape (build-spec §5.2):
 - Every parse/validation failure is a **structured object**, never a string and never a throw (build-spec §4.4, §5.2).
 - Distinct exit codes (`0` / `1` / `2`) let CI branch behavior (build-spec §8).
 - Version mismatch is a hard error with an upgrade-path message, not a silent degraded parse (build-spec §3.1).
-- Generation and review only proceed from valid, non-stale contexts.
+- Generation only proceeds from valid, non-stale contexts.
 
 ## Edge cases
 
 - **Warnings present, errors absent** → not a rejection; warnings are non-blocking and surfaced (e.g. low-confidence fields, build-spec §5.1).
-- **Multiple errors in one run** → all structured errors returned (the report is a list), so the external agent and CI get the full picture in one pass.
+- **Multiple errors in one run** → all structured errors returned (the report is a list), so CI and external tooling get the full picture in one pass.
 
 ## Source of authority
 

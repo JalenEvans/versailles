@@ -1,49 +1,59 @@
-# Feature: Predicate Registry Tooling
+# Feature: Predicate Declarations
 
-**Commands:**
-- `versailles register-predicate <name> --source <Module.functionName> [--params <csv>] [--paramTypes <csv>] [--sourceHash <hash>] [--verifiedPure]`
-- `versailles verify-purity <name>`
-- `versailles remind-unverified`
+**Verified by:** `versailles validate` (declarative predicate verification, ADR-0013)
 
 **Primary context:** [predicate-registry](../domains/predicate-registry.md) (+ workspace-context, contract-language)
-**Vocabulary:** [glossary](../glossary.md) — *predicate, verifiedPure, sourceHash*
+**Vocabulary:** [glossary](../glossary.md) — *predicate, verifiedPure, sourceRef, declarative predicate*
 
 ## Overview
 
-The tooling around `predicates.json` — the named, verified-pure functions contract expressions are allowed to call. Registration adds or updates **exactly one** entry per invocation with a mechanically verified `sourceRef`/`sourceHash`; purity (`verifiedPure`) is a **human-only** gate set at registration or after a manual lint; the reminder surfaces unverified predicates to reviewers without ever writing.
+Predicates are declared inline in `contracts.json` as a top-level `predicates` map (ADR-0013).
+Each entry declares the predicate's source reference, parameter shape, and purity judgment.
+`validate` mechanically verifies every declaration: predicate name validity, `sourceRef`
+resolution under `config.sourceRoots` (resolve-or-warn), and the `verifiedPure` gate (ADR-0006
+preserved). The registration CLI (`register-predicate` / `verify-purity` / `remind-unverified`)
+and the stored `sourceHash` are removed (ADR-0013).
 
 ## User story
 
-> As a reviewer, I want to register callable predicates with proof they trace to real source and a manual purity gate, so contract expressions never call hallucinated or impure functions.
+> As a contract author, I want to declare callable predicates inline in `contracts.json` with
+> proof they trace to real source and a manual purity gate, so contract expressions never call
+> hallucinated or impure functions — with the declaration sitting next to the contracts that
+> use it, verified in one gate (`validate`).
 
 ## Flow
 
-1. **Register** — `versailles register-predicate <name> --source <Module.functionName>`:
+1. **Declare** — author adds a predicate entry to the top-level `predicates` map of
+   `contracts.json`: `{ "source": "<Module.functionName>", "params": [...], "paramTypes": [...],
+   "returnType": "boolean", "verifiedPure": true }`.
+2. **Verify** — `versailles validate` mechanically verifies every declaration:
    - the predicate name must match the `predicate_call` IDENT grammar;
-   - `sourceRef` is resolved under `config.sourceRoots` and `sourceHash` is computed against the current function implementation (a provided `--sourceHash` must match — nothing invented);
-   - the entry is written as a **single-entry read-modify-write** of `predicates.json`; `verifiedPure` is `false` unless the human passed `--verifiedPure` at registration.
-2. **Lint & verify** — after a human lints the function source, `versailles verify-purity <name>` flips `verifiedPure` true; `sourceRef`/`sourceHash` are never recomputed or rewritten.
-3. **Remind** — `versailles remind-unverified` reports exactly the entries with `verifiedPure` missing/false (with their `sourceRef`); it never writes.
-4. **Enforce** — contract-language's semantic validator hard-errors on any predicate call resolving to a missing or unverified entry (build-spec §5.1); the registry only provides the data.
+   - the `source` field is resolved under `config.sourceRoots` (resolve-or-warn →
+     `PREDICATE_SOURCE_UNRESOLVED` warning if unresolvable);
+   - `verifiedPure` is a human-set boolean — the validator hard-errors on any contract
+     reference to a predicate with `verifiedPure` missing or false (ADR-0006).
+3. **Enforce** — contract-language's semantic validator hard-errors on any predicate call
+   resolving to a missing or unverified entry (build-spec §5.1); the registry only provides
+   the data.
 
 ## Domain events
 
-- `predicateRegistered` — a named predicate entered `predicates.json` with `verifiedPure` set at registration-time purity review.
+- `predicateDeclarationVerified` — a predicate declaration was verified by `validate`.
 
 ## Business rules
 
 - `verifiedPure` is human-only — never automated purity/termination analysis (ADR-0006, build-spec §14 default).
-- Every entry's `sourceRef`/`sourceHash` is mechanically verified against real source before writing.
-- Writes are single-entry read-modify-writes — never a full-file rewrite; git records each change (ADR-0003).
-- No entry is removed as a side effect of registering or verifying another.
+- Every entry's `source` field is resolved by `validate` under `config.sourceRoots`; unresolvable sources produce a `PREDICATE_SOURCE_UNRESOLVED` warning (ADR-0005, ADR-0013).
+- Predicate declarations are authored inline in `contracts.json` — no separate `predicates.json` file, no registration CLI (ADR-0013).
+- No stored `sourceHash` is maintained for predicates (ADR-0013).
 
 ## Edge cases
 
-- **Invalid predicate name** → structured `INVALID_PREDICATE_NAME` error before any read/write; nothing written.
-- **Unresolvable `sourceRef`** → structured `SOURCE_REF_UNRESOLVED` error; nothing written.
-- **`--sourceHash` mismatch** → structured `SOURCE_HASH_MISMATCH` error; nothing written.
-- **`verify-purity` on a missing/non-conforming entry** → structured `NOT_FOUND`/`INVALID_ENTRY` error; `predicates.json` stays byte-identical (no degenerate write).
+- **Invalid predicate name** → structured `INVALID_PREDICATE_NAME` hard error before any validation.
+- **Unresolvable `source`** → structured `PREDICATE_SOURCE_UNRESOLVED` warning (non-blocking).
+- **Contract references an undeclared predicate** → hard validation error (ADR-0006).
+- **Contract references a predicate with `verifiedPure` missing or false** → hard validation error (ADR-0006).
 
 ## Source of authority
 
-[build-spec §3.4, §13 milestone 8, §14](../build-spec.md) · [ADR-0003](../decisions/0003-git-history-as-audit-trail.md) · [ADR-0006](../decisions/0006-predicate-purity-registration-gate.md) · [Domain: Predicate Registry](../domains/predicate-registry.md) · [Spec: Predicate Registry](../specs/predicate-registry.md)
+[build-spec §3.4, §13 milestone 8, §14](../build-spec.md) · [ADR-0003](../decisions/0003-git-history-as-audit-trail.md) · [ADR-0006](../decisions/0006-predicate-purity-registration-gate.md) · [ADR-0013](../decisions/0013-declarative-predicates-remove-registration-cli.md) · [Domain: Predicate Registry](../domains/predicate-registry.md) · [Spec: Predicate Registry](../specs/predicate-registry.md)

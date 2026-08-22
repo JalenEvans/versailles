@@ -30,7 +30,7 @@ purpose: |
   determinable) and the sourcePath of the file it was extracted from, so downstream emitters
   can render shape-aware calls against real modules.
   Extraction is static-analysis-first and permissive: inferred fields are flagged low-confidence
-  and warn rather than block (ADR-0004). Manifests are derived artifacts — an external agent may
+  and warn rather than block (ADR-0004). Manifests are derived artifacts — the tool
   author or update them via the CLI, but the tool itself never invokes an LLM (ADR-0005,
   ADR-0010).
 
@@ -103,7 +103,7 @@ must_not:
   - "Must not compute sourceHash over the full source file or method bodies — only the sorted field pairs plus sorted method-signature records, so unrelated body edits do not trigger false staleness."
   - "Must not prune manifest entries implicitly; removal occurs only via the explicit prune flag (build-spec §7)."
   - "Must not scan outside config.sourceRoots."
-  - "Must not invoke an LLM anywhere in extraction — no LLM client, no prompting logic, no retry loop; the only LLM-assisted path is an external agent whose output passes a mechanical verification gate before writing (ADR-0010, ADR-0005)."
+  - "Must not invoke an LLM anywhere in extraction — no LLM client, no prompting logic, no retry loop; the tool never invokes an LLM (ADR-0010, ADR-0005)."
   - "Must not let a low-confidence or inferred field cause a hard type-compatibility error — that tier warns but never blocks (ADR-0004)."
   - "Must not write a covered manifest entry with an empty sourcePath — a missing path is a legacy-entry condition, never a silent empty string."
   - "Must not record sourcePath relative to a source root (order.ts for src/order.ts) or as an absolute path — the canonical semantic is project-root-relative with POSIX separators (VERSAILLES-24). The no-project-root/disjoint-roots fallback is relative(sourceRoots[0], file) when derivable, or omission of the field — the absolute file path is never emitted (VERSAILLES-24 follow-up)."

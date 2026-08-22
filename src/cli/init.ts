@@ -13,11 +13,7 @@ const SEEDED_CONFIG = {
 	staleness: { blockOnStale: true },
 };
 
-const EMPTY_SCHEMA_FILE_NAMES = [
-	"contracts.json",
-	"manifests.json",
-	"predicates.json",
-];
+const EMPTY_SCHEMA_FILE_NAMES = ["contracts.json", "manifests.json"];
 
 function writeJsonFile(
 	dirPath: string,
@@ -32,8 +28,11 @@ function writeJsonFile(
 }
 
 /**
- * Scaffolds `<targetDir>/.versailles/` with the four jointly-loaded workspace
+ * Scaffolds `<targetDir>/.versailles/` with the three jointly-loaded workspace
  * files (build-spec §2): a seeded default config plus versioned schema stores.
+ *
+ * ADR-0013 (Phase 3): predicates.json is retired. Predicates are now declared
+ * inline in contracts.json's top-level `predicates` map.
  *
  * Idempotent: re-running re-seeds the same files (mkdir is recursive and the
  * seeds are always rewritten).

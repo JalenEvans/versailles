@@ -409,13 +409,130 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 			}
 		});
 
-		// ── IT 4b: asymmetric workspace — manifests present, predicates missing ─────
-		// Regression pin (VERSAILLES-149): loadWorkspace only tolerates MISSING_FILE
-		// for manifests.json AND predicates.json when BOTH are absent (greenfield).
-		// If ONLY ONE is missing, it's a brownfield-with-a-hole and the loader MUST
-		// report MISSING_FILE for the absent file. This pins that predicates.json
-		// absence alone flips isValid=false with a MISSING_FILE error.
-		it("asymmetric workspace: contracts + manifests present but predicates.json missing → MISSING_FILE for predicates.json, isValid=false (VERSAILLES-149)", async () => {
+		// ── IT 4c: regression pin — init-seeded empty manifests.json must not break greenfield ──
+		// Bug: after `versailles init`, the seeded EMPTY manifests.json (`{ version: "1.0" }`)
+		// makes `context.manifests` non-null, so the validator emits UNKNOWN_FIELD for
+		// greenfield field references (e.g. `balance`) — breaking the contract-first TDD flow.
+		// The fix: flag UNKNOWN_FIELD only when the SPECIFIC component has a manifest entry.
+		// This test pins the correct behavior: init-seeded empty manifests.json + greenfield
+		// contract → isValid=true, no UNKNOWN_FIELD errors.
+		it("init-seeded empty manifests.json must not emit UNKNOWN_FIELD for greenfield field refs (regression pin)", async () => {
+			const cwd = await mkdtemp(
+				join(tmpdir(), "versailles-cf-it4c-empty-manifests-"),
+			);
+			try {
+				await mkdir(join(cwd, ".versailles"), { recursive: true });
+				// Seed exactly like `versailles init` does:
+				await writeJsonFile(
+					join(cwd, ".versailles", "config.json"),
+					SEEDED_CONFIG,
+				);
+				// Cart contract with a field-ref postcondition (the canonical greenfield case).
+				await writeJsonFile(
+					join(cwd, ".versailles", "contracts.json"),
+					cartContracts(),
+				);
+				// The init-seeded EMPTY manifests.json — this is the bug trigger.
+				await writeJsonFile(join(cwd, ".versailles", "manifests.json"), {
+					version: "1.0",
+				});
+
+				const context = await loadWorkspace(join(cwd, ".versailles"));
+
+				// The workspace MUST be valid despite the empty manifests.json.
+				// Currently Red: the validator emits UNKNOWN_FIELD for `balance` because
+				// `context.manifests !== null` (it's `{ version: "1.0" }`), so the greenfield
+				// skip-UNKNOWN_FIELD guard (line 430 in validator.ts) does not fire.
+				expect(
+					context.isValid,
+					`expected isValid=true but got errors: ${JSON.stringify(context.validationErrors)}`,
+				).toBe(true);
+				// No UNKNOWN_FIELD errors for field refs — the validator must skip field-resolution
+				// when the SPECIFIC component has no manifest entry (greenfield: fields will be
+				// derived from contracts at emit time).
+				const unknownFields = context.validationErrors.filter(
+					(e) => e.code === "UNKNOWN_FIELD",
+				);
+				expect(
+					unknownFields,
+					`expected no UNKNOWN_FIELD errors but got: ${JSON.stringify(unknownFields)}`,
+				).toEqual([]);
+			} finally {
+				await rm(cwd, { recursive: true, force: true });
+			}
+		});
+
+		// ── IT 4d: brownfield guard — real manifest entry with missing field still errors ──
+		// This pins that the fix for IT 4c does not over-suppress: when a REAL manifest
+		// entry exists for the component (fields map present) but the referenced field is
+		// absent, UNKNOWN_FIELD must still fire (brownfield regression pin).
+		it("brownfield guard: real manifest entry with missing field still emits UNKNOWN_FIELD (regression pin)", async () => {
+			const cwd = await mkdtemp(
+				join(tmpdir(), "versailles-cf-it4d-brownfield-guard-"),
+			);
+			try {
+				await mkdir(join(cwd, ".versailles"), { recursive: true });
+				await writeJsonFile(
+					join(cwd, ".versailles", "config.json"),
+					SEEDED_CONFIG,
+				);
+				// Cart contract with a field-ref postcondition referencing `balance`.
+				await writeJsonFile(
+					join(cwd, ".versailles", "contracts.json"),
+					cartContracts(),
+				);
+				// REAL manifest entry for Cart — but `balance` is ABSENT from the fields map.
+				// This is the brownfield case: the component is tracked, but the field is missing.
+				await writeJsonFile(join(cwd, ".versailles", "manifests.json"), {
+					version: "1.0",
+					manifests: {
+						[CART]: {
+							sourceHash: "cart-hash",
+							fields: { otherField: "number" }, // `balance` is absent
+							methods: {
+								addItem: {
+									static: false,
+									params: [
+										{ name: "sku", type: "string" },
+										{ name: "price", type: "number" },
+									],
+									returnType: "void",
+								},
+							},
+						},
+					},
+				});
+
+				const context = await loadWorkspace(join(cwd, ".versailles"));
+
+				// The workspace MUST be invalid — the brownfield guard must hold.
+				expect(context.isValid).toBe(false);
+				// UNKNOWN_FIELD must fire for `balance` (the field is absent from the real manifest entry).
+				const unknownFields = context.validationErrors.filter(
+					(e) => e.code === "UNKNOWN_FIELD",
+				);
+				expect(
+					unknownFields.length,
+					`expected UNKNOWN_FIELD errors for brownfield missing field but got: ${JSON.stringify(context.validationErrors)}`,
+				).toBeGreaterThan(0);
+				// At least one UNKNOWN_FIELD must reference `balance`.
+				const balanceError = unknownFields.find((e) =>
+					e.detail.includes("balance"),
+				);
+				expect(
+					balanceError,
+					`expected UNKNOWN_FIELD for 'balance' but got: ${JSON.stringify(unknownFields)}`,
+				).toBeDefined();
+			} finally {
+				await rm(cwd, { recursive: true, force: true });
+			}
+		});
+
+		// ── IT 4b: asymmetric workspace — manifests present, no predicates.json ─────
+		// ADR-0013 (Phase 3): predicates.json is retired. Predicates are now declared
+		// inline in contracts.json's top-level `predicates` map. A workspace with
+		// contracts + manifests but no predicates.json is now normal and valid.
+		it("asymmetric workspace: contracts + manifests present, no predicates.json → loads cleanly, isValid=true (ADR-0013)", async () => {
 			const cwd = await mkdtemp(
 				join(tmpdir(), "versailles-cf-it4b-asymmetric-"),
 			);
@@ -435,7 +552,7 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 					manifests: {
 						[CART]: {
 							sourceHash: "cart-hash",
-							fields: {},
+							fields: { balance: "number" },
 							methods: {
 								addItem: {
 									static: false,
@@ -449,19 +566,18 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 						},
 					},
 				});
-				// predicates.json deliberately NOT written — asymmetric hole.
+				// predicates.json is NOT written — ADR-0013: it's retired.
 
 				const context = await loadWorkspace(join(cwd, ".versailles"));
 
-				// Mirror the assertion style of loader.test.ts "f: loader-level
-				// MISSING_FILE and semantic UNKNOWN_FIELD coexist".
+				// ADR-0013: predicates.json absence is normal. No MISSING_FILE for it.
 				const missingPredicates = context.validationErrors.find(
 					(e) => e.code === "MISSING_FILE" && e.field === "predicates.json",
 				);
 				expect(
 					missingPredicates,
-					"expected MISSING_FILE for predicates.json in asymmetric workspace",
-				).toBeDefined();
+					"predicates.json is retired — must NOT be reported MISSING_FILE",
+				).toBeUndefined();
 				// manifests.json must NOT be reported missing (it is present).
 				const missingManifests = context.validationErrors.find(
 					(e) => e.code === "MISSING_FILE" && e.field === "manifests.json",
@@ -470,11 +586,11 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 					missingManifests,
 					"manifests.json is present — must NOT be reported MISSING_FILE",
 				).toBeUndefined();
-				// isValid must be false because the hole is not tolerated.
+				// The workspace must be valid (no predicates.json hole to tolerate).
 				expect(
 					context.isValid,
-					`expected isValid=false for asymmetric workspace but got errors: ${JSON.stringify(context.validationErrors)}`,
-				).toBe(false);
+					`expected isValid=true for workspace without predicates.json but got errors: ${JSON.stringify(context.validationErrors)}`,
+				).toBe(true);
 			} finally {
 				await rm(cwd, { recursive: true, force: true });
 			}

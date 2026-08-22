@@ -1,16 +1,11 @@
 /**
  * Predicate registry module — public surface (build-spec §3.4, §13 milestone
- * 8, docs/contracts/predicate-registry.contract.yaml). Registry data logic
- * (name validation, purity reminder) plus source resolution and the
- * implementation hash for registration. No LLM anywhere (ADR-0010).
+ * 8, docs/contracts/predicate-registry.contract.yaml).
+ *
+ * ADR-0013 (Phase 3): the CLI trio (register-predicate, verify-purity,
+ * remind-unverified) is removed. Predicates are now declarative in
+ * contracts.json. The module retains name validation and source resolution
+ * for the loader's resolve-or-warn pass.
  */
-export {
-	isValidPredicateName,
-	listUnverified,
-	type PredicateEntry,
-} from "./registry.js";
-export {
-	computePredicateSourceHash,
-	parseSourceRef,
-	resolvePredicateSource,
-} from "./source.js";
+export { isValidPredicateName, type PredicateEntry } from "./registry.js";
+export { resolvePredicateSource } from "./source.js";

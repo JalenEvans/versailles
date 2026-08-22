@@ -28,8 +28,7 @@ import { extractManifests } from "../src/extractors/index.js";
  * ```ts
  * export type CliError = {
  *   code: string;          // e.g. UNKNOWN_COMMAND | USAGE | PARSE_ERROR |
- *                          // MISSING_FILE | CONFIG_INVALID | STALE |
- *                          // REVIEW_NOT_AVAILABLE | ...
+ *                          // MISSING_FILE | CONFIG_INVALID | STALE | ...
  *   field?: string;        // file / path the error is about
  *   detail: string;        // human-readable, agent-consumable detail
  *   ids?: string[];        // present on STALE errors: stale entry IDs (§8)
@@ -61,7 +60,6 @@ import { extractManifests } from "../src/extractors/index.js";
  * | validate          | { valid: boolean }                                     |
  * | check             | { staleIds: string[] }                                 |
  * | generate          | { files: string[] }  (paths written, relative to cwd)   |
- * | review            | (view/approve/reject payloads — pinned in tests/review.test.ts) |
  *
  * updated   = components covered by the fresh extraction (added OR refreshed)
  * preserved = components in the previous manifests.json the extraction did not
@@ -73,11 +71,10 @@ import { extractManifests } from "../src/extractors/index.js";
  * ── Command behaviors pinned (exit codes are the contract) ────────────────
  *
  * 1. Routing (§12): argv[0] routes to init | extract-manifests | validate |
- *    check | generate | review <component> [operation]. Unknown commands
- *    (`author`, `bogus`) → { code: "UNKNOWN_COMMAND" } exit 1 — never exit 2.
- * 2. Usage errors: commands other than review accept NO unexpected
- *    positionals; review accepts exactly 1 required positional (component)
- *    plus an optional second (operation); any other shape → USAGE exit 1.
+ *    check | generate. Unknown commands (`author`, `bogus`, `review`) →
+ *    { code: "UNKNOWN_COMMAND" } exit 1 — never exit 2.
+ * 2. Usage errors: commands accept NO unexpected positionals; any other
+ *    shape → USAGE exit 1.
  * 3. init: scaffolds .versailles/ (config.json + empty stores) and exits 0.
  * 4. validate: ok true/exit 0 on a valid workspace; ok false/exit 1 with
  *    structured errors on parse or validation errors or load failures —
@@ -92,12 +89,7 @@ import { extractManifests } from "../src/extractors/index.js";
  *    ADR-0007). Routes through src/generator/index.js (planTestCases /
  *    emitSuite / coverageManifest) — the generator surface is pinned in the
  *    dedicated describe below and the PF integrates feat/generator-core.
- * 7. review: arg validation happens at the CLI boundary; valid arg shapes
- *    (component [operation]) route to the review handler. A valid shape with
- *    NO staged object returns NOT_FOUND (exit 1) — never REVIEW_NOT_AVAILABLE,
- *    never UNKNOWN_COMMAND. The full flow (scoped view / --approve /
- *    --reject) is pinned in tests/review.test.ts.
- * 8. Determinism (ADR-0002): same argv + same workspace → byte-identical
+ * 7. Determinism (ADR-0002): same argv + same workspace → byte-identical
  *    JSON (no timestamps / randomness) — no LLM is ever invoked (ADR-0010).
  *
  * ── Fixture strategy ──────────────────────────────────────────────────────
@@ -238,8 +230,9 @@ async function writeSource(
 
 /**
  * Scaffolds a fresh workspace (with optional config overrides) into its own
- * temp subdir. Writes the four jointly-loaded files directly so fixtures do
- * not depend on the CLI under test.
+ * temp subdir. Writes the three jointly-loaded files directly so fixtures do
+ * not depend on the CLI under test. ADR-0013 (Phase 3): predicates.json is
+ * retired; predicates are now inline in contracts.json.
  */
 async function freshWorkspace(
 	name: string,
@@ -260,7 +253,6 @@ async function freshWorkspace(
 		version: "1.0",
 		manifests: {},
 	});
-	await writeWorkspaceFile(cwd, "predicates.json", emptyPredicates());
 	return cwd;
 }
 
@@ -349,7 +341,6 @@ describe("runCli — command routing (build-spec §12)", () => {
 			["validate"],
 			["check"],
 			["generate"],
-			["review", ACCOUNT],
 		];
 
 		for (const argv of commands) {
@@ -375,6 +366,22 @@ describe("runCli — command routing (build-spec §12)", () => {
 	it("routes an unknown command (`bogus`) to a structured UNKNOWN_COMMAND usage error, exit 1 — never exit 2", async () => {
 		const cwd = await freshWorkspace("a-bogus");
 		const result = await runCli(["bogus"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(result.errors).toContainEqual(
+			expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
+		);
+	});
+
+	// ── ADR-0012 Red-phase pin: `review` is no longer a registered command ──
+	// The in-tool human review gate is removed; the commit IS the approval.
+	// `review` must route to UNKNOWN_COMMAND (exit 1). This test FAILS against
+	// the current implementation (review is still registered) — the Power
+	// Forward must remove the review command so this test turns green.
+	it("routes `review` to a structured UNKNOWN_COMMAND usage error, exit 1 — the review command is removed (ADR-0012)", async () => {
+		const cwd = await freshWorkspace("a-review-removed");
+		const result = await runCli(["review", "SomeComponent"], { cwd });
 
 		expect(result.ok).toBe(false);
 		expect(result.exitCode).toBe(1);
@@ -422,34 +429,12 @@ describe("runCli — usage errors (build-spec §12)", () => {
 			expect.objectContaining({ code: "USAGE" }),
 		);
 	});
-
-	it("rejects `review` with no component as a USAGE error, exit 1", async () => {
-		const cwd = await seedGeneratorWorkspace("u-review-no-component");
-		const result = await runCli(["review"], { cwd });
-
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(1);
-		expect(result.errors).toContainEqual(
-			expect.objectContaining({ code: "USAGE" }),
-		);
-	});
-
-	it("rejects `review` with three positionals as a USAGE error, exit 1", async () => {
-		const cwd = await seedGeneratorWorkspace("u-review-three");
-		const result = await runCli(["review", "A", "B", "C"], { cwd });
-
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(1);
-		expect(result.errors).toContainEqual(
-			expect.objectContaining({ code: "USAGE" }),
-		);
-	});
 });
 
 // ── init (build-spec §2, §12) ──────────────────────────────────────────────
 
 describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => {
-	it("scaffolds the four jointly-loaded files with a schema-valid seeded config, exit 0", async () => {
+	it("scaffolds the three jointly-loaded files with a schema-valid seeded config, exit 0", async () => {
 		const cwd = await freshWorkspace("i-scaffold");
 		const result = await runCli(["init"], { cwd });
 
@@ -462,7 +447,6 @@ describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => 
 			"config.json",
 			"contracts.json",
 			"manifests.json",
-			"predicates.json",
 		]);
 
 		const config = JSON.parse(
@@ -492,7 +476,6 @@ describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => 
 			"config.json",
 			"contracts.json",
 			"manifests.json",
-			"predicates.json",
 		]);
 	});
 });
@@ -750,13 +733,15 @@ describe("runCli check — staleness / exit codes (build-spec §8)", () => {
 		await writeWorkspaceFile(cwd, "contracts.json", {
 			version: "1.0",
 			contracts: {
-				svc: {
+				OrderService: {
 					invariants: [],
 					operations: {
 						op: {
-							id: "svc.op",
+							id: "OrderService.op",
 							params: [],
-							preconditions: [{ id: "svc.op.pre0", expr: "missingField == 0" }],
+							preconditions: [
+								{ id: "OrderService.op.pre0", expr: "missingField == 0" },
+							],
 							postconditions: [],
 							effects: [],
 							sourceHash: "abc123",
@@ -961,19 +946,24 @@ describe("runCli generate — non-silent unplannable predicate warnings (VERSAIL
 				},
 			},
 		});
-		await writeWorkspaceFile(cwd, "predicates.json", {
-			version: "1.0",
-			predicates: {
-				isNonEmpty: {
-					params: ["items"],
-					paramTypes: ["list<number>"],
-					returnType: "boolean",
-					sourceRef: "List.isNonEmpty",
-					sourceHash: "p-nonempty",
-					verifiedPure: true,
-				},
+		// ADR-0013 (Phase 3): predicates are inline in contracts.json.
+		// Read the existing contracts.json, add predicates, and rewrite.
+		const { readFile } = await import("node:fs/promises");
+		const contractsRaw = await readFile(
+			join(cwd, ".versailles", "contracts.json"),
+			"utf8",
+		);
+		const contracts = JSON.parse(contractsRaw) as Record<string, unknown>;
+		contracts.predicates = {
+			isNonEmpty: {
+				source: "List.isNonEmpty",
+				params: ["items"],
+				paramTypes: ["list<number>"],
+				returnType: "boolean",
+				verifiedPure: true,
 			},
-		});
+		};
+		await writeWorkspaceFile(cwd, "contracts.json", contracts);
 
 		const result = await runCli(["generate"], { cwd });
 
@@ -1057,41 +1047,6 @@ describe("runCli generate — non-silent UNPLANNABLE_OPERATION warnings for stag
 		);
 		expect(content).not.toContain("Order.setSubtotal(");
 		expect(content).not.toContain("setSubtotal({");
-	});
-});
-
-// ── review (valid arg routing; no staged object → NOT_FOUND, exit 1 — real flow) ─
-
-describe("runCli review — valid arg shapes route to the handler; no staged object → NOT_FOUND, exit 1 (flow pinned in tests/review.test.ts)", () => {
-	it("valid args (component + operation) route to the review handler — no staged object → NOT_FOUND, exit 1, never REVIEW_NOT_AVAILABLE, never UNKNOWN_COMMAND", async () => {
-		const cwd = await seedGeneratorWorkspace("r-two-args");
-		const result = await runCli(["review", ACCOUNT, "withdraw"], { cwd });
-
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(1);
-		expect(result.errors).toContainEqual(
-			expect.objectContaining({ code: "NOT_FOUND" }),
-		);
-		expect(result.errors).not.toContainEqual(
-			expect.objectContaining({ code: "REVIEW_NOT_AVAILABLE" }),
-		);
-		expect(result.errors).not.toContainEqual(
-			expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
-		);
-	});
-
-	it("valid args (component only) also route to the review handler — no staged object → NOT_FOUND, exit 1, never REVIEW_NOT_AVAILABLE", async () => {
-		const cwd = await seedGeneratorWorkspace("r-one-arg");
-		const result = await runCli(["review", ACCOUNT], { cwd });
-
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(1);
-		expect(result.errors).toContainEqual(
-			expect.objectContaining({ code: "NOT_FOUND" }),
-		);
-		expect(result.errors).not.toContainEqual(
-			expect.objectContaining({ code: "REVIEW_NOT_AVAILABLE" }),
-		);
 	});
 });
 
@@ -1387,54 +1342,38 @@ describe("runCli generate — writes generated/coverage.json (Center W4, build-s
 	});
 });
 
-// ── Predicate registry command routing (build-spec §13 milestone 8) ────────
-// Pins for the milestone-8 commands (docs/contracts/
-// predicate-registry.contract.yaml): register-predicate / verify-purity /
-// remind-unverified must route to structured results — never UNKNOWN_COMMAND,
-// never a throw (ADR-0010). All three route through src/cli/index.ts today.
-// The full behavior of each command (single-entry read-modify-write,
-// sourceHash verification, verifiedPure gate, purity reminder) is pinned in
-// tests/predicate-registry.test.ts.
+// ── ADR-0013 Red-phase pin: predicate CLI trio removed ─────────────────────
+// The predicate CLI trio (register-predicate, verify-purity, remind-unverified)
+// is REMOVED in Phase 3. Predicates become declarative in contracts.json.
+// These commands must route to UNKNOWN_COMMAND (exit 1). The full declarative
+// predicate behavior is pinned in tests/declarative-predicates.test.ts.
 
-describe("runCli — predicate registry command routing (predicate-registry.contract.yaml, build-spec §13 milestone 8)", () => {
-	it("routes register-predicate / verify-purity / remind-unverified to structured results — never UNKNOWN_COMMAND, never a throw", async () => {
-		const cwd = await freshWorkspace("pr-route");
-		// Ground the registration fixture source (covered by sourceRoots) so a
-		// valid register-predicate invocation can succeed post-implementation.
-		await writeSource(
-			cwd,
-			"Inventory.ts",
-			`export function isAvailable(amount: number): boolean {
-	return amount >= 0;
-}
-`,
-		);
-		const commands: string[][] = [
+describe("runCli — predicate CLI trio removed (ADR-0013)", () => {
+	it.each([
+		[
+			"register-predicate",
 			[
 				"register-predicate",
 				"isAvailable",
 				"--source",
 				"Inventory.isAvailable",
-				"--params",
-				"amount",
-				"--paramTypes",
-				"number",
 			],
-			["verify-purity", "isAvailable"],
-			["remind-unverified"],
-		];
-
-		for (const argv of commands) {
+		],
+		["verify-purity", ["verify-purity", "isAvailable"]],
+		["remind-unverified", ["remind-unverified"]],
+	])(
+		"%s → UNKNOWN_COMMAND, exit 1 (ADR-0013 removed the predicate CLI trio)",
+		async (_command, argv) => {
+			const cwd = await freshWorkspace("pr-removed");
 			const result = await runCli(argv, { cwd });
-			expect(typeof result.ok).toBe("boolean");
-			expect(Array.isArray(result.errors)).toBe(true);
-			expect(Array.isArray(result.warnings)).toBe(true);
-			expect([0, 1, 2]).toContain(result.exitCode);
-			expect(result.errors).not.toContainEqual(
+
+			expect(result.ok).toBe(false);
+			expect(result.exitCode).toBe(1);
+			expect(result.errors).toContainEqual(
 				expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
 			);
-		}
-	});
+		},
+	);
 });
 
 // ── VERSAILLES-21 F2: sourcePath flow extractor → store → loader → generate ──

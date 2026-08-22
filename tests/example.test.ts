@@ -199,7 +199,7 @@ describe("reference example — idempotent regeneration (VERSAILLES-17)", () => 
 // ── CLI flow commands guard (docs/build-spec.md §12) ───────────────────────
 
 describe("reference example — CLI flow commands (guard, build-spec §12)", () => {
-	it("dispatches every example-flow command in src/cli/index.ts's COMMANDS set — init → extract-manifests → validate → review --approve → generate → check, plus register-predicate / verify-purity / remind-unverified", async () => {
+	it("dispatches every example-flow command in src/cli/index.ts's COMMANDS set — init → extract-manifests → validate → generate → check (the five-command surface; ADR-0013 removed the predicate CLI trio)", async () => {
 		const source = await readFile(DISPATCH_SOURCE_PATH, "utf8");
 		const setMatch = source.match(
 			/const COMMANDS = new Set\(\[([\s\S]*?)\]\);/,
@@ -210,22 +210,33 @@ describe("reference example — CLI flow commands (guard, build-spec §12)", () 
 			);
 		}
 		const setBody = setMatch[1];
+		// ADR-0013 (Phase 3): the predicate CLI trio (register-predicate,
+		// verify-purity, remind-unverified) is REMOVED. The example flow is
+		// now the five-command surface.
 		const flowCommands = [
 			"init",
 			"extract-manifests",
 			"validate",
 			"check",
 			"generate",
-			"review",
-			"register-predicate",
-			"verify-purity",
-			"remind-unverified",
 		];
 		for (const command of flowCommands) {
 			expect(
 				setBody,
 				`COMMANDS dispatch set is missing "${command}" — the example flow cannot run without it`,
 			).toContain(`"${command}"`);
+		}
+		// The removed commands must NOT be in the dispatch set.
+		const removedCommands = [
+			"register-predicate",
+			"verify-purity",
+			"remind-unverified",
+		];
+		for (const command of removedCommands) {
+			expect(
+				setBody,
+				`COMMANDS dispatch set still contains "${command}" — ADR-0013 removed the predicate CLI trio`,
+			).not.toContain(`"${command}"`);
 		}
 	});
 });

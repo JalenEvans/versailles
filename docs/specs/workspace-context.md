@@ -3,7 +3,7 @@
 **ID:** SPEC-wc
 **Lifecycle:** implemented
 **Owner:** associate-head-coach
-**Threshold:** data (the `.versailles/` file set is the tool's versioned data layer; `config.schema.json` gates it), public-api (the `VersaillesContext` object, scoped extraction helper, and `versailles check` exit codes are consumed by every other component, the review UI, CI, and external agents)
+**Threshold:** data (the `.versailles/` file set is the tool's versioned data layer; `config.schema.json` gates it), public-api (the `VersaillesContext` object, scoped extraction helper, and `versailles check` exit codes are consumed by every other component and CI)
 **Linked contract:** `docs/contracts/workspace-context.contract.yaml`
 **Canonical source:** `~/.opencode/skills/spec-builder/references/spec.template.md`
 
@@ -11,7 +11,7 @@
 
 ## Behavioral Intent
 
-The `.versailles/` workspace — `config.json`, `contracts.json`, `manifests.json`, `predicates.json` — is a versioned file set loaded as a single unit; no file is valid to interpret in isolation because contracts reference manifests and predicates by name (build-spec §2, §6). The loader applies version gates on `grammarVersion`/`schemaVersion`: a mismatch is a hard error with an upgrade-path message, never a silent best-effort parse (build-spec §3.1). It parses and validates every `expr` against the full context and returns one `VersaillesContext` object with parsed ASTs, errors, warnings, and an aggregated `isValid` flag (build-spec §6). The config schema is machine-checkable against the ADR-0009 enum matrix (`language` = typescript|csharp|python, `testFramework` = vitest|xunit|pytest — `jest` is rejected, `vitest` accepted). The context owns the scoped extraction helper used by human review and orchestrates the CI staleness check (`versailles check`) with distinct exit codes `0`/`1`/`2` (build-spec §8). A single shared loader is used by every component — no component re-implements loading (build-spec §6), and the tool never invokes an LLM (ADR-0010). The loader also owns the manifests.json store entry shape: entries may carry `sourcePath` (never empty for covered entries; legacy entries lacking it preserved as-is) and per-component `methods` metadata (recorded where determinable under the permissive low-confidence policy), and it surfaces both on `ManifestsFile` entries so the generate handler and emitters can derive real module import paths and call shapes (build-spec §3.3, §7). A refreshed entry's `methods` key may be the empty map `{}` — the first-class signal that the extractor knows the component has zero methods — and the loader surfaces it exactly as stored, never stripping or inventing it (VERSAILLES-25 follow-up).
+The `.versailles/` workspace — `config.json`, `contracts.json` (with its top-level `predicates` map), `manifests.json` — is a versioned file set loaded as a single unit; no file is valid to interpret in isolation because contracts reference manifests and predicates by name (build-spec §2, §6). The loader applies version gates on `grammarVersion`/`schemaVersion`: a mismatch is a hard error with an upgrade-path message, never a silent best-effort parse (build-spec §3.1). It parses and validates every `expr` against the full context and returns one `VersaillesContext` object with parsed ASTs, errors, warnings, and an aggregated `isValid` flag (build-spec §6). The config schema is machine-checkable against the ADR-0009 enum matrix (`language` = typescript|csharp|python, `testFramework` = vitest|xunit|pytest — `jest` is rejected, `vitest` accepted). The context owns the scoped extraction helper used by `validate --verbose` and orchestrates the CI staleness check (`versailles check`) with distinct exit codes `0`/`1`/`2` (build-spec §8). A single shared loader is used by every component — no component re-implements loading (build-spec §6), and the tool never invokes an LLM (ADR-0010). The loader also owns the manifests.json store entry shape: entries may carry `sourcePath` (never empty for covered entries; legacy entries lacking it preserved as-is) and per-component `methods` metadata (recorded where determinable under the permissive low-confidence policy), and it surfaces both on `ManifestsFile` entries so the generate handler and emitters can derive real module import paths and call shapes (build-spec §3.3, §7). A refreshed entry's `methods` key may be the empty map `{}` — the first-class signal that the extractor knows the component has zero methods — and the loader surfaces it exactly as stored, never stripping or inventing it (VERSAILLES-25 follow-up).
 
 ## Scope
 
@@ -20,9 +20,9 @@ The `.versailles/` workspace — `config.json`, `contracts.json`, `manifests.jso
 - The version gates: `config.grammarVersion` / `config.schemaVersion` checked before any processing; mismatch is a hard error with an upgrade-path message (build-spec §3.1).
 - `config.schema.json` (machine-checkable config validation) against the ADR-0009 enum matrix — `language` accepts `typescript | csharp | python`; `testFramework` accepts `vitest | xunit | pytest`; `jest` (and any value outside the matrix) is rejected.
 - Producing a single `VersaillesContext` object: `config, contracts, manifests, predicates, parsedContracts, parseErrors, validationErrors, validationWarnings, isValid` (build-spec §6.5).
-- The scoped extraction helper: given a component/operation name, return just that sub-object plus its errors/warnings — what the human review UI shows (build-spec §6.6).
+- The scoped extraction helper: given a component/operation name, return just that sub-object plus its errors/warnings — what `validate --verbose` shows (build-spec §6.6).
 - Staleness orchestration via `versailles check`: fail on non-empty `parseErrors`/`validationErrors`, recompute every stored `sourceHash` and compare, honor `config.staleness.blockOnStale` (block with exit code `2` vs. warn with exit code `0`; clean is `0`, parse/validation error is `1`) (build-spec §8).
-- The shared-loader guarantee: every consuming component (CLI commands, review UI, CI lint, generator) uses this loader — none re-implements loading.
+- The shared-loader guarantee: every consuming component (CLI commands, CI lint, generator) uses this loader — none re-implements loading.
 - The manifests.json store entry shape — `sourcePath` (string; never empty for covered entries; legacy entries lacking it preserved as-is) and `methods` (per-component map of method name → `{ static: boolean, params: string[], returnType?: string }`, recorded where determinable, permissive low-confidence policy) — and surfacing both on `ManifestsFile` entries so downstream consumers (generate handler → emitter modulePaths + call shape) can use them (build-spec §3.3, §7). A refreshed entry always carries the `methods` key — possibly `{}`, the first-class zero-methods signal — with only preserved legacy entries allowed to lack it; a present empty map is surfaced exactly as stored (VERSAILLES-25 follow-up).
 
 **Out of scope:**
@@ -31,14 +31,14 @@ The `.versailles/` workspace — `config.json`, `contracts.json`, `manifests.jso
 - Source-side manifest derivation (manifest-extraction).
 - Recording or derivation of `sourcePath`/method metadata (manifest-extraction writes them; this context only loads and surfaces them).
 - Test-case planning and emitter output (deterministic-generation).
-- The review merge (approval write-back to `contracts.json`) — review owns that; this context only supplies the scoped view.
-- Any LLM involvement in loading or checking — the CLI surfaces deterministic output for external agents; the tool never invokes an LLM (ADR-0010).
+- The review merge (approval write-back to `contracts.json`) — retired by ADR-0012; the git commit is the approval.
+- Any LLM involvement in loading or checking — the CLI surfaces deterministic output for CI and external tooling; the tool never invokes an LLM (ADR-0010).
 
 ## Behavior
 
 ### Joint loading produces one VersaillesContext
 
-- **Given** a `.versailles/` workspace with all four files present
+- **Given** a `.versailles/` workspace with all three data files present
 - **When** the loader runs
 - **Then** it returns a single `VersaillesContext` with config, contracts, manifests, predicates, `parsedContracts` (contract ID → AST), `parseErrors`, `validationErrors`, `validationWarnings`, and an `isValid` flag that aggregates all hard errors — no file is interpreted on its own (build-spec §6)
 
@@ -54,11 +54,11 @@ The `.versailles/` workspace — `config.json`, `contracts.json`, `manifests.jso
 - **When** `config.schema.json` validation runs
 - **Then** configuration is rejected as invalid; `testFramework: "vitest"` / `language: "typescript"` is accepted (ADR-0009)
 
-### Scoped extraction gives reviewers a sub-object, never the whole file
+### Scoped extraction gives a sub-object view, never the whole file
 
 - **Given** a component or component.operation name
 - **When** the scoped extraction helper is called
-- **Then** it returns just that sub-object plus its errors/warnings — the scoped diff the human review UI shows (build-spec §6.6)
+- **Then** it returns just that sub-object plus its errors/warnings — the scoped view `validate --verbose` shows (build-spec §6.6)
 
 ### CI check exit codes distinguish clean, invalid, and stale
 
@@ -68,7 +68,7 @@ The `.versailles/` workspace — `config.json`, `contracts.json`, `manifests.jso
 
 ### One shared loader, never re-implemented
 
-- **Given** multiple consuming components (CLI commands, review UI, CI lint, generator) that need the workspace
+- **Given** multiple consuming components (CLI commands, CI lint, generator) that need the workspace
 - **When** each loads the context
 - **Then** every component goes through this single loader module — no component re-implements loading or cross-referencing independently (build-spec §6)
 
@@ -80,7 +80,7 @@ The `.versailles/` workspace — `config.json`, `contracts.json`, `manifests.jso
 
 ## Constraints
 
-- `must_not` interpret any of the four top-level files in isolation — they are versioned together and loaded as one unit (build-spec §2).
+- `must_not` interpret any of the three top-level data files in isolation — they are versioned together and loaded as one unit (build-spec §2).
 - `must_not` silently best-effort parse on a grammar/schema version mismatch — it is a hard error with an upgrade-path message (build-spec §3.1).
 - `must_not` accept `language`/`testFramework` values outside the ADR-0009 enum matrix — `jest` is rejected; `vitest` is accepted (ADR-0009).
 - `must_not` let consumers re-implement loading — the shared loader is the only path into the context (build-spec §6).
@@ -95,7 +95,7 @@ The `.versailles/` workspace — `config.json`, `contracts.json`, `manifests.jso
 - No manifest derivation from source (manifest-extraction).
 - No recording or derivation of `sourcePath`/method metadata (manifest-extraction) — this context only loads and surfaces them.
 - No test-case planning or test emission (deterministic-generation).
-- No review UI or merge-on-approval implementation (review) — this context supplies the scoped view only.
+- No review UI or merge-on-approval implementation — retired by ADR-0012; the git commit is the approval.
 - No LLM client, prompt templates, or in-tool LLM invocation (ADR-0010).
 
 ---

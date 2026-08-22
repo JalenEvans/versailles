@@ -1,11 +1,14 @@
 /**
  * The joint `.versailles/` loader — the single shared path into a workspace
- * (build-spec §6). Loads and JSON-parses the four jointly-loaded files
- * (config.json, contracts.json, manifests.json, predicates.json), applies the
- * version gates (build-spec §3.1) BEFORE any other processing, parses every
- * expr string in contracts.json into an AST via parseExpression, validates
- * config.json against config.schema.json, and returns ONE VersaillesContext
- * with an aggregated isValid flag (build-spec §6.5).
+ * (build-spec §6). Loads and JSON-parses the three jointly-loaded files
+ * (config.json, contracts.json, manifests.json), applies the version gates
+ * (build-spec §3.1) BEFORE any other processing, parses every expr string in
+ * contracts.json into an AST via parseExpression, validates config.json against
+ * config.schema.json, and returns ONE VersaillesContext with an aggregated
+ * isValid flag (build-spec §6.5).
+ *
+ * ADR-0013 (Phase 3): predicates are now declared inline in contracts.json's
+ * top-level `predicates` map. predicates.json is retired and no longer loaded.
  *
  * The loader never throws on missing/invalid files, malformed exprs, or
  * valid-JSON/wrong-shape files: every failure path returns a structured
@@ -23,11 +26,15 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Ajv, type ValidateFunction } from "ajv";
 
+import { existsSync, statSync } from "node:fs";
+
 import configSchema from "../../config.schema.json" with { type: "json" };
 import { parseExpression } from "../core/parser.js";
 import type { ClauseKind, Node, ParseError } from "../core/parser.js";
 import { semanticValidate } from "../core/validator.js";
 import type { ValidationError, ValidatorScope } from "../core/validator.js";
+import { isValidPredicateName } from "../predicates/registry.js";
+import { resolvePredicateSource } from "../predicates/source.js";
 
 export const SUPPORTED_GRAMMAR_VERSION = "1.0";
 export const SUPPORTED_SCHEMA_VERSION = "1.0";
@@ -61,6 +68,21 @@ export type ComponentContract = {
 
 export type ContractsFile = {
 	version: string;
+	/**
+	 * ADR-0013 (Phase 3): predicates are now declared inline in contracts.json's
+	 * top-level `predicates` map. Each entry carries: source, params, paramTypes,
+	 * returnType, verifiedPure. The sourceHash field is dropped.
+	 */
+	predicates?: Record<
+		string,
+		{
+			source: string;
+			params: string[];
+			paramTypes: string[];
+			returnType: string;
+			verifiedPure: boolean;
+		}
+	>;
 	contracts: Record<string, ComponentContract>;
 };
 
@@ -115,7 +137,8 @@ export type LoaderErrorCode =
 	| "INVALID_JSON"
 	| "CONFIG_INVALID"
 	| "INVALID_SHAPE"
-	| "NOT_FOUND";
+	| "NOT_FOUND"
+	| "INVALID_PREDICATE_NAME";
 
 export type LoaderError = {
 	code: LoaderErrorCode;
@@ -135,14 +158,6 @@ export type VersaillesContext = {
 	validationErrors: (LoaderError | ValidationError)[];
 	validationWarnings: LoaderWarning[];
 	isValid: boolean;
-};
-
-export type ScopedView = {
-	component: string;
-	operation: string | null;
-	contract: ComponentContract | ContractOperation | null;
-	errors: (ParseError | LoaderError | ValidationError)[];
-	warnings: LoaderWarning[];
 };
 
 type ConfigValidator = {
@@ -235,6 +250,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * ADR-0013 (Phase 3): inline version of expandSourceRoots from src/cli/context.ts
+ * to avoid circular dependency. Expands config.sourceRoots patterns into actual
+ * directory roots for predicate source resolution.
+ */
+function expandSourceRootsInline(patterns: string[], cwd: string): string[] {
+	const roots = new Set<string>();
+	for (const pattern of patterns) {
+		const prefix = staticPrefixInline(pattern);
+		if (prefix === "") {
+			continue;
+		}
+		const abs = join(cwd, prefix);
+		if (existsSync(abs) && statSync(abs).isDirectory()) {
+			roots.add(abs);
+		}
+	}
+	return [...roots].sort();
+}
+
+function staticPrefixInline(pattern: string): string {
+	const metaIndex = pattern.search(/[*?[\]{}]/);
+	if (metaIndex === -1) {
+		return pattern;
+	}
+	return pattern.slice(0, metaIndex).replace(/[\\/]+$/, "");
+}
+
+/**
  * A clause entry is an object carrying a string `expr`. The `id` field is
  * deliberately NOT required here: an id-less clause is a parse-time concern
  * (its ParseError carries an undefined contractId), not a shape violation.
@@ -270,16 +313,20 @@ function isClauseEntry(value: unknown): boolean {
 function validateWorkspaceShapes(
 	contractsRaw: unknown,
 	manifestsRaw: unknown,
-	predicatesRaw: unknown,
 	validationErrors: (LoaderError | ValidationError)[],
 ): { contracts: boolean; manifests: boolean; predicates: boolean } {
 	const pushShapeError = (field: string, detail: string): void => {
 		validationErrors.push({ code: "INVALID_SHAPE", field, detail });
 	};
+	// ADR-0013 (Phase 3): predicates are now in contracts.json, so we validate
+	// them as part of the contracts shape. The predicates flag still reports
+	// whether the predicate declarations are shape-valid.
+	const contractsValid = validateContractsShape(contractsRaw, pushShapeError);
+	const predicatesValid = validatePredicatesShape(contractsRaw, pushShapeError);
 	return {
-		contracts: validateContractsShape(contractsRaw, pushShapeError),
+		contracts: contractsValid && predicatesValid,
 		manifests: validateManifestsShape(manifestsRaw, pushShapeError),
-		predicates: validatePredicatesShape(predicatesRaw, pushShapeError),
+		predicates: predicatesValid,
 	};
 }
 
@@ -455,6 +502,15 @@ function validateManifestsShape(
 	return ok;
 }
 
+/**
+ * ADR-0013 (Phase 3): validates the shape of predicate declarations in
+ * contracts.json's top-level `predicates` map. Each entry must have:
+ * - source (string)
+ * - params (array of strings)
+ * - paramTypes (array of strings)
+ * - returnType (string)
+ * - verifiedPure (boolean)
+ */
 function validatePredicatesShape(
 	raw: unknown,
 	pushShapeError: (field: string, detail: string) => void,
@@ -464,8 +520,8 @@ function validatePredicatesShape(
 	}
 	if (!isRecord(raw)) {
 		pushShapeError(
-			"predicates.json",
-			"The top level of predicates.json must be an object, not a primitive value",
+			"contracts.json",
+			"The top level of contracts.json must be an object, not a primitive value",
 		);
 		return false;
 	}
@@ -474,21 +530,56 @@ function validatePredicatesShape(
 	}
 	if (!isRecord(raw.predicates)) {
 		pushShapeError(
-			"predicates.predicates",
-			"predicates.predicates must be an object keyed by predicate name",
+			"contracts.predicates",
+			"contracts.predicates must be an object keyed by predicate name",
 		);
 		return false;
 	}
 
-	// Per-entry record check: resolvePredicate reads entry.verifiedPure /
-	// entry.params / entry.returnType unguarded; a null entry would crash it
-	// (defense-in-depth, mirrors the clause-entry check in contracts.json).
+	// Per-entry shape check: each predicate declaration must have source (string),
+	// params (array), paramTypes (array), returnType (string), verifiedPure (boolean).
 	let ok = true;
 	for (const [predicateName, entry] of Object.entries(raw.predicates)) {
 		if (!isRecord(entry)) {
 			pushShapeError(
-				`predicates.predicates.${predicateName}`,
+				`contracts.predicates.${predicateName}`,
 				`Predicate "${predicateName}" must be an object`,
+			);
+			ok = false;
+			continue;
+		}
+		if (typeof entry.source !== "string") {
+			pushShapeError(
+				`contracts.predicates.${predicateName}.source`,
+				`Predicate "${predicateName}" must have a string "source" field`,
+			);
+			ok = false;
+		}
+		if (!Array.isArray(entry.params)) {
+			pushShapeError(
+				`contracts.predicates.${predicateName}.params`,
+				`Predicate "${predicateName}" must have an array "params" field`,
+			);
+			ok = false;
+		}
+		if (!Array.isArray(entry.paramTypes)) {
+			pushShapeError(
+				`contracts.predicates.${predicateName}.paramTypes`,
+				`Predicate "${predicateName}" must have an array "paramTypes" field`,
+			);
+			ok = false;
+		}
+		if (typeof entry.returnType !== "string") {
+			pushShapeError(
+				`contracts.predicates.${predicateName}.returnType`,
+				`Predicate "${predicateName}" must have a string "returnType" field`,
+			);
+			ok = false;
+		}
+		if (typeof entry.verifiedPure !== "boolean") {
+			pushShapeError(
+				`contracts.predicates.${predicateName}.verifiedPure`,
+				`Predicate "${predicateName}" must have a boolean "verifiedPure" field`,
 			);
 			ok = false;
 		}
@@ -500,10 +591,9 @@ function validatePredicatesShape(
  * The schema-store types declare their record keys as required (build-spec
  * §3.2–§3.4), but init.ts seeds the three stores as bare `{ "version": "1.0" }`
  * without the key. The semantic validator indexes `manifests.manifests`
- * unguarded (validator.ts getManifestEntry) and extractScoped indexes
- * `contracts.contracts` the same way, so a degenerate shape would crash them —
- * violating the loader's never-throws promise (ADR-0010). Default an absent
- * record key to an empty record so downstream consumers always see the
+ * unguarded (validator.ts getManifestEntry), so a degenerate shape would crash
+ * it — violating the loader's never-throws promise (ADR-0010). Default an
+ * absent record key to an empty record so downstream consumers always see the
  * declared shape. `key in file` throws on primitives (chunk 3.4a, F1), so a
  * non-object file is returned untouched — the shape-guard pass has already
  * flagged it as INVALID_SHAPE and loadWorkspace skips downstream use.
@@ -606,32 +696,25 @@ export async function loadWorkspace(
 	const validationErrors: (LoaderError | ValidationError)[] = [];
 	const validationWarnings: LoaderWarning[] = [];
 
-	const [configRaw, contractsRaw, manifestsRaw, predicatesRaw] =
-		await Promise.all([
-			loadJsonFile(workspaceDir, "config.json", validationErrors),
-			loadJsonFile(workspaceDir, "contracts.json", validationErrors),
-			loadJsonFile(workspaceDir, "manifests.json", validationErrors),
-			loadJsonFile(workspaceDir, "predicates.json", validationErrors),
-		]);
+	// ADR-0013 (Phase 3): predicates.json is retired. Predicates are now
+	// declared inline in contracts.json's top-level `predicates` map.
+	const [configRaw, contractsRaw, manifestsRaw] = await Promise.all([
+		loadJsonFile(workspaceDir, "config.json", validationErrors),
+		loadJsonFile(workspaceDir, "contracts.json", validationErrors),
+		loadJsonFile(workspaceDir, "manifests.json", validationErrors),
+	]);
 
-	// ADR-0011 (contract-first emission): manifests.json and predicates.json
-	// are optional when BOTH are missing and contracts.json is present (greenfield
-	// workspace). If only one is missing, it's a brownfield workspace with a
-	// missing file, and MISSING_FILE should be reported.
+	// ADR-0011 (contract-first emission): manifests.json is optional when it's
+	// missing and contracts.json is present (greenfield workspace).
 	// config.json and contracts.json remain required.
 	if (contractsRaw !== null) {
 		const manifestsMissing = manifestsRaw === null;
-		const predicatesMissing = predicatesRaw === null;
-		// Greenfield: both manifests and predicates are missing
-		if (manifestsMissing && predicatesMissing) {
-			// Filter out MISSING_FILE errors for manifests.json and predicates.json
+		// Greenfield: manifests is missing
+		if (manifestsMissing) {
+			// Filter out MISSING_FILE errors for manifests.json
 			for (let i = validationErrors.length - 1; i >= 0; i--) {
 				const error = validationErrors[i];
-				if (
-					error.code === "MISSING_FILE" &&
-					(error.field === "manifests.json" ||
-						error.field === "predicates.json")
-				) {
+				if (error.code === "MISSING_FILE" && error.field === "manifests.json") {
 					validationErrors.splice(i, 1);
 				}
 			}
@@ -646,18 +729,105 @@ export async function loadWorkspace(
 	const shape = validateWorkspaceShapes(
 		contractsRaw,
 		manifestsRaw,
-		predicatesRaw,
 		validationErrors,
 	);
+
+	// ADR-0013 (Phase 3): extract predicates from contracts.json's top-level
+	// `predicates` map and build the PredicatesFile shape for backward
+	// compatibility with the validator.
+	let predicatesFile: PredicatesFile | null = null;
+	if (contractsRaw !== null && isRecord(contractsRaw) && shape.predicates) {
+		const contractsObj = contractsRaw as Record<string, unknown>;
+		if (isRecord(contractsObj.predicates)) {
+			const predicateMap: Record<
+				string,
+				{
+					params: string[];
+					paramTypes: string[];
+					returnType: string;
+					sourceRef: string;
+					sourceHash: string;
+					verifiedPure: boolean;
+				}
+			> = {};
+
+			// Derive the project root from workspaceDir (workspaceDir is .versailles/,
+			// so the project root is its parent).
+			const projectRoot = join(workspaceDir, "..");
+
+			for (const [name, entry] of Object.entries(contractsObj.predicates)) {
+				// Validate predicate name (must be a valid IDENT)
+				if (!isValidPredicateName(name)) {
+					validationErrors.push({
+						code: "INVALID_PREDICATE_NAME" as LoaderErrorCode,
+						field: `contracts.predicates.${name}`,
+						detail: `"${name}" is not a valid predicate name — predicate_call IDENT is /^[A-Za-z_][A-Za-z0-9_]*$/ and not a reserved keyword`,
+					});
+					continue;
+				}
+
+				if (isRecord(entry)) {
+					const source = typeof entry.source === "string" ? entry.source : "";
+					const params = Array.isArray(entry.params) ? entry.params : [];
+					const paramTypes = Array.isArray(entry.paramTypes)
+						? entry.paramTypes
+						: [];
+					const returnType =
+						typeof entry.returnType === "string" ? entry.returnType : "";
+					const verifiedPure =
+						typeof entry.verifiedPure === "boolean"
+							? entry.verifiedPure
+							: false;
+
+					// ADR-0013: sourceHash is dropped from the declaration, but we
+					// keep it in the PredicatesFile shape for backward compatibility
+					// with the validator. Set it to empty string.
+					predicateMap[name] = {
+						params,
+						paramTypes,
+						returnType,
+						sourceRef: source,
+						sourceHash: "",
+						verifiedPure,
+					};
+
+					// Resolve-or-warn: attempt to resolve the source under
+					// config.sourceRoots. Unresolvable → warning, not error.
+					if (
+						source &&
+						configRaw !== null &&
+						isRecord(configRaw) &&
+						Array.isArray(configRaw.sourceRoots)
+					) {
+						const config = configRaw as WorkspaceConfig;
+						const roots = expandSourceRootsInline(
+							config.sourceRoots ?? [],
+							projectRoot,
+						);
+						const resolved = resolvePredicateSource(roots, source);
+						if (!resolved.ok) {
+							validationWarnings.push({
+								code: "PREDICATE_SOURCE_UNRESOLVED",
+								field: `contracts.predicates.${name}.source`,
+								detail: `Predicate "${name}" source "${source}" could not be resolved under config.sourceRoots`,
+							});
+						}
+					}
+				}
+			}
+
+			predicatesFile = {
+				version: "1.0",
+				predicates: predicateMap,
+			};
+		}
+	}
 
 	const context: VersaillesContext = {
 		config: configRaw as WorkspaceConfig | null,
 		contracts: withRecordKey(contractsRaw as ContractsFile | null, "contracts"),
 		manifests: withRecordKey(manifestsRaw as ManifestsFile | null, "manifests"),
-		predicates: withRecordKey(
-			predicatesRaw as PredicatesFile | null,
-			"predicates",
-		),
+		predicates: predicatesFile,
 		parsedContracts: {},
 		parseErrors: [],
 		validationErrors,
@@ -713,10 +883,9 @@ export async function loadWorkspace(
 		if (shape.manifests && shape.predicates) {
 			// The §5.1 checks run over every successfully-parsed clause with
 			// the clauseKind + scope recorded during parsing. Semantic errors
-			// carry the clause contractId (so extractScoped attributes them to
-			// the owning component/operation); ADR-0004 warnings are
-			// non-blocking and never flip isValid. The arrays are shared with
-			// the loader-level errors above — appends, never a replace.
+			// carry the clause contractId; ADR-0004 warnings are non-blocking
+			// and never flip isValid. The arrays are shared with the
+			// loader-level errors above — appends, never a replace.
 			for (const clauseId of Object.keys(context.parsedContracts)) {
 				const meta = result.clauseMeta[clauseId];
 				if (meta === undefined) {
@@ -739,99 +908,4 @@ export async function loadWorkspace(
 		context.parseErrors.length === 0 && context.validationErrors.length === 0;
 
 	return context;
-}
-
-/**
- * Returns just the requested sub-object (never the whole file), with only the
- * errors that belong to it by contractId prefix. Loader-level errors (which
- * carry no contractId) are excluded from scoped views.
- */
-export function extractScoped(
-	context: VersaillesContext,
-	component: string,
-	operation?: string,
-): ScopedView {
-	const target =
-		operation === undefined ? component : `${component}.${operation}`;
-	const contract = findContract(context.contracts, component, operation);
-	if (contract === null) {
-		return {
-			component,
-			operation: operation ?? null,
-			contract: null,
-			errors: [
-				{
-					code: "NOT_FOUND",
-					field: target,
-					detail: `Contract "${target}" not found in the workspace`,
-				},
-			],
-			warnings: [],
-		};
-	}
-	return {
-		component,
-		operation: operation ?? null,
-		contract,
-		errors: scopedErrors(context, target),
-		warnings: [],
-	};
-}
-
-function findContract(
-	contracts: ContractsFile | null,
-	component: string,
-	operation: string | undefined,
-): ComponentContract | ContractOperation | null {
-	// B2 (chunk 3.4b): a shape-invalid primitive contracts.json (42, true)
-	// reaches extractScoped via withRecordKey untouched; indexing
-	// `contracts.contracts[component]` on a primitive throws a raw TypeError
-	// (reading the component property of undefined). Mirror the isRecord
-	// helper — a non-object store is simply not found, never a crash
-	// (ADR-0010).
-	if (
-		contracts === null ||
-		typeof contracts !== "object" ||
-		Array.isArray(contracts)
-	) {
-		return null;
-	}
-	const componentContract = contracts.contracts[component];
-	if (componentContract === undefined) {
-		return null;
-	}
-	if (operation === undefined) {
-		return componentContract;
-	}
-	// `operations` is optional per the declared shape but a degenerate
-	// component (chunk 3.4a, C9) may lack it — treat as not found, never throw.
-	return componentContract.operations?.[operation] ?? null;
-}
-
-function scopedErrors(
-	context: VersaillesContext,
-	prefix: string,
-): (ParseError | LoaderError | ValidationError)[] {
-	const parseScoped = context.parseErrors.filter(
-		(error) =>
-			// An id-less failing clause (chunk 3.4a, C6) produces a ParseError
-			// whose contractId is undefined at runtime — guard the read.
-			typeof error.contractId === "string" &&
-			error.contractId.startsWith(prefix),
-	);
-	const validationScoped = context.validationErrors.filter((error) =>
-		belongsTo(error, prefix),
-	);
-	return [...parseScoped, ...validationScoped];
-}
-
-function belongsTo(
-	error: ParseError | LoaderError | ValidationError,
-	prefix: string,
-): boolean {
-	return (
-		"contractId" in error &&
-		typeof error.contractId === "string" &&
-		error.contractId.startsWith(prefix)
-	);
 }

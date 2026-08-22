@@ -338,7 +338,7 @@ function resolvePredicate(
 			state,
 			"UNKNOWN_PREDICATE",
 			descriptor,
-			`Predicate "${node.name}" is not registered in predicates.json`,
+			`Predicate "${node.name}" is not declared in contracts.json`,
 		);
 		return { resolved: null, descriptor };
 	}
@@ -422,12 +422,14 @@ function resolveFieldPath(state: WalkState, path: FieldPath): TermResolved {
 
 	const rootResolved = resolveRoot(state, root);
 	if (rootResolved.type === null) {
-		// ADR-0011 (contract-first emission): when manifests is null (greenfield
-		// workspace), skip UNKNOWN_FIELD errors for field references that are not
-		// params. The fields will be derived from contracts at emit time, or the
-		// user will add them to manifests later. Param references still validate
-		// correctly because resolveRoot checks params first.
-		if (state.context.manifests !== null) {
+		// ADR-0011 (contract-first emission): skip UNKNOWN_FIELD errors for field
+		// references that are not params when the current component has no manifest
+		// entry. This covers both a truly absent manifests file (null) and the
+		// init-seeded empty manifests.json (non-null manifests object but no entry
+		// for this component) — both represent a greenfield workspace where fields
+		// will be derived from contracts at emit time. Param references still
+		// validate correctly because resolveRoot checks params first.
+		if (getManifestEntry(state.context, state.scope.component) !== null) {
 			addError(
 				state,
 				"UNKNOWN_FIELD",

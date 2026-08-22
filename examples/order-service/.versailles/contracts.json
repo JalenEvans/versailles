@@ -1,5 +1,18 @@
 {
   "version": "1.0",
+  "predicates": {
+    "isPositive": {
+      "source": "OrderService.isPositive",
+      "params": [
+        "amount"
+      ],
+      "paramTypes": [
+        "number"
+      ],
+      "returnType": "boolean",
+      "verifiedPure": true
+    }
+  },
   "contracts": {
     "OrderService": {
       "invariants": [
