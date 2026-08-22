@@ -86,11 +86,23 @@ const CART = "Cart";
  * This is the canonical greenfield contract-first scenario.
  */
 function cartContracts(): unknown {
+	return cartContractsWithInvariants([]);
+}
+
+/**
+ * Cart contract parameterized with component invariants. The V-149 E2E probe
+ * bug surfaces only when an invariant references a field (`balance >= 0`
+ * references `balance`) AND the workspace is contracts-only (no manifests →
+ * buildPreState returns {} → the invariant sweep evaluates against undefined).
+ */
+function cartContractsWithInvariants(
+	invariants: Array<{ id: string; expr: string }>,
+): unknown {
 	return {
 		version: "1.0",
 		contracts: {
 			[CART]: {
-				invariants: [],
+				invariants,
 				operations: {
 					addItem: {
 						id: "Cart.addItem",
@@ -123,13 +135,17 @@ async function writeJsonFile(path: string, value: unknown): Promise<void> {
  * NO manifests.json, NO predicates.json, NO src/.
  */
 async function contractsOnlyWorkspace(name: string): Promise<string> {
+	return contractsOnlyWorkspaceWith(name, cartContracts());
+}
+
+async function contractsOnlyWorkspaceWith(
+	name: string,
+	contracts: unknown,
+): Promise<string> {
 	const cwd = await mkdtemp(join(tmpdir(), `versailles-cf-${name}-`));
 	await mkdir(join(cwd, ".versailles"), { recursive: true });
 	await writeJsonFile(join(cwd, ".versailles", "config.json"), SEEDED_CONFIG);
-	await writeJsonFile(
-		join(cwd, ".versailles", "contracts.json"),
-		cartContracts(),
-	);
+	await writeJsonFile(join(cwd, ".versailles", "contracts.json"), contracts);
 	return cwd;
 }
 
@@ -286,6 +302,78 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 					isModuleNotFoundError,
 					`expected MODULE_NOT_FOUND or TypeError but got:\n${combinedOutput}`,
 				).toBe(true);
+			} finally {
+				await rm(cwd, { recursive: true, force: true });
+			}
+		});
+	});
+
+	// ── IT 5: V-149 E2E probe — no expected-rejection when pre-state fields unknown ─
+	// Bug: with empty manifestFields (greenfield), buildPreState returns {}.
+	// planExpectedRejection then evaluates `balance >= 0` against undefined →
+	// treats it as "violated" → emits expect(() => Cart.addItem({sku:"initial",
+	// price:1})).toThrow() for a VALID input. A CORRECT implementation (balance
+	// 0→1 ≥ 0, no throw) would fail this emitted test. The planner must skip
+	// expected-rejection when the invariant-referenced fields are not present
+	// in the built preState (unsound to evaluate). Brownfield (manifests
+	// present, fields known) behavior is regression-pinned in
+	// tests/generator.test.ts:963-985.
+	describe("IT 5: V-149 — no expected-rejection when pre-state fields are unknown (greenfield)", () => {
+		it("contract-first: no expected-rejection case is emitted when pre-state fields are unknown (empty manifestFields) (VERSAILLES-149)", async () => {
+			const cwd = await contractsOnlyWorkspaceWith(
+				"it5-no-er",
+				cartContractsWithInvariants([
+					{ id: "Cart.inv0", expr: "balance >= 0" },
+				]),
+			);
+			try {
+				const context = await loadWorkspace(join(cwd, ".versailles"));
+				expect(
+					context.isValid,
+					`expected isValid=true but got errors: ${JSON.stringify(context.validationErrors)}`,
+				).toBe(true);
+
+				const suite = planTestCases(context);
+				const cartGroup = suite.operations.find(
+					(g) => g.component === CART && g.operation === "addItem",
+				);
+				expect(
+					cartGroup,
+					"expected Cart.addItem operation group",
+				).toBeDefined();
+
+				// No planned case may be an expected-rejection. The buggy sweep
+				// emits one because buildPreState returns {} (no manifest fields)
+				// and the invariant `balance >= 0` evaluates false against undefined.
+				// Expected-rejection cases live on suite.invariantCases (not on
+				// the per-operation group's cases array — planner.ts:435-446).
+				const erCases = (suite.invariantCases ?? []).filter(
+					(c) => c.kind === "expected-rejection",
+				);
+				expect(
+					erCases,
+					`expected NO expected-rejection cases in greenfield (unsound pre-state) but got ${erCases.length}: ${JSON.stringify(erCases.map((c) => ({ id: c.id, inputs: c.inputs })))}`,
+				).toEqual([]);
+
+				// Also pin the emitter-level symptom: the emitted file must NOT
+				// contain an `expect(() => ...).toThrow()` for a valid input.
+				const { emitSuite } = await import("../src/generator/index.js");
+				const files = emitSuite(suite, "vitest", {
+					generatedDir: ".versailles/generated",
+					modulePaths: {},
+				});
+				const cartFile = files.find((f) => f.path.endsWith("Cart.test.ts"));
+				expect(cartFile, "expected Cart.test.ts to be emitted").toBeDefined();
+				// A valid-input toThrow is the E2E probe symptom. The specific
+				// pattern `expect(() => Cart.addItem({ sku: "initial", price: 1 })).toThrow()`
+				// (with price: 1, a VALID input satisfying pre0: price > 0) must not appear.
+				// Boundary cases with INVALID inputs (price <= 0) are legitimate and OK.
+				const toThrowForValidInput =
+					cartFile?.content.includes("price: 1 })).toThrow()") ?? false;
+				expect(
+					toThrowForValidInput,
+					"emitted test must not contain expect(() => Cart.addItem(...)).toThrow() for a valid input (greenfield has no pre-state to soundly evaluate invariants)",
+				).toBe(false);
 			} finally {
 				await rm(cwd, { recursive: true, force: true });
 			}

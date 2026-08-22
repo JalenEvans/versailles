@@ -907,6 +907,12 @@ function planExpectedRejection(
 		...postconditions,
 		...invariants,
 	]);
+	// Soundness guard: cannot evaluate invariants against unknown state. If
+	// the preState does not contain every field referenced by the invariants
+	// (greenfield has no field types; brownfield partial manifest), skip.
+	if (![...invariantFields].every((field) => field in preState)) {
+		return null;
+	}
 	const baseParams = buildValidParams(operation, preconditions, context);
 
 	for (let value = 1; value <= EXPECTED_REJECTION_SWEEP_MAX; value++) {
