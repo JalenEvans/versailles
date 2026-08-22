@@ -714,7 +714,7 @@ function planPredicateViolationCase(
 		warnings.push({
 			code: "PREDICATE_UNPLANNABLE",
 			field: clauseId,
-			detail: `Predicate "${ast.name}" is not registered in predicates.json — no falsifying input can be derived for ${clauseId}`,
+			detail: `Predicate "${ast.name}" is not declared in contracts.json — no falsifying input can be derived for ${clauseId}`,
 		});
 		return;
 	}

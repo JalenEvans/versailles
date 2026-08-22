@@ -85,10 +85,6 @@ async function freshWorkspace(name: string): Promise<string> {
 		version: "1.0",
 		manifests: {},
 	});
-	await writeWorkspaceFile(cwd, "predicates.json", {
-		version: "1.0",
-		predicates: {},
-	});
 	return cwd;
 }
 
@@ -146,27 +142,29 @@ function orderServiceManifests(): unknown {
 	};
 }
 
-function orderServicePredicates(): unknown {
+/**
+ * ADR-0013 (Phase 3): predicates are now declared inline in contracts.json's
+ * top-level `predicates` map. Returns the predicates map (not a file envelope).
+ */
+function orderServicePredicates(): Record<string, unknown> {
 	return {
-		version: "1.0",
-		predicates: {
-			isPositive: {
-				params: ["value"],
-				paramTypes: ["number"],
-				returnType: "boolean",
-				sourceRef: "Math.isPositive",
-				sourceHash: "p-ispositive",
-				verifiedPure: true,
-			},
+		isPositive: {
+			source: "Math.isPositive",
+			params: ["value"],
+			paramTypes: ["number"],
+			returnType: "boolean",
+			verifiedPure: true,
 		},
 	};
 }
 
 async function seedOrderServiceWorkspace(name: string): Promise<string> {
 	const cwd = await freshWorkspace(name);
-	await writeWorkspaceFile(cwd, "contracts.json", orderServiceContracts());
+	// ADR-0013 (Phase 3): merge predicates into contracts.json.
+	const contracts = orderServiceContracts() as Record<string, unknown>;
+	contracts.predicates = orderServicePredicates();
+	await writeWorkspaceFile(cwd, "contracts.json", contracts);
 	await writeWorkspaceFile(cwd, "manifests.json", orderServiceManifests());
-	await writeWorkspaceFile(cwd, "predicates.json", orderServicePredicates());
 	return cwd;
 }
 
@@ -299,10 +297,6 @@ describe("runCli validate --verbose — per-clause expr+AST pairs (ADR-0012 Phas
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", orderServiceManifests());
-		await writeWorkspaceFile(cwd, "predicates.json", {
-			version: "1.0",
-			predicates: {},
-		});
 
 		const result = await runCli(["validate", "--verbose"], { cwd });
 

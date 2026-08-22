@@ -5,32 +5,29 @@ import Ajv from "ajv";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import configSchema from "../config.schema.json";
-// initWorkspace scaffolds <targetDir>/.versailles/ with the four jointly-loaded
-// workspace files (build-spec §2): a default config plus three versioned stores.
+// initWorkspace scaffolds <targetDir>/.versailles/ with the three jointly-loaded
+// workspace files (build-spec §2): a default config plus two versioned stores.
+// ADR-0013 (Phase 3): predicates.json is retired; predicates now live inline in
+// contracts.json's top-level `predicates` map.
 import { initWorkspace } from "../src/cli/init.js";
 
 /**
  * Verifies `versailles init` seeds the .versailles/ workspace (build-spec §2,
- * §12): a default config plus the three empty schema stores, each as a
+ * §12): a default config plus the two empty schema stores, each as a
  * versioned envelope ({ "version": "1.0" }).
  *
  * Contract grounding:
  * - workspace-context.contract.yaml (load_workspace requires): the directory
- *   must contain all four versioned, jointly-loaded files — config.json,
- *   contracts.json, manifests.json, predicates.json (build-spec §2). The
- *   four-file set is never interpreted in isolation.
+ *   must contain all three versioned, jointly-loaded files — config.json,
+ *   contracts.json, manifests.json (build-spec §2). ADR-0013 retired
+ *   predicates.json; predicates are now declared inline in contracts.json.
  * - config.schema.json (draft-07, ADR-0009): required keys grammarVersion,
  *   schemaVersion, sourceRoots, language, testFramework, generatedDir,
  *   staleness.blockOnStale; rejection.idiom optional; additionalProperties
  *   false — so the seeded config must contain ONLY the allowed keys.
  */
 
-const SEED_FILE_NAMES = [
-	"config.json",
-	"contracts.json",
-	"manifests.json",
-	"predicates.json",
-];
+const SEED_FILE_NAMES = ["config.json", "contracts.json", "manifests.json"];
 
 const SEEDED_CONFIG = {
 	grammarVersion: "1.0",
@@ -67,13 +64,22 @@ async function freshTargetDir(name: string): Promise<string> {
 }
 
 describe("initWorkspace — scaffolds .versailles/", () => {
-	it("creates .versailles/ containing exactly the four jointly-loaded files", async () => {
-		const targetDir = await freshTargetDir("a-four-files");
+	it("creates .versailles/ containing exactly the three jointly-loaded files", async () => {
+		const targetDir = await freshTargetDir("a-three-files");
 
 		await initWorkspace(targetDir);
 
 		const entries = await readdir(join(targetDir, ".versailles"));
 		expect(entries.sort()).toEqual(SEED_FILE_NAMES);
+	});
+
+	it("does NOT seed predicates.json (ADR-0013: predicates are inline in contracts.json)", async () => {
+		const targetDir = await freshTargetDir("a-no-predicates-json");
+
+		await initWorkspace(targetDir);
+
+		const entries = await readdir(join(targetDir, ".versailles"));
+		expect(entries).not.toContain("predicates.json");
 	});
 
 	it("seeds a config.json that is valid against config.schema.json with the pinned default", async () => {
@@ -92,8 +98,8 @@ describe("initWorkspace — scaffolds .versailles/", () => {
 		expect(parsed).toEqual(SEEDED_CONFIG);
 	});
 
-	it.each(["contracts.json", "manifests.json", "predicates.json"])(
-		'seeds %s as the versioned envelope { "version": "1.0" } (build-spec §3.2/§3.3/§3.4)',
+	it.each(["contracts.json", "manifests.json"])(
+		'seeds %s as the versioned envelope { "version": "1.0" } (build-spec §3.2/§3.3)',
 		async (fileName) => {
 			const targetDir = await freshTargetDir(`c-${fileName}`);
 
@@ -109,7 +115,7 @@ describe("initWorkspace — scaffolds .versailles/", () => {
 		},
 	);
 
-	it("is idempotent: a second run does not throw and preserves all four files", async () => {
+	it("is idempotent: a second run does not throw and preserves all three files", async () => {
 		const targetDir = await freshTargetDir("d-idempotent");
 
 		await initWorkspace(targetDir);

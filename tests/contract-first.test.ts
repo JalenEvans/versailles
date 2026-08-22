@@ -409,13 +409,11 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 			}
 		});
 
-		// ── IT 4b: asymmetric workspace — manifests present, predicates missing ─────
-		// Regression pin (VERSAILLES-149): loadWorkspace only tolerates MISSING_FILE
-		// for manifests.json AND predicates.json when BOTH are absent (greenfield).
-		// If ONLY ONE is missing, it's a brownfield-with-a-hole and the loader MUST
-		// report MISSING_FILE for the absent file. This pins that predicates.json
-		// absence alone flips isValid=false with a MISSING_FILE error.
-		it("asymmetric workspace: contracts + manifests present but predicates.json missing → MISSING_FILE for predicates.json, isValid=false (VERSAILLES-149)", async () => {
+		// ── IT 4b: asymmetric workspace — manifests present, no predicates.json ─────
+		// ADR-0013 (Phase 3): predicates.json is retired. Predicates are now declared
+		// inline in contracts.json's top-level `predicates` map. A workspace with
+		// contracts + manifests but no predicates.json is now normal and valid.
+		it("asymmetric workspace: contracts + manifests present, no predicates.json → loads cleanly, isValid=true (ADR-0013)", async () => {
 			const cwd = await mkdtemp(
 				join(tmpdir(), "versailles-cf-it4b-asymmetric-"),
 			);
@@ -435,7 +433,7 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 					manifests: {
 						[CART]: {
 							sourceHash: "cart-hash",
-							fields: {},
+							fields: { balance: "number" },
 							methods: {
 								addItem: {
 									static: false,
@@ -449,19 +447,18 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 						},
 					},
 				});
-				// predicates.json deliberately NOT written — asymmetric hole.
+				// predicates.json is NOT written — ADR-0013: it's retired.
 
 				const context = await loadWorkspace(join(cwd, ".versailles"));
 
-				// Mirror the assertion style of loader.test.ts "f: loader-level
-				// MISSING_FILE and semantic UNKNOWN_FIELD coexist".
+				// ADR-0013: predicates.json absence is normal. No MISSING_FILE for it.
 				const missingPredicates = context.validationErrors.find(
 					(e) => e.code === "MISSING_FILE" && e.field === "predicates.json",
 				);
 				expect(
 					missingPredicates,
-					"expected MISSING_FILE for predicates.json in asymmetric workspace",
-				).toBeDefined();
+					"predicates.json is retired — must NOT be reported MISSING_FILE",
+				).toBeUndefined();
 				// manifests.json must NOT be reported missing (it is present).
 				const missingManifests = context.validationErrors.find(
 					(e) => e.code === "MISSING_FILE" && e.field === "manifests.json",
@@ -470,11 +467,11 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 					missingManifests,
 					"manifests.json is present — must NOT be reported MISSING_FILE",
 				).toBeUndefined();
-				// isValid must be false because the hole is not tolerated.
+				// The workspace must be valid (no predicates.json hole to tolerate).
 				expect(
 					context.isValid,
-					`expected isValid=false for asymmetric workspace but got errors: ${JSON.stringify(context.validationErrors)}`,
-				).toBe(false);
+					`expected isValid=true for workspace without predicates.json but got errors: ${JSON.stringify(context.validationErrors)}`,
+				).toBe(true);
 			} finally {
 				await rm(cwd, { recursive: true, force: true });
 			}

@@ -338,7 +338,7 @@ function resolvePredicate(
 			state,
 			"UNKNOWN_PREDICATE",
 			descriptor,
-			`Predicate "${node.name}" is not registered in predicates.json`,
+			`Predicate "${node.name}" is not declared in contracts.json`,
 		);
 		return { resolved: null, descriptor };
 	}

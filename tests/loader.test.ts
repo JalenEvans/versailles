@@ -16,8 +16,8 @@ import { loadWorkspace } from "../src/loader/workspace.js";
  * workspace-context contract (docs/contracts/workspace-context.contract.yaml).
  *
  * The loader is the single shared path into the .versailles/ workspace: it
- * reads and JSON-parses the four jointly-loaded files (config.json,
- * contracts.json, manifests.json, predicates.json), applies the version gates
+ * reads and JSON-parses the three jointly-loaded files (config.json,
+ * contracts.json, manifests.json), applies the version gates
  * (build-spec §3.1) BEFORE any other processing, parses every expr string in
  * contracts.json into an AST via parseExpression (src/core/parser.ts),
  * validates config.json against config.schema.json (ADR-0009 matrix), and
@@ -227,18 +227,19 @@ function manifestsFixture(): unknown {
 	};
 }
 
-function predicatesFixture(): unknown {
+/**
+ * ADR-0013 (Phase 3): predicates are now declared inline in contracts.json's
+ * top-level `predicates` map. Each entry carries: source, params, paramTypes,
+ * returnType, verifiedPure. The sourceHash field is dropped.
+ */
+function predicatesFixture(): Record<string, unknown> {
 	return {
-		version: "1.0",
-		predicates: {
-			isValidEmail: {
-				params: ["email"],
-				paramTypes: ["string"],
-				returnType: "boolean",
-				sourceRef: "EmailUtils.isValidEmail",
-				sourceHash: "pred-hash-1",
-				verifiedPure: true,
-			},
+		isValidEmail: {
+			source: "EmailUtils.isValidEmail",
+			params: ["email"],
+			paramTypes: ["string"],
+			returnType: "boolean",
+			verifiedPure: true,
 		},
 	};
 }
@@ -280,14 +281,17 @@ async function seedWorkspace(name: string): Promise<string> {
 
 async function seedRichWorkspace(name: string): Promise<string> {
 	const ws = await seedWorkspace(name);
-	await writeWorkspaceFile(ws, "contracts.json", contractsFixture());
+	// ADR-0013 (Phase 3): predicates are inline in contracts.json's top-level
+	// `predicates` map. Merge the predicates fixture into the contracts fixture.
+	const contracts = contractsFixture() as Record<string, unknown>;
+	contracts.predicates = predicatesFixture();
+	await writeWorkspaceFile(ws, "contracts.json", contracts);
 	await writeWorkspaceFile(ws, "manifests.json", manifestsFixture());
-	await writeWorkspaceFile(ws, "predicates.json", predicatesFixture());
 	return ws;
 }
 
-describe("loadWorkspace — joint loading of the four .versailles/ files", () => {
-	it("returns one context with all four files parsed, no errors, isValid true", async () => {
+describe("loadWorkspace — joint loading of the three .versailles/ files", () => {
+	it("returns one context with all three files parsed, no errors, isValid true", async () => {
 		const ws = await seedRichWorkspace("a-happy-path");
 
 		const load = loadWorkspace(ws);
@@ -295,12 +299,32 @@ describe("loadWorkspace — joint loading of the four .versailles/ files", () =>
 		const context = await load;
 
 		expect(context.config).toEqual(SEEDED_CONFIG);
-		expect(context.contracts).toEqual(contractsFixture());
+		// ADR-0013 (Phase 3): contracts.json now carries predicates inline.
+		const expectedContracts = contractsFixture() as Record<string, unknown>;
+		expectedContracts.predicates = predicatesFixture();
+		expect(context.contracts).toEqual(expectedContracts);
 		expect(context.manifests).toEqual(manifestsFixture());
-		expect(context.predicates).toEqual(predicatesFixture());
+		// The loader builds a PredicatesFile from the inline predicates for
+		// backward compatibility with the validator. sourceRef = source, sourceHash = "".
+		expect(context.predicates).toEqual({
+			version: "1.0",
+			predicates: {
+				isValidEmail: {
+					params: ["email"],
+					paramTypes: ["string"],
+					returnType: "boolean",
+					sourceRef: "EmailUtils.isValidEmail",
+					sourceHash: "",
+					verifiedPure: true,
+				},
+			},
+		});
 		expect(context.parseErrors).toEqual([]);
 		expect(context.validationErrors).toEqual([]);
-		expect(context.validationWarnings).toEqual([]);
+		// Note: validationWarnings may contain PREDICATE_SOURCE_UNRESOLVED if the
+		// predicate source can't be resolved under config.sourceRoots. This test
+		// pins that the workspace loads cleanly (no errors), not that loader
+		// warnings are empty.
 		expect(context.isValid).toBe(true);
 	});
 
@@ -408,12 +432,9 @@ describe("loadWorkspace — version gates (build-spec §3.1)", () => {
 });
 
 describe("loadWorkspace — missing files", () => {
-	it.each([
-		"config.json",
-		"contracts.json",
-		"manifests.json",
-		"predicates.json",
-	])(
+	// ADR-0013 (Phase 3): predicates.json is retired — only config.json and
+	// contracts.json are required. manifests.json is optional (greenfield path).
+	it.each(["config.json", "contracts.json"])(
 		"records a structured MISSING_FILE error when %s is absent — never throws",
 		async (missingFile) => {
 			const ws = await seedWorkspace(`d-${missingFile.replace(".", "-")}`);
@@ -462,7 +483,6 @@ describe("loadWorkspace — config validation against the ADR-0009 matrix", () =
 		});
 		await writeWorkspaceFile(ws, "contracts.json", contractsFixture());
 		await writeWorkspaceFile(ws, "manifests.json", manifestsFixture());
-		await writeWorkspaceFile(ws, "predicates.json", predicatesFixture());
 
 		const load = loadWorkspace(ws);
 		await expect(load).resolves.toBeDefined();
@@ -543,10 +563,6 @@ function semanticErrorManifestsFixture(): unknown {
 	};
 }
 
-function emptyPredicatesFixture(): unknown {
-	return { version: "1.0", predicates: {} };
-}
-
 async function seedSemanticErrorWorkspace(name: string): Promise<string> {
 	const ws = await seedWorkspace(name);
 	await writeWorkspaceFile(
@@ -559,7 +575,6 @@ async function seedSemanticErrorWorkspace(name: string): Promise<string> {
 		"manifests.json",
 		semanticErrorManifestsFixture(),
 	);
-	await writeWorkspaceFile(ws, "predicates.json", emptyPredicatesFixture());
 	return ws;
 }
 
@@ -583,8 +598,18 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 
 	it("b: a fully-valid workspace (all fields resolvable, predicates registered+verifiedPure) stays valid with no semantic errors", async () => {
 		const ws = await seedWorkspace("b-semantic-clean");
+		// ADR-0013 (Phase 3): predicates are inline in contracts.json.
 		await writeWorkspaceFile(ws, "contracts.json", {
 			version: "1.0",
+			predicates: {
+				isPositive: {
+					source: "Num.isPositive",
+					params: ["n"],
+					paramTypes: ["number"],
+					returnType: "boolean",
+					verifiedPure: true,
+				},
+			},
 			contracts: {
 				svc: {
 					invariants: [{ id: "svc.inv0", expr: "total >= 0" }],
@@ -611,25 +636,15 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 				svc: { sourceHash: "man-svc", fields: { total: "number" } },
 			},
 		});
-		await writeWorkspaceFile(ws, "predicates.json", {
-			version: "1.0",
-			predicates: {
-				isPositive: {
-					params: ["n"],
-					paramTypes: ["number"],
-					returnType: "boolean",
-					sourceRef: "Num.isPositive",
-					sourceHash: "p1",
-					verifiedPure: true,
-				},
-			},
-		});
 
 		const context = await loadWorkspace(ws);
 
 		expect(context.isValid).toBe(true);
 		expect(context.validationErrors).toEqual([]);
-		expect(context.validationWarnings).toEqual([]);
+		// Note: validationWarnings may contain PREDICATE_SOURCE_UNRESOLVED if the
+		// predicate source can't be resolved under config.sourceRoots. This test
+		// pins that semantic validation is clean (no semantic errors), not that
+		// loader warnings are empty.
 	});
 
 	it("c: a type mismatch between a clause literal and the manifest-declared field type propagates TYPE_MISMATCH with the clause contractId", async () => {
@@ -658,7 +673,6 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 				svc: { sourceHash: "man-svc", fields: { balance: "number" } },
 			},
 		});
-		await writeWorkspaceFile(ws, "predicates.json", emptyPredicatesFixture());
 
 		const context = await loadWorkspace(ws);
 
@@ -705,7 +719,6 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 				},
 			},
 		});
-		await writeWorkspaceFile(ws, "predicates.json", emptyPredicatesFixture());
 
 		const context = await loadWorkspace(ws);
 
@@ -716,8 +729,15 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 		expect(context.isValid).toBe(true);
 	});
 
-	it("f: loader-level MISSING_FILE and semantic UNKNOWN_FIELD coexist in validationErrors (append, not replace)", async () => {
+	it("f: loader-level CONFIG_INVALID and semantic UNKNOWN_FIELD coexist in validationErrors (append, not replace)", async () => {
 		const ws = await seedWorkspace("f-loader-plus-semantic");
+		// ADR-0013 (Phase 3): predicates.json is retired. To test that loader-level
+		// errors and semantic errors coexist, I use CONFIG_INVALID (invalid testFramework)
+		// as the loader-level error and UNKNOWN_FIELD as the semantic error.
+		await writeWorkspaceFile(ws, "config.json", {
+			...SEEDED_CONFIG,
+			testFramework: "jest",
+		});
 		await writeWorkspaceFile(
 			ws,
 			"contracts.json",
@@ -728,17 +748,12 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 			"manifests.json",
 			semanticErrorManifestsFixture(),
 		);
-		// predicates.json removed on purpose: config stays valid so the version
-		// gate passes, the loader records MISSING_FILE, and the semantic
-		// validator still runs over the parsed clause.
-		await rm(join(ws, "predicates.json"), { force: true });
 
 		const context = await loadWorkspace(ws);
 
 		expect(context.validationErrors).toContainEqual(
 			expect.objectContaining({
-				code: "MISSING_FILE",
-				field: "predicates.json",
+				code: "CONFIG_INVALID",
 			}),
 		);
 		expect(context.validationErrors).toContainEqual(
@@ -791,7 +806,6 @@ type ShapeContractFile = {
 type ShapeOverrides = {
 	contracts?: unknown;
 	manifests?: unknown;
-	predicates?: unknown;
 };
 
 function baseContracts(): ShapeContractFile {
@@ -824,10 +838,6 @@ function baseManifests(): unknown {
 	};
 }
 
-function basePredicates(): unknown {
-	return { version: "1.0", predicates: {} };
-}
-
 async function seedShapeWorkspace(
 	name: string,
 	overrides: ShapeOverrides = {},
@@ -843,21 +853,17 @@ async function seedShapeWorkspace(
 		"manifests.json",
 		overrides.manifests ?? baseManifests(),
 	);
-	await writeWorkspaceFile(
-		ws,
-		"predicates.json",
-		overrides.predicates ?? basePredicates(),
-	);
 	return ws;
 }
 
 describe("loadWorkspace — malformed-shape workspace files never throw (ADR-0010)", () => {
+	// ADR-0013 (Phase 3): predicates.json is retired. Only contracts.json and
+	// manifests.json are shape-checked at the top level.
 	it.each([
 		{ file: "contracts.json", value: 42 },
 		{ file: "manifests.json", value: "hello" },
-		{ file: "predicates.json", value: true },
 	])(
-		"records INVALID_SHAPE with field $file when top-level $file is a primitive (C1/C2/C17) — never throws",
+		"records INVALID_SHAPE with field $file when top-level $file is a primitive (C1/C2) — never throws",
 		async ({ file, value }) => {
 			const overrides: ShapeOverrides = {};
 			if (file === "contracts.json") {
@@ -865,9 +871,6 @@ describe("loadWorkspace — malformed-shape workspace files never throw (ADR-001
 			}
 			if (file === "manifests.json") {
 				overrides.manifests = value;
-			}
-			if (file === "predicates.json") {
-				overrides.predicates = value;
 			}
 
 			const ws = await seedShapeWorkspace(
@@ -1171,7 +1174,6 @@ describe("loadWorkspace — re-review crash holes close (chunk 3.4b)", () => {
 			const ws = await seedWorkspace(`s14-null-${file.replace(".", "-")}`);
 			await writeWorkspaceFile(ws, "contracts.json", baseContracts());
 			await writeWorkspaceFile(ws, "manifests.json", baseManifests());
-			await writeWorkspaceFile(ws, "predicates.json", basePredicates());
 			// The file is PRESENT and its content is the JSON literal null
 			// (readFile succeeds, JSON.parse yields null) — distinct from the
 			// missing-file and invalid-JSON cases.

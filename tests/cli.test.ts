@@ -230,8 +230,9 @@ async function writeSource(
 
 /**
  * Scaffolds a fresh workspace (with optional config overrides) into its own
- * temp subdir. Writes the four jointly-loaded files directly so fixtures do
- * not depend on the CLI under test.
+ * temp subdir. Writes the three jointly-loaded files directly so fixtures do
+ * not depend on the CLI under test. ADR-0013 (Phase 3): predicates.json is
+ * retired; predicates are now inline in contracts.json.
  */
 async function freshWorkspace(
 	name: string,
@@ -252,7 +253,6 @@ async function freshWorkspace(
 		version: "1.0",
 		manifests: {},
 	});
-	await writeWorkspaceFile(cwd, "predicates.json", emptyPredicates());
 	return cwd;
 }
 
@@ -434,7 +434,7 @@ describe("runCli — usage errors (build-spec §12)", () => {
 // ── init (build-spec §2, §12) ──────────────────────────────────────────────
 
 describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => {
-	it("scaffolds the four jointly-loaded files with a schema-valid seeded config, exit 0", async () => {
+	it("scaffolds the three jointly-loaded files with a schema-valid seeded config, exit 0", async () => {
 		const cwd = await freshWorkspace("i-scaffold");
 		const result = await runCli(["init"], { cwd });
 
@@ -447,7 +447,6 @@ describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => 
 			"config.json",
 			"contracts.json",
 			"manifests.json",
-			"predicates.json",
 		]);
 
 		const config = JSON.parse(
@@ -477,7 +476,6 @@ describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => 
 			"config.json",
 			"contracts.json",
 			"manifests.json",
-			"predicates.json",
 		]);
 	});
 });
@@ -946,19 +944,24 @@ describe("runCli generate — non-silent unplannable predicate warnings (VERSAIL
 				},
 			},
 		});
-		await writeWorkspaceFile(cwd, "predicates.json", {
-			version: "1.0",
-			predicates: {
-				isNonEmpty: {
-					params: ["items"],
-					paramTypes: ["list<number>"],
-					returnType: "boolean",
-					sourceRef: "List.isNonEmpty",
-					sourceHash: "p-nonempty",
-					verifiedPure: true,
-				},
+		// ADR-0013 (Phase 3): predicates are inline in contracts.json.
+		// Read the existing contracts.json, add predicates, and rewrite.
+		const { readFile } = await import("node:fs/promises");
+		const contractsRaw = await readFile(
+			join(cwd, ".versailles", "contracts.json"),
+			"utf8",
+		);
+		const contracts = JSON.parse(contractsRaw) as Record<string, unknown>;
+		contracts.predicates = {
+			isNonEmpty: {
+				source: "List.isNonEmpty",
+				params: ["items"],
+				paramTypes: ["list<number>"],
+				returnType: "boolean",
+				verifiedPure: true,
 			},
-		});
+		};
+		await writeWorkspaceFile(cwd, "contracts.json", contracts);
 
 		const result = await runCli(["generate"], { cwd });
 
@@ -1337,54 +1340,38 @@ describe("runCli generate — writes generated/coverage.json (Center W4, build-s
 	});
 });
 
-// ── Predicate registry command routing (build-spec §13 milestone 8) ────────
-// Pins for the milestone-8 commands (docs/contracts/
-// predicate-registry.contract.yaml): register-predicate / verify-purity /
-// remind-unverified must route to structured results — never UNKNOWN_COMMAND,
-// never a throw (ADR-0010). All three route through src/cli/index.ts today.
-// The full behavior of each command (single-entry read-modify-write,
-// sourceHash verification, verifiedPure gate, purity reminder) is pinned in
-// tests/predicate-registry.test.ts.
+// ── ADR-0013 Red-phase pin: predicate CLI trio removed ─────────────────────
+// The predicate CLI trio (register-predicate, verify-purity, remind-unverified)
+// is REMOVED in Phase 3. Predicates become declarative in contracts.json.
+// These commands must route to UNKNOWN_COMMAND (exit 1). The full declarative
+// predicate behavior is pinned in tests/declarative-predicates.test.ts.
 
-describe("runCli — predicate registry command routing (predicate-registry.contract.yaml, build-spec §13 milestone 8)", () => {
-	it("routes register-predicate / verify-purity / remind-unverified to structured results — never UNKNOWN_COMMAND, never a throw", async () => {
-		const cwd = await freshWorkspace("pr-route");
-		// Ground the registration fixture source (covered by sourceRoots) so a
-		// valid register-predicate invocation can succeed post-implementation.
-		await writeSource(
-			cwd,
-			"Inventory.ts",
-			`export function isAvailable(amount: number): boolean {
-	return amount >= 0;
-}
-`,
-		);
-		const commands: string[][] = [
+describe("runCli — predicate CLI trio removed (ADR-0013)", () => {
+	it.each([
+		[
+			"register-predicate",
 			[
 				"register-predicate",
 				"isAvailable",
 				"--source",
 				"Inventory.isAvailable",
-				"--params",
-				"amount",
-				"--paramTypes",
-				"number",
 			],
-			["verify-purity", "isAvailable"],
-			["remind-unverified"],
-		];
-
-		for (const argv of commands) {
+		],
+		["verify-purity", ["verify-purity", "isAvailable"]],
+		["remind-unverified", ["remind-unverified"]],
+	])(
+		"%s → UNKNOWN_COMMAND, exit 1 (ADR-0013 removed the predicate CLI trio)",
+		async (_command, argv) => {
+			const cwd = await freshWorkspace("pr-removed");
 			const result = await runCli(argv, { cwd });
-			expect(typeof result.ok).toBe("boolean");
-			expect(Array.isArray(result.errors)).toBe(true);
-			expect(Array.isArray(result.warnings)).toBe(true);
-			expect([0, 1, 2]).toContain(result.exitCode);
-			expect(result.errors).not.toContainEqual(
+
+			expect(result.ok).toBe(false);
+			expect(result.exitCode).toBe(1);
+			expect(result.errors).toContainEqual(
 				expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
 			);
-		}
-	});
+		},
+	);
 });
 
 // ── VERSAILLES-21 F2: sourcePath flow extractor → store → loader → generate ──
