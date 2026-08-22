@@ -858,8 +858,10 @@ describe("semanticValidate — error/warning shape (M) + never-throws", () => {
 			);
 		}).not.toThrow();
 		expect(result).toBeDefined();
-		expect(result?.valid).toBe(false);
-		expect(result?.errors[0]?.code).toBe("UNKNOWN_FIELD");
+		// ADR-0011 fix: when the component has no manifest entry (greenfield),
+		// UNKNOWN_FIELD is suppressed — fields will be derived from contracts at emit time.
+		expect(result?.valid).toBe(true);
+		expect(result?.errors).toEqual([]);
 	});
 
 	it("never throws when the operation is absent from the contracts (params treat as none)", () => {

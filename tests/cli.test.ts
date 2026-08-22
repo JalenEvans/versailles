@@ -733,13 +733,15 @@ describe("runCli check — staleness / exit codes (build-spec §8)", () => {
 		await writeWorkspaceFile(cwd, "contracts.json", {
 			version: "1.0",
 			contracts: {
-				svc: {
+				OrderService: {
 					invariants: [],
 					operations: {
 						op: {
-							id: "svc.op",
+							id: "OrderService.op",
 							params: [],
-							preconditions: [{ id: "svc.op.pre0", expr: "missingField == 0" }],
+							preconditions: [
+								{ id: "OrderService.op.pre0", expr: "missingField == 0" },
+							],
 							postconditions: [],
 							effects: [],
 							sourceHash: "abc123",
