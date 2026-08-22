@@ -98,13 +98,18 @@ async function dispatch(argv: string[], cwd: string): Promise<CliResult> {
 			return handleInit(cwd);
 		}
 		case "validate": {
-			if (rest.length > 0) {
+			let verbose = false;
+			for (const arg of rest) {
+				if (arg === "--verbose") {
+					verbose = true;
+					continue;
+				}
 				return usageError(
 					"USAGE",
-					`"validate" accepts no arguments — unexpected "${rest[0]}"`,
+					`Unexpected argument "${arg}" for validate — only --verbose is supported`,
 				);
 			}
-			return handleValidate(cwd);
+			return handleValidate(cwd, verbose);
 		}
 		case "check": {
 			if (rest.length > 0) {
