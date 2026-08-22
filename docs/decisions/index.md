@@ -15,5 +15,7 @@ Architecture decision records (ADRs). Immutable once accepted — a new decision
 | [0009](0009-v1-language-and-framework-matrix.md) | v1 targets TS/C#/Python + vitest/xUnit/pytest, TS first | accepted | build-spec §7/§9.4/§14 single-language assumptions |
 | [0010](0010-cli-never-drives-llm.md) | The CLI never drives an LLM; LLMs drive the CLI | accepted | ADR-0002 (authoring-loop aspect) |
 | [0011](0011-contract-first-emission.md) | Contract-first emission: generate from contracts.json; extract-manifests optional for brownfield | accepted | — |
+| [0012](0012-git-commit-as-approval-remove-review-gate.md) | Git commit as approval — no in-tool review gate | accepted | ADR-0003 (single-object review-merge mechanism) |
+| [0013](0013-declarative-predicates-remove-registration-cli.md) | Declarative predicates — no registration CLI | accepted | — |
 
 See also: [Contracts](../contracts/index.md) · [Specs](../specs/index.md) · [Build spec](../build-spec.md)
