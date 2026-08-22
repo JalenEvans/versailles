@@ -24,6 +24,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * cwd = a fresh mkdtemp workspace, and the REAL test runner (repo vitest
  * binary) for the generated suite. The CLI reads dist/ (bin/versailles
  * imports ../dist/cli/index.js) — guaranteed by a `bun run build` in beforeAll.
+ *
+ * The suite runs serially (vitest `fileParallelism: false` for this file) so
+ * the beforeAll build keeps dist/ fresh without racing other test files.
  */
 
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -33,6 +36,11 @@ const VITEST_BIN = join(REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
 // Generous timeouts for vitest runs (30-60s) but bounded so a hung run fails.
 const VITEST_TIMEOUT_MS = 60_000;
 const CLI_TIMEOUT_MS = 30_000;
+
+// Per-flow vitest timeout: each flow spawns the real CLI ~6 times plus 1-2
+// vitest subprocess runs (the generated suite). Explicit so the suite never
+// hits vitest's 5s default, even if the root config's global is unset.
+const E2E_TIMEOUT_MS = 60_000;
 
 /** Human-readable spawn failure: exit code, error, stdout, stderr. */
 function describeRun(label: string, run: ReturnType<typeof spawnSync>): string {
@@ -88,13 +96,15 @@ afterAll(async () => {
 // ── Flow 1: SOURCE CODE FLOW (brownfield) ──────────────────────────────────
 
 describe("VERSAILLES-156 — E2E Flow 1: SOURCE CODE FLOW (brownfield)", () => {
-	it("src/OrderService.ts → init → extract-manifests → author contracts.json → validate → generate → run generated suite (vitest pass) → check → validate --verbose", async () => {
-		const cwd = await mkdtemp(join(tmpdir(), "versailles-e2e-flow1-"));
-		try {
-			// Step 1: Write src/OrderService.ts (the real source, copied from the
-			// committed example).
-			await mkdir(join(cwd, "src"), { recursive: true });
-			const orderServiceSource = `/**
+	it(
+		"src/OrderService.ts → init → extract-manifests → author contracts.json → validate → generate → run generated suite (vitest pass) → check → validate --verbose",
+		async () => {
+			const cwd = await mkdtemp(join(tmpdir(), "versailles-e2e-flow1-"));
+			try {
+				// Step 1: Write src/OrderService.ts (the real source, copied from the
+				// committed example).
+				await mkdir(join(cwd, "src"), { recursive: true });
+				const orderServiceSource = `/**
  * OrderService — the minimal reference domain for the Versailles example
  * workspace (VERSAILLES-17). One invariant (\`balance >= 0\`), one operation
  * with a pre/postcondition pair (\`addItem\`), and one registered pure
@@ -129,219 +139,241 @@ export class OrderService {
 \t}
 }
 `;
-			await writeFileContent(
-				join(cwd, "src", "OrderService.ts"),
-				orderServiceSource,
-			);
+				await writeFileContent(
+					join(cwd, "src", "OrderService.ts"),
+					orderServiceSource,
+				);
 
-			// Step 2: node bin/versailles init → exit 0, .versailles/ seeded.
-			const initRun = runCli(["init"], cwd);
-			expect(initRun.status, describeRun("init", initRun)).toBe(0);
-			expect(existsSync(join(cwd, ".versailles", "config.json"))).toBe(true);
+				// Step 2: node bin/versailles init → exit 0, .versailles/ seeded.
+				const initRun = runCli(["init"], cwd);
+				expect(initRun.status, describeRun("init", initRun)).toBe(0);
+				expect(existsSync(join(cwd, ".versailles", "config.json"))).toBe(true);
 
-			// Step 3: node bin/versailles extract-manifests → exit 0 (manifests.json derived).
-			const extractRun = runCli(["extract-manifests"], cwd);
-			expect(
-				extractRun.status,
-				describeRun("extract-manifests", extractRun),
-			).toBe(0);
-			expect(existsSync(join(cwd, ".versailles", "manifests.json"))).toBe(true);
+				// Step 3: node bin/versailles extract-manifests → exit 0 (manifests.json derived).
+				const extractRun = runCli(["extract-manifests"], cwd);
+				expect(
+					extractRun.status,
+					describeRun("extract-manifests", extractRun),
+				).toBe(0);
+				expect(existsSync(join(cwd, ".versailles", "manifests.json"))).toBe(
+					true,
+				);
 
-			// Step 4: Author contracts.json — the OrderService contract WITH the
-			// inline predicates map declaring isPositive.
-			const contractsJson = {
-				version: "1.0",
-				predicates: {
-					isPositive: {
-						source: "OrderService.isPositive",
-						params: ["amount"],
-						paramTypes: ["number"],
-						returnType: "boolean",
-						verifiedPure: true,
+				// Step 4: Author contracts.json — the OrderService contract WITH the
+				// inline predicates map declaring isPositive.
+				const contractsJson = {
+					version: "1.0",
+					predicates: {
+						isPositive: {
+							source: "OrderService.isPositive",
+							params: ["amount"],
+							paramTypes: ["number"],
+							returnType: "boolean",
+							verifiedPure: true,
+						},
 					},
-				},
-				contracts: {
-					OrderService: {
-						invariants: [{ id: "OrderService.inv0", expr: "balance >= 0" }],
-						operations: {
-							addItem: {
-								id: "OrderService.addItem",
-								params: [
-									{ name: "sku", type: "string" },
-									{ name: "price", type: "number" },
-								],
-								preconditions: [
-									{ id: "OrderService.addItem.pre0", expr: 'sku != ""' },
-									{
-										id: "OrderService.addItem.pre1",
-										expr: "isPositive(price)",
-									},
-								],
-								postconditions: [
-									{
-										id: "OrderService.addItem.post0",
-										expr: "balance == old(balance) + price",
-									},
-								],
-								effects: [{ field: "balance", kind: "mutate" }],
-								sourceHash: "e6d9d945",
+					contracts: {
+						OrderService: {
+							invariants: [{ id: "OrderService.inv0", expr: "balance >= 0" }],
+							operations: {
+								addItem: {
+									id: "OrderService.addItem",
+									params: [
+										{ name: "sku", type: "string" },
+										{ name: "price", type: "number" },
+									],
+									preconditions: [
+										{ id: "OrderService.addItem.pre0", expr: 'sku != ""' },
+										{
+											id: "OrderService.addItem.pre1",
+											expr: "isPositive(price)",
+										},
+									],
+									postconditions: [
+										{
+											id: "OrderService.addItem.post0",
+											expr: "balance == old(balance) + price",
+										},
+									],
+									effects: [{ field: "balance", kind: "mutate" }],
+									sourceHash: "e6d9d945",
+								},
 							},
 						},
 					},
-				},
-			};
-			await writeJsonFile(
-				join(cwd, ".versailles", "contracts.json"),
-				contractsJson,
-			);
+				};
+				await writeJsonFile(
+					join(cwd, ".versailles", "contracts.json"),
+					contractsJson,
+				);
 
-			// Step 5: node bin/versailles validate → exit 0, ok true.
-			const validateRun = runCli(["validate"], cwd);
-			expect(validateRun.status, describeRun("validate", validateRun)).toBe(0);
-			const validateOutput = JSON.parse(validateRun.stdout);
-			expect(validateOutput.ok).toBe(true);
+				// Step 5: node bin/versailles validate → exit 0, ok true.
+				const validateRun = runCli(["validate"], cwd);
+				expect(validateRun.status, describeRun("validate", validateRun)).toBe(
+					0,
+				);
+				const validateOutput = JSON.parse(validateRun.stdout);
+				expect(validateOutput.ok).toBe(true);
 
-			// Step 6: node bin/versailles generate → exit 0, emits .versailles/generated/OrderService.test.ts + coverage.json.
-			const generateRun = runCli(["generate"], cwd);
-			expect(generateRun.status, describeRun("generate", generateRun)).toBe(0);
-			const generatedTestPath = join(
-				cwd,
-				".versailles",
-				"generated",
-				"OrderService.test.ts",
-			);
-			expect(existsSync(generatedTestPath)).toBe(true);
-			const coveragePath = join(
-				cwd,
-				".versailles",
-				"generated",
-				"coverage.json",
-			);
-			expect(existsSync(coveragePath)).toBe(true);
+				// Step 6: node bin/versailles generate → exit 0, emits .versailles/generated/OrderService.test.ts + coverage.json.
+				const generateRun = runCli(["generate"], cwd);
+				expect(generateRun.status, describeRun("generate", generateRun)).toBe(
+					0,
+				);
+				const generatedTestPath = join(
+					cwd,
+					".versailles",
+					"generated",
+					"OrderService.test.ts",
+				);
+				expect(existsSync(generatedTestPath)).toBe(true);
+				const coveragePath = join(
+					cwd,
+					".versailles",
+					"generated",
+					"coverage.json",
+				);
+				expect(existsSync(coveragePath)).toBe(true);
 
-			// Step 7: Run the generated suite via the repo vitest binary → exit 0, ALL tests PASS.
-			const vitestRun = runVitest(join(cwd, ".versailles", "generated"));
-			expect(
-				vitestRun.status,
-				describeRun("vitest run (generated suite)", vitestRun),
-			).toBe(0);
+				// Step 7: Run the generated suite via the repo vitest binary → exit 0, ALL tests PASS.
+				const vitestRun = runVitest(join(cwd, ".versailles", "generated"));
+				expect(
+					vitestRun.status,
+					describeRun("vitest run (generated suite)", vitestRun),
+				).toBe(0);
 
-			// Step 8: node bin/versailles check → exit 0.
-			const checkRun = runCli(["check"], cwd);
-			expect(checkRun.status, describeRun("check", checkRun)).toBe(0);
+				// Step 8: node bin/versailles check → exit 0.
+				const checkRun = runCli(["check"], cwd);
+				expect(checkRun.status, describeRun("check", checkRun)).toBe(0);
 
-			// Step 9: Bonus sanity: node bin/versailles validate --verbose output contains
-			// the predicate declaration / exprViews (non-empty).
-			const verboseRun = runCli(["validate", "--verbose"], cwd);
-			expect(
-				verboseRun.status,
-				describeRun("validate --verbose", verboseRun),
-			).toBe(0);
-			const verboseOutput = JSON.parse(verboseRun.stdout);
-			expect(verboseOutput.ok).toBe(true);
-			expect(verboseOutput.output.verbose).toBeDefined();
-			expect(Array.isArray(verboseOutput.output.verbose.exprViews)).toBe(true);
-			expect(verboseOutput.output.verbose.exprViews.length).toBeGreaterThan(0);
-		} finally {
-			await rm(cwd, { recursive: true, force: true });
-		}
-	});
+				// Step 9: Bonus sanity: node bin/versailles validate --verbose output contains
+				// the predicate declaration / exprViews (non-empty).
+				const verboseRun = runCli(["validate", "--verbose"], cwd);
+				expect(
+					verboseRun.status,
+					describeRun("validate --verbose", verboseRun),
+				).toBe(0);
+				const verboseOutput = JSON.parse(verboseRun.stdout);
+				expect(verboseOutput.ok).toBe(true);
+				expect(verboseOutput.output.verbose).toBeDefined();
+				expect(Array.isArray(verboseOutput.output.verbose.exprViews)).toBe(
+					true,
+				);
+				expect(verboseOutput.output.verbose.exprViews.length).toBeGreaterThan(
+					0,
+				);
+			} finally {
+				await rm(cwd, { recursive: true, force: true });
+			}
+		},
+		E2E_TIMEOUT_MS,
+	);
 });
 
 // ── Flow 2: TDD FLOW (greenfield) ──────────────────────────────────────────
 
 describe("VERSAILLES-156 — E2E Flow 2: TDD FLOW (greenfield)", () => {
-	it("init → author contracts.json (Cart) → validate → generate → run generated suite (MODULE_NOT_FOUND, TDD Red) → implement src/Cart.ts → run generated suite (pass, TDD Green) → check", async () => {
-		const cwd = await mkdtemp(join(tmpdir(), "versailles-e2e-flow2-"));
-		try {
-			// Step 1: node bin/versailles init → exit 0.
-			// The init command seeds an empty manifests.json (`{ version: "1.0" }`)
-			// alongside config.json and contracts.json. This is the TRUE user flow:
-			// the validator must tolerate this empty manifests.json and NOT emit
-			// UNKNOWN_FIELD errors for field references in greenfield contracts
-			// (the specific component has no manifest entry yet).
-			const initRun = runCli(["init"], cwd);
-			expect(initRun.status, describeRun("init", initRun)).toBe(0);
-			expect(existsSync(join(cwd, ".versailles", "config.json"))).toBe(true);
-			// Verify init seeded the empty manifests.json (the real user flow).
-			expect(existsSync(join(cwd, ".versailles", "manifests.json"))).toBe(true);
+	it(
+		"init → author contracts.json (Cart) → validate → generate → run generated suite (MODULE_NOT_FOUND, TDD Red) → implement src/Cart.ts → run generated suite (pass, TDD Green) → check",
+		async () => {
+			const cwd = await mkdtemp(join(tmpdir(), "versailles-e2e-flow2-"));
+			try {
+				// Step 1: node bin/versailles init → exit 0.
+				// The init command seeds an empty manifests.json (`{ version: "1.0" }`)
+				// alongside config.json and contracts.json. This is the TRUE user flow:
+				// the validator must tolerate this empty manifests.json and NOT emit
+				// UNKNOWN_FIELD errors for field references in greenfield contracts
+				// (the specific component has no manifest entry yet).
+				const initRun = runCli(["init"], cwd);
+				expect(initRun.status, describeRun("init", initRun)).toBe(0);
+				expect(existsSync(join(cwd, ".versailles", "config.json"))).toBe(true);
+				// Verify init seeded the empty manifests.json (the real user flow).
+				expect(existsSync(join(cwd, ".versailles", "manifests.json"))).toBe(
+					true,
+				);
 
-			// Step 2: Author contracts.json — the Cart contract (from contract-first.test.ts fixtures).
-			const contractsJson = {
-				version: "1.0",
-				contracts: {
-					Cart: {
-						invariants: [],
-						operations: {
-							addItem: {
-								id: "Cart.addItem",
-								params: [
-									{ name: "sku", type: "string" },
-									{ name: "price", type: "number" },
-								],
-								preconditions: [{ id: "Cart.addItem.pre0", expr: "price > 0" }],
-								postconditions: [
-									{
-										id: "Cart.addItem.post0",
-										expr: "balance == old(balance) + price",
-									},
-								],
-								effects: [{ field: "balance", kind: "mutate" }],
-								sourceHash: "cart-additem-hash",
+				// Step 2: Author contracts.json — the Cart contract (from contract-first.test.ts fixtures).
+				const contractsJson = {
+					version: "1.0",
+					contracts: {
+						Cart: {
+							invariants: [],
+							operations: {
+								addItem: {
+									id: "Cart.addItem",
+									params: [
+										{ name: "sku", type: "string" },
+										{ name: "price", type: "number" },
+									],
+									preconditions: [
+										{ id: "Cart.addItem.pre0", expr: "price > 0" },
+									],
+									postconditions: [
+										{
+											id: "Cart.addItem.post0",
+											expr: "balance == old(balance) + price",
+										},
+									],
+									effects: [{ field: "balance", kind: "mutate" }],
+									sourceHash: "cart-additem-hash",
+								},
 							},
 						},
 					},
-				},
-			};
-			await writeJsonFile(
-				join(cwd, ".versailles", "contracts.json"),
-				contractsJson,
-			);
+				};
+				await writeJsonFile(
+					join(cwd, ".versailles", "contracts.json"),
+					contractsJson,
+				);
 
-			// Step 3: node bin/versailles validate → exit 0 (greenfield must validate — ADR-0011).
-			const validateRun = runCli(["validate"], cwd);
-			expect(validateRun.status, describeRun("validate", validateRun)).toBe(0);
-			const validateOutput = JSON.parse(validateRun.stdout);
-			expect(validateOutput.ok).toBe(true);
+				// Step 3: node bin/versailles validate → exit 0 (greenfield must validate — ADR-0011).
+				const validateRun = runCli(["validate"], cwd);
+				expect(validateRun.status, describeRun("validate", validateRun)).toBe(
+					0,
+				);
+				const validateOutput = JSON.parse(validateRun.stdout);
+				expect(validateOutput.ok).toBe(true);
 
-			// Step 4: node bin/versailles generate → exit 0 (emits test importing ../../src/Cart.js).
-			const generateRun = runCli(["generate"], cwd);
-			expect(generateRun.status, describeRun("generate", generateRun)).toBe(0);
-			const generatedTestPath = join(
-				cwd,
-				".versailles",
-				"generated",
-				"Cart.test.ts",
-			);
-			expect(existsSync(generatedTestPath)).toBe(true);
+				// Step 4: node bin/versailles generate → exit 0 (emits test importing ../../src/Cart.js).
+				const generateRun = runCli(["generate"], cwd);
+				expect(generateRun.status, describeRun("generate", generateRun)).toBe(
+					0,
+				);
+				const generatedTestPath = join(
+					cwd,
+					".versailles",
+					"generated",
+					"Cart.test.ts",
+				);
+				expect(existsSync(generatedTestPath)).toBe(true);
 
-			// Step 5: Run generated suite via vitest → exit NON-ZERO with MODULE_NOT_FOUND/Cannot find module (TDD Red).
-			const vitestRun1 = runVitest(join(cwd, ".versailles", "generated"));
-			expect(
-				vitestRun1.status,
-				`expected vitest run to fail (TDD Red): ${describeRun("vitest run (TDD Red)", vitestRun1)}`,
-			).not.toBe(0);
-			const combinedOutput1 = vitestRun1.stdout + vitestRun1.stderr;
-			const isModuleNotFoundError =
-				combinedOutput1.includes("MODULE_NOT_FOUND") ||
-				combinedOutput1.includes("Cannot find module") ||
-				combinedOutput1.includes("Error:") ||
-				combinedOutput1.includes("TypeError");
-			expect(
-				isModuleNotFoundError,
-				`expected MODULE_NOT_FOUND or TypeError but got:\n${combinedOutput1}`,
-			).toBe(true);
+				// Step 5: Run generated suite via vitest → exit NON-ZERO with MODULE_NOT_FOUND/Cannot find module (TDD Red).
+				const vitestRun1 = runVitest(join(cwd, ".versailles", "generated"));
+				expect(
+					vitestRun1.status,
+					`expected vitest run to fail (TDD Red): ${describeRun("vitest run (TDD Red)", vitestRun1)}`,
+				).not.toBe(0);
+				const combinedOutput1 = vitestRun1.stdout + vitestRun1.stderr;
+				const isModuleNotFoundError =
+					combinedOutput1.includes("MODULE_NOT_FOUND") ||
+					combinedOutput1.includes("Cannot find module") ||
+					combinedOutput1.includes("Error:") ||
+					combinedOutput1.includes("TypeError");
+				expect(
+					isModuleNotFoundError,
+					`expected MODULE_NOT_FOUND or TypeError but got:\n${combinedOutput1}`,
+				).toBe(true);
 
-			// Step 6: Implement src/Cart.ts — a class matching what the generated test exercises.
-			// CRITICAL: ground this from what the generator ACTUALLY emits — read the emitted test file first.
-			const emittedTestContent = await readFile(generatedTestPath, "utf8");
-			// The emitted test calls Cart.addItem({ sku, price }) as a STATIC method
-			// with an OBJECT argument (not an instance method with separate args).
-			// The source must match this shape: a static addItem method that takes
-			// an object with sku and price properties, throws when price <= 0,
-			// and returns a defined value for valid inputs.
-			await mkdir(join(cwd, "src"), { recursive: true });
-			const cartSource = `/**
+				// Step 6: Implement src/Cart.ts — a class matching what the generated test exercises.
+				// CRITICAL: ground this from what the generator ACTUALLY emits — read the emitted test file first.
+				const emittedTestContent = await readFile(generatedTestPath, "utf8");
+				// The emitted test calls Cart.addItem({ sku, price }) as a STATIC method
+				// with an OBJECT argument (not an instance method with separate args).
+				// The source must match this shape: a static addItem method that takes
+				// an object with sku and price properties, throws when price <= 0,
+				// and returns a defined value for valid inputs.
+				await mkdir(join(cwd, "src"), { recursive: true });
+				const cartSource = `/**
  * Cart — the minimal greenfield domain for the Versailles TDD flow.
  * One operation with a pre/postcondition pair (addItem).
  */
@@ -361,20 +393,22 @@ export class Cart {
 \t}
 }
 `;
-			await writeFileContent(join(cwd, "src", "Cart.ts"), cartSource);
+				await writeFileContent(join(cwd, "src", "Cart.ts"), cartSource);
 
-			// Step 7: Run the generated suite again via vitest → exit 0 (Green — the generated tests PASS).
-			const vitestRun2 = runVitest(join(cwd, ".versailles", "generated"));
-			expect(
-				vitestRun2.status,
-				describeRun("vitest run (TDD Green)", vitestRun2),
-			).toBe(0);
+				// Step 7: Run the generated suite again via vitest → exit 0 (Green — the generated tests PASS).
+				const vitestRun2 = runVitest(join(cwd, ".versailles", "generated"));
+				expect(
+					vitestRun2.status,
+					describeRun("vitest run (TDD Green)", vitestRun2),
+				).toBe(0);
 
-			// Step 8: node bin/versailles check → exit 0.
-			const checkRun = runCli(["check"], cwd);
-			expect(checkRun.status, describeRun("check", checkRun)).toBe(0);
-		} finally {
-			await rm(cwd, { recursive: true, force: true });
-		}
-	});
+				// Step 8: node bin/versailles check → exit 0.
+				const checkRun = runCli(["check"], cwd);
+				expect(checkRun.status, describeRun("check", checkRun)).toBe(0);
+			} finally {
+				await rm(cwd, { recursive: true, force: true });
+			}
+		},
+		E2E_TIMEOUT_MS,
+	);
 });
