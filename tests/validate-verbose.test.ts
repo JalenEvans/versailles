@@ -330,6 +330,27 @@ describe("runCli validate --verbose — per-clause expr+AST pairs (ADR-0012 Phas
 		expect(byId["OrderService.addItem.post0"].ast).toBeNull();
 	});
 
+	it("on a workspace with NO contracts (empty contracts map), validate --verbose returns ok with verbose.exprViews === [] (no crash)", async () => {
+		// freshWorkspace seeds { version: "1.0", contracts: {} } — no components,
+		// no predicates, no clauses. The verbose builder must tolerate an empty
+		// contracts map and emit an empty exprViews array (not crash, not null).
+		const cwd = await freshWorkspace("vv-empty-contracts");
+		const result = await runCli(["validate", "--verbose"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+
+		const output = result.output as {
+			valid: boolean;
+			verbose?: { exprViews?: unknown[] };
+		};
+		expect(output.valid).toBe(true);
+		expect(output.verbose).toBeDefined();
+		expect(Array.isArray(output.verbose?.exprViews)).toBe(true);
+		expect(output.verbose?.exprViews).toEqual([]);
+	});
+
 	it("without --verbose, output is unchanged — no verbose key, just { valid: boolean }", async () => {
 		const cwd = await seedOrderServiceWorkspace("vv-no-flag");
 		const result = await runCli(["validate"], { cwd });

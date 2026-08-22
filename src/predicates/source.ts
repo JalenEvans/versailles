@@ -11,9 +11,9 @@ import { fnv1aHex, resolveExportedFunction } from "../extractors/index.js";
 /**
  * Parses a `Module.functionName` sourceRef. Module = file basename without
  * `.ts`; function = exported top-level function name. Exactly two dot-free
- * parts are required.
+ * parts are required. Module-private: only `resolvePredicateSource` uses it.
  */
-export function parseSourceRef(
+function parseSourceRef(
 	sourceRef: string,
 ): { ok: true; moduleName: string; functionName: string } | { ok: false } {
 	const parts = sourceRef.split(".");
@@ -27,8 +27,9 @@ export function parseSourceRef(
  * sourceHash(predicate) = FNV-1a over the UTF-8 bytes of the function
  * declaration's source text exactly as the TS seam returns it
  * (node.getText(): `export`/`function` through the closing brace).
+ * Module-private: only `resolvePredicateSource` uses it.
  */
-export function computePredicateSourceHash(sourceText: string): string {
+function computePredicateSourceHash(sourceText: string): string {
 	return fnv1aHex(sourceText);
 }
 

@@ -533,3 +533,71 @@ describe("declarative predicates — arity/type checks still work (PREDICATE_ARI
 		);
 	});
 });
+
+// ── 8. Malformed predicate declaration → INVALID_SHAPE ────────────────────
+
+describe("declarative predicates — malformed predicate declaration → INVALID_SHAPE", () => {
+	it("a predicate declaration missing `source` → INVALID_SHAPE error on contracts.predicates.<name>.source, exit 1", async () => {
+		const cwd = await freshWorkspaceNoPredicatesFile("dp-malformed-source");
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			version: "1.0",
+			predicates: {
+				isPositive: {
+					// `source` is missing entirely.
+					params: ["amount"],
+					paramTypes: ["number"],
+					returnType: "boolean",
+					verifiedPure: true,
+				},
+			},
+			contracts: {},
+		});
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {},
+		});
+
+		const result = await runCli(["validate"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(result.errors).toContainEqual(
+			expect.objectContaining({
+				code: "INVALID_SHAPE",
+				field: "contracts.predicates.isPositive.source",
+			}),
+		);
+	});
+
+	it("a predicate declaration missing `verifiedPure` → INVALID_SHAPE error on contracts.predicates.<name>.verifiedPure, exit 1", async () => {
+		const cwd = await freshWorkspaceNoPredicatesFile("dp-malformed-pure");
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			version: "1.0",
+			predicates: {
+				isPositive: {
+					source: "OrderService.isPositive",
+					params: ["amount"],
+					paramTypes: ["number"],
+					returnType: "boolean",
+					// `verifiedPure` is missing entirely.
+				},
+			},
+			contracts: {},
+		});
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {},
+		});
+
+		const result = await runCli(["validate"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(result.errors).toContainEqual(
+			expect.objectContaining({
+				code: "INVALID_SHAPE",
+				field: "contracts.predicates.isPositive.verifiedPure",
+			}),
+		);
+	});
+});
