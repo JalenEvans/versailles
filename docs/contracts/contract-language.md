@@ -19,11 +19,12 @@ consume. Nothing downstream ever sees a raw, unparsed, or invalid expression.
   **parse error**, rejected before semantic checking.
 - The grammar is boolean-valued only — no assignments, loops, or statements can be expressed.
 - Semantic validation resolves every field reference, checks type compatibility and `in`
-  operands, and verifies every predicate call against `predicates.json`.
-- Predicates may be referenced **only** if registered with `verifiedPure: true`; anything else
+  operands, and verifies every predicate call against the top-level `predicates` map of
+  `contracts.json`.
+- Predicates may be referenced **only** if declared with `verifiedPure: true`; anything else
   is a hard error.
 - All failures come back as **structured error objects** (parse shape and validation shape)
-  that external agents, the review UI, and CI can read and re-inject programmatically.
+  that CI and external tooling can read and re-inject programmatically.
 
 ## What it forbids (must not)
 

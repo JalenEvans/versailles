@@ -10,24 +10,26 @@
 
 ## Behavioral Intent
 
-Versailles turns Design-by-Contract specifications (invariants, preconditions, postconditions) written in a small expression language into deterministic test suites. Contracts are the single source of truth: a validated contract always produces the same tests. LLMs (as external agents) may drive the CLI to author contracts from source, but the CLI never drives an LLM — no LLM is invoked by the tool at any point. The CLI exposes a deterministic, machine-readable surface (structured errors, stable JSON output, stable exit codes) that an external LLM/agent can consume and iterate against. The `.versailles/` directory is versioned and loaded as a single unit, and every contract clause and generated test traces back to a source hash.
+Versailles turns Design-by-Contract specifications (invariants, preconditions, postconditions) written in a small expression language into deterministic test suites. Contracts are the single source of truth: a validated contract always produces the same tests. The CLI never drives an LLM — no LLM is invoked by the tool at any point (ADR-0010). Contracts are authored directly into `contracts.json` (with predicates declared inline in the top-level `predicates` map, ADR-0013); `validate` / `check` gate correctness; the git commit is the approval (ADR-0003, ADR-0012). The CLI exposes a deterministic, machine-readable surface (structured errors, stable JSON output, stable exit codes) that CI and external tooling can consume. The `.versailles/` directory is versioned and loaded as a single unit, and every contract clause and generated test traces back to a source hash.
 
 ## Scope
 
 **In scope:**
-- The `.versailles/` file set (`config.json`, `contracts.json`, `manifests.json`, `predicates.json`) as a versioned, jointly-loaded unit.
+- The `.versailles/` file set (`config.json`, `contracts.json` with its top-level `predicates` map, `manifests.json`) as a versioned, jointly-loaded unit.
 - Contract expression grammar: parse, structural constraints, semantic validation, structured error reporting.
 - Deterministic test generation: per-operation cases (boundary, partitions, precondition-violation, postcondition-satisfaction) and per-component invariant tests, with traceability comments and a coverage manifest.
-- Machine-readable CLI surface for agent control: structured errors, stable JSON output, deterministic behavior an external LLM/agent can consume and iterate against.
+- Machine-readable CLI surface: structured errors, stable JSON output, deterministic behavior CI and external tooling can consume.
 - CI lint: validation + staleness detection with distinct exit codes.
+- Declarative predicate verification: `validate` mechanically verifies each predicate declaration in `contracts.json` (ADR-0013).
 
 **Out of scope:**
 - SMT-based precise input synthesis (v2 stretch).
 - Arbitrary executable code inside contract expressions (no unregistered calls, no loops, no side effects).
 - Multi-language grammar variants — grammar/validator/generator stay language-agnostic; only extractor/emitter plug in per language/framework.
-- Approval metadata (`approvedBy`/`approvedAt`) in the file schema — the audit trail is git history.
+- Approval metadata (`approvedBy`/`approvedAt`) in the file schema — the audit trail is git history (ADR-0003).
+- In-tool review or approval ceremony — retired by ADR-0012.
 
-**Programmatic surface (v1): CLI only.** The CLI — `bin versailles` plus the deterministic `runCli` envelope (`{ ok, errors, warnings, exitCode }`, build-spec §10) — is v1's programmatic interface. External agents, review UIs, and CI consume the CLI as a subprocess, never in-process imports (ADR-0010). There is no library API in v1: `src/index.ts` exports only `packageName`; parser/validator/loader/generator are internal implementation, not a public import surface. A programmatic library API is an explicit non-goal for v1, deferred to v2+ (VERSAILLES-19).
+**Programmatic surface (v1): CLI only.** The CLI — `bin versailles` plus the deterministic `runCli` envelope (`{ ok, errors, warnings, exitCode }`, build-spec §10) — is v1's programmatic interface. CI and external tooling consume the CLI as a subprocess, never in-process imports (ADR-0010). There is no library API in v1: `src/index.ts` exports only `packageName`; parser/validator/loader/generator are internal implementation, not a public import surface. A programmatic library API is an explicit non-goal for v1, deferred to v2+ (VERSAILLES-19).
 
 ## Behavior
 
@@ -49,17 +51,17 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - **When** `versailles check` runs in CI
 - **Then** exit code `2` with a list of stale IDs if `staleness.blockOnStale` is true, else a warning report and exit `0`
 
-### The CLI is deterministic and never prompts an LLM; an external agent iterates against it
+### The CLI is deterministic and never invokes an LLM
 
-- **Given** an external LLM/agent that authors contract objects from source
-- **When** it calls `versailles validate` / `versailles check` on its output
-- **Then** the CLI responds with deterministic structured errors (stable JSON, exit codes) that the agent reads, fixes against, and re-runs — the CLI never prompts, calls, or retries an LLM itself
+- **Given** any invocation of `versailles validate` / `versailles check`
+- **When** the CLI runs
+- **Then** it responds with deterministic structured errors (stable JSON, exit codes) — the CLI never prompts, calls, or retries an LLM; no LLM client, no prompting logic, no retry loop anywhere in the tool (ADR-0010)
 
-### Human approval merges one object, not the file
+### The git commit is the approval
 
-- **Given** a staged, validated contract object in the review flow
-- **When** a reviewer approves
-- **Then** the single object is merged into `contracts.json` via read-modify-write of just that key — git records the approval; no approval fields exist in the schema
+- **Given** a validated `contracts.json` (with predicates declared inline in the top-level `predicates` map)
+- **When** a user commits the file
+- **Then** the git commit is the approval — no in-tool approval ceremony exists (ADR-0003, ADR-0012); `validate`/`check` + CI gate correctness
 
 ### Traceability is machine-checkable
 
@@ -77,9 +79,8 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 
 - The expression grammar is boolean-valued only: no assignment, no loops, no statements; anything outside the grammar is a parse error.
 - `old(field)` is valid only in `postconditions[]` — a parse error (not semantic) elsewhere.
-- Predicate calls resolve only to registered predicates with `verifiedPure: true`; unverified predicates are a hard error.
-- Generation is a pure function of approved contracts; regeneration is idempotent and full-file; `generated/` is tool-owned and never hand-edited. The tool never invokes an LLM — no LLM client, no prompting logic, no LLM retry loop anywhere in the tool.
-- `contracts.json` changes are single-object merges — never a full-file LLM rewrite.
+- Predicate calls resolve only to declared predicates with `verifiedPure: true`; unverified predicates are a hard error (ADR-0006).
+- Generation is a pure function of validated contracts; regeneration is idempotent and full-file; `generated/` is tool-owned and never hand-edited. The tool never invokes an LLM — no LLM client, no prompting logic, no LLM retry loop anywhere in the tool (ADR-0010).
 - `.versailles/` files are never interpreted in isolation; all tools load them as a unit.
 
 ## Non-Goals
@@ -87,7 +88,8 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - SMT-backed precise input synthesis (v2).
 - Executable code in contract expressions.
 - Grammar variants per programming language.
-- In-band approval metadata in the schema.
+- In-band approval metadata in the schema (ADR-0003).
+- In-tool review or approval ceremony (ADR-0012).
 
 ---
 

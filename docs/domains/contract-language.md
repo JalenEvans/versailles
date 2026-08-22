@@ -10,7 +10,7 @@ The contract specification language and everything needed to know whether a cont
 - The parser: `expr` strings → AST, enforcing structural constraints at parse time (e.g. `old(...)` only in `postconditions[]`).
 - The semantic validator (build-spec §5.1): field resolution, nested field resolution, type compatibility, `in` operand shape, predicate existence/arity/arg-types, predicate purity, and the low-confidence warning tier.
 - The structured error contract (build-spec §4.4, §5.2) — machine-readable results, never unstructured throws.
-- The predicate registry (`predicates.json`): named predicates with the `verifiedPure` registration gate (ADR-0006).
+- The predicate registry (top-level `predicates` map in `contracts.json`): named predicates with the `verifiedPure` gate (ADR-0006, ADR-0013).
 
 This context is **language-agnostic** (ADR-0008): the grammar, parser, and validator never fork per target language.
 
@@ -30,7 +30,7 @@ This context is **language-agnostic** (ADR-0008): the grammar, parser, and valid
 
 **AST** (value object) — the canonical node tree: `or | and | not | compare | arithmetic | old | predicateCall | fieldRef | literal` (build-spec §4.3).
 
-**Predicate** (entity in the registry) — `predicates.json` entry: params, paramTypes, returnType, sourceRef, sourceHash, `verifiedPure`.
+**Predicate** (entity in the registry) — entry in the top-level `predicates` map of `contracts.json`: params, paramTypes, returnType, source, `verifiedPure`.
 
 **StructuredError** (value object) — parse form: `{ contractId, field, position, found, expected, message }`; validation form: `{ contractId, code, field, detail }`.
 
@@ -43,7 +43,7 @@ Uses from [glossary](../glossary.md): *contract, clause, invariant, precondition
 ## Domain events
 
 - `contractInvalid` — hard parse/validation errors found; downstream commands reject.
-- `predicateRegistered` — a named predicate entered the registry with `verifiedPure`.
+- `predicateDeclarationVerified` — a predicate declaration was verified by `validate` (name valid, sourceRef resolved or warned).
 
 ## Relationships
 
@@ -51,8 +51,6 @@ Uses from [glossary](../glossary.md): *contract, clause, invariant, precondition
 |---|---|---|
 | Downstream of | workspace-context | Semantic validation requires the full context (contracts + manifests + predicates) loaded together; the loader orchestrates parse + validation. |
 | Downstream of | manifest-extraction | Field references resolve against manifest entries and param types. |
-| Upstream of | external agent (via CLI) | Its structured validation result is the gate between agent-authored contracts and staging; failed output returns structured errors for the agent to fix. |
-| Upstream of | review | Review displays warnings and pretty-printed AST as a parser-sanity check. |
 | Upstream of | deterministic-generation | Generation only runs on `isValid: true`; the validated AST is the future SMT input (v2). |
 | Upstream of | (CLI) | `versailles validate` / `versailles check` surface its structured report. |
 
@@ -61,8 +59,8 @@ Uses from [glossary](../glossary.md): *contract, clause, invariant, precondition
 - The grammar is boolean-valued only: no assignment, no loops, no statements (build-spec §4.2). Anything outside the grammar is a **parse error**.
 - `old(...)` is syntactically valid **only** when parsing a `postconditions[]` entry; encountering it in `preconditions[]` or `invariants[]` is a parse error, not a semantic one (build-spec §4.2). The validator re-asserts as defense-in-depth.
 - `predicate_call` identifiers are resolved at semantic validation, not parse time — the parser only checks the call-shape is well-formed.
-- Hard errors (unknown field, type mismatch, bad `in` shape, unknown predicate, arity/type mismatch, `verifiedPure !== true`) block the contract from reaching human review in the authoring flow, and block CI in the lint flow (build-spec §5.2).
-- Warnings are non-blocking and surfaced for reviewer awareness.
+- Hard errors (unknown field, type mismatch, bad `in` shape, unknown predicate, arity/type mismatch, `verifiedPure !== true`) block the contract from passing validation, and block CI in the lint flow (build-spec §5.2).
+- Warnings are non-blocking and surfaced for awareness.
 - The parser and validator always return structured results — never throw unstructured exceptions (build-spec §4.4).
 
 ## Open questions

@@ -43,7 +43,7 @@ Uses from [glossary](../glossary.md): *manifest / field manifest, typeRef, low-c
 | Upstream of | workspace-context | Writes `manifests.json` into the shared workspace; the loader re-parses it on the next load. |
 | Upstream of | contract-language | Field resolution and type compatibility read manifests. |
 | Upstream of | deterministic-generation | Manifests drive valid-state builders for invariant tests (via the context). |
-| Upstream of | external agent (via CLI) | The manifest entry for a component grounds contract authoring by an external agent. |
+| Upstream of | (CLI) | `versailles extract-manifests` routes to this context; `versailles check` consumes stored `sourceHash` values for staleness detection. |
 
 ## Business rules
 

@@ -11,7 +11,7 @@
 
 ## Behavioral Intent
 
-Manifest extraction derives the grounding layer for the whole pipeline — `manifests.json` (build-spec §3.3) — from real source code via per-language extractor plugins (ADR-0008), with TypeScript first using `ts.createProgram` + the type checker (ADR-0005, ADR-0009). It applies the `typeRef` grammar (generics → `list<T>`, literal unions → `enum<...>`, nested/related types added transitively to the flat map) and computes structural `sourceHash` values from the sorted field name+type pairs plus sorted method-signature records — never method bodies — so body-only edits never trigger false staleness (build-spec §7). Each entry records per-component method metadata (method name, static/instance, ordered param names, return type where determinable) and the `sourcePath` of the file it was extracted from — project-root-relative with POSIX separators (e.g. `src/order.ts`), never source-root-relative and never absolute — so downstream emitters can render shape-aware calls against real modules and derive import specifiers that resolve to them (build-spec §3.3, §7; VERSAILLES-24). Every entry refreshed by an extract run always carries the `methods` key — possibly `{}`, the first-class zero-methods signal that keeps the planner's `UNPLANNABLE_OPERATION` guard firing — and only preserved legacy entries the extractor never touched may lack it (VERSAILLES-25 follow-up). When no project root is derivable (projectRoot omitted and the source roots share no common prefix), the `sourcePath` fallback is the file relative to `sourceRoots[0]` when that yields a relative path, or omission of the field — never the absolute file path (VERSAILLES-24 follow-up). Extraction is static-analysis-first and permissive: fields whose types can only be inferred are flagged low-confidence and warn rather than block (ADR-0004). Manifests are derived artifacts — an external agent may author or update manifests via the CLI, but the tool itself never invokes an LLM (ADR-0010, ADR-0005).
+Manifest extraction derives the grounding layer for the whole pipeline — `manifests.json` (build-spec §3.3) — from real source code via per-language extractor plugins (ADR-0008), with TypeScript first using `ts.createProgram` + the type checker (ADR-0005, ADR-0009). It applies the `typeRef` grammar (generics → `list<T>`, literal unions → `enum<...>`, nested/related types added transitively to the flat map) and computes structural `sourceHash` values from the sorted field name+type pairs plus sorted method-signature records — never method bodies — so body-only edits never trigger false staleness (build-spec §7). Each entry records per-component method metadata (method name, static/instance, ordered param names, return type where determinable) and the `sourcePath` of the file it was extracted from — project-root-relative with POSIX separators (e.g. `src/order.ts`), never source-root-relative and never absolute — so downstream emitters can render shape-aware calls against real modules and derive import specifiers that resolve to them (build-spec §3.3, §7; VERSAILLES-24). Every entry refreshed by an extract run always carries the `methods` key — possibly `{}`, the first-class zero-methods signal that keeps the planner's `UNPLANNABLE_OPERATION` guard firing — and only preserved legacy entries the extractor never touched may lack it (VERSAILLES-25 follow-up). When no project root is derivable (projectRoot omitted and the source roots share no common prefix), the `sourcePath` fallback is the file relative to `sourceRoots[0]` when that yields a relative path, or omission of the field — never the absolute file path (VERSAILLES-24 follow-up). Extraction is static-analysis-first and permissive: fields whose types can only be inferred are flagged low-confidence and warn rather than block (ADR-0004). Manifests are derived artifacts — the tool itself never invokes an LLM (ADR-0010, ADR-0005).
 
 ## Scope
 
@@ -25,14 +25,14 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 - Permissive typing policy: inferred/low-confidence fields emit a non-blocking warning and never produce a hard error (ADR-0004).
 - `versailles extract-manifests` behavior: update entries for covered components, preserve entries for components not covered by the current scan, and remove only via the explicit `--prune` flag — never implicitly (build-spec §7).
 - Scanning only within `config.sourceRoots`.
-- External-agent authored/updated manifests, verified against real source before writing — the tool never invokes an LLM (ADR-0010, ADR-0005).
+- Static-analysis-first manifest derivation; the tool never invokes an LLM (ADR-0010, ADR-0005).
 
 **Out of scope:**
 - Semantic validation of contracts that consume manifests (contract-language).
 - The staleness *check* flow that recomputes and compares hashes (`versailles check`, exit codes) — workspace-context orchestrates it; this context only computes hashes.
 - Extractors for C# and Python within the first implementation milestone — the seam exists for all three (ADR-0009 matrix), but sequencing makes TypeScript first.
 - Predicate registry tooling, even where it reuses static-analysis seams (build-spec §13 milestone 8 is a later step).
-- Any LLM-driven extraction inside the tool — LLM assistance exists only as an external-agent loop, mechanically verified against source before `manifests.json` is written (ADR-0005 clarification, ADR-0010).
+- Any LLM-driven extraction inside the tool — the tool never invokes an LLM (ADR-0005 clarification, ADR-0010).
 - No method-body analysis — only method signatures (name, static/instance, params, return type) are recorded; bodies never enter the manifest or the hash.
 
 ## Behavior
@@ -95,7 +95,7 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 
 - **Given** an extractor run
 - **When** it scans source and writes `manifests.json`
-- **Then** it uses static analysis APIs only — there are no LLM call sites in the tool; an external agent may author/update manifests via the CLI, mechanically verified against actual source (ADR-0005 clarification, ADR-0010)
+- **Then** it uses static analysis APIs only — there are no LLM call sites in the tool (ADR-0005 clarification, ADR-0010)
 
 ## Constraints
 

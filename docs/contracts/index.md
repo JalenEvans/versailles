@@ -8,7 +8,6 @@ Machine-checkable Design-by-Contract contracts (`contract_gate`). One contract p
 | manifest-extraction | [manifest-extraction.contract.yaml](manifest-extraction.contract.yaml) · [summary](manifest-extraction.md) | draft | pass |
 | workspace-context | [workspace-context.contract.yaml](workspace-context.contract.yaml) · [summary](workspace-context.md) | draft | pass |
 | deterministic-generation | [deterministic-generation.contract.yaml](deterministic-generation.contract.yaml) · [summary](deterministic-generation.md) | draft | pass |
-| review | [review.contract.yaml](review.contract.yaml) · [summary](review.md) | draft | pass |
 | predicate-registry | [predicate-registry.contract.yaml](predicate-registry.contract.yaml) · [summary](predicate-registry.md) | draft | pass |
 | versailles (CLI surface) | [versailles.contract.yaml](versailles.contract.yaml) · [summary](versailles.md) | draft | pass |
 
