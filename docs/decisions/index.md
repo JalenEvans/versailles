@@ -18,5 +18,6 @@ Architecture decision records (ADRs). Immutable once accepted — a new decision
 | [0012](0012-git-commit-as-approval-remove-review-gate.md) | Git commit as approval — no in-tool review gate | accepted | ADR-0003 (single-object review-merge mechanism) |
 | [0013](0013-declarative-predicates-remove-registration-cli.md) | Declarative predicates — no registration CLI | accepted | — |
 | [0014](0014-roadmap-reconciliation.md) | Roadmap reconciliation — SMT as soundness requirement; roadmap supersedes BS§9.5/BS§13 | accepted | — |
+| [0015](0015-licensing-and-contribution-model.md) | Licensing and contribution model — MIT core, EasyCLA, open-core commitment | accepted | — |
 
 See also: [Contracts](../contracts/index.md) · [Specs](../specs/index.md) · [Build spec](../build-spec.md)
