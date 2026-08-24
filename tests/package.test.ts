@@ -7,12 +7,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
  * Packaging lifecycle (VERSAILLES-16, "Get Ready For Beta" sprint Phase 2):
- * bin/versailles imports ../dist/cli/index.js, but dist/ is gitignored, so
+ * bin/versailles imports ../dist/packages/cli/src/cli/index.js, but dist/ is gitignored, so
  * package.json ships the prepare and prepublishOnly hooks that make a clean
  * install/link/publish self-sufficient. These tests pin that behavior:
  *
  * 1. scripts.prepare runs the tsc build (src → dist per tsconfig outDir), so
- *    dist/cli/index.js exists on install/link/publish — no manual build step.
+ *    dist/packages/cli/src/cli/index.js exists on install/link/publish — no manual build step.
  * 2. scripts.prepublishOnly runs the build + smoke, so a broken package
  *    (missing dist/ or failing smoke) can never be published.
  * 3. The stable machine-readable envelope { ok, errors, warnings, exitCode }
@@ -30,8 +30,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * - docs/contracts/versailles.contract.yaml: every command answers with the
  *   stable shape { ok, errors, warnings, exitCode } and exit codes are exactly
  *   {0, 1, 2} — 2 is reserved for blocking staleness (build-spec §8, §10).
- * - tsconfig.json: outDir "dist", rootDir "src" — `tsc -p tsconfig.json` is
- *   the build that materializes dist/cli/index.js for bin/versailles.
+ * - tsconfig.json: outDir "dist", rootDir "." — `tsc -p tsconfig.json` is
+ *   the build that materializes dist/packages/cli/src/cli/index.js for bin/versailles.
  */
 
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -51,7 +51,7 @@ async function readPackageJson(): Promise<PackageJson> {
 	return JSON.parse(await readFile(PACKAGE_JSON_PATH, "utf8")) as PackageJson;
 }
 
-// The exact SEEDED_CONFIG written by initWorkspace (src/cli/init.ts); kept
+// The exact SEEDED_CONFIG written by initWorkspace (packages/cli/src/cli/init.ts); kept
 // local so fixtures pin the loader's happy path against the seed.
 const SEEDED_CONFIG = {
 	grammarVersion: "1.0",
@@ -118,7 +118,7 @@ describe("package.json lifecycle scripts (VERSAILLES-16 local install path)", ()
 		expect(pkg.scripts).toBeDefined();
 		expect(pkg.scripts?.prepare).toBeDefined();
 		// Robust pin: whatever the exact spelling, prepare must run the tsc
-		// build that materializes dist/cli/index.js for bin/versailles.
+		// build that materializes dist/packages/cli/src/cli/index.js for bin/versailles.
 		expect(pkg.scripts?.prepare).toMatch(/tsc -p tsconfig\.json/);
 	});
 
@@ -236,7 +236,7 @@ describe("runCli — JSON-round-trippable envelope + clean exit 0 (VERSAILLES-16
 
 // ── bin/versailles shim E2E (VERSAILLES-16) ────────────────────────────────
 // Real shipped surface: npm links bin/versailles as the `versailles` binary,
-// which imports ../dist/cli/index.js (gitignored → the prepare hook rebuilds
+// which imports ../dist/packages/cli/src/cli/index.js (gitignored → the prepare hook rebuilds
 // it on install). Spawn the shim with node against a scratch workspace so the
 // E2E covers exactly what runCli cannot: JSON.stringify on stdout + process.
 // exit with the result exit code.
@@ -244,7 +244,7 @@ describe("runCli — JSON-round-trippable envelope + clean exit 0 (VERSAILLES-16
 describe("bin/versailles shim — real shipped surface (VERSAILLES-16)", () => {
 	beforeAll(() => {
 		// dist/ is gitignored; rebuild it so the shim's import of
-		// ../dist/cli/index.js resolves to the current src — the same dist a
+		// ../dist/packages/cli/src/cli/index.js resolves to the current src — the same dist a
 		// fresh install (prepare hook) or `bun run build` would produce.
 		const build = spawnSync("bun", ["run", "build"], {
 			cwd: REPO_ROOT,

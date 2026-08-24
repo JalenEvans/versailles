@@ -6,7 +6,7 @@ Thanks for your interest in contributing. This guide covers the contribution flo
 
 > Versailles is developed as open core. The contract grammar, parser, validator, IR, CLI, and emitters are MIT-licensed and will remain so. Advanced code-analysis capabilities may in future be offered under a commercial license. Contributions require signing a CLA, which lets us include your work in both.
 
-This is a formal commitment, not an internal intent. The free tier (contract grammar, parser, validator, IR, CLI, emitters) stays MIT permanently. The commercial tier (advanced code-analysis capabilities, L3/L4) lives in a separate private repo. For the full licensing model, see [ADR-0015](docs/decisions/0015-licensing-and-contribution-model.md).
+This is a formal commitment, not an internal intent. The free tier (contract grammar, parser, validator, the generator's in-memory test-case IR, CLI, emitters) stays MIT permanently. `packages/ir` (the VIR schema package) is Apache-2.0 per the per-package intent. The commercial tier (advanced code-analysis capabilities, L3/L4) lives in a separate private repo. For the full licensing model, see [ADR-0015](docs/decisions/0015-licensing-and-contribution-model.md).
 
 ## Before You Start
 

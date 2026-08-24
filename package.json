@@ -30,8 +30,8 @@
 		"url": "git+https://github.com/JalenEvans/versailles.git"
 	},
 	"scripts": {
-		"build": "tsc -p tsconfig.json",
-		"prepare": "tsc -p tsconfig.json",
+		"build": "rm -rf dist && tsc -p tsconfig.json",
+		"prepare": "rm -rf dist && tsc -p tsconfig.json",
 		"prepublishOnly": "bun run build && bun run smoke",
 		"test": "vitest run",
 		"test:watch": "vitest",

@@ -601,6 +601,24 @@ parser-sanity view (raw `expr` + parsed AST) is folded into `validate --verbose`
 | `versailles check` | CI-mode: validate + staleness check, proper exit codes |
 | `versailles generate` | Run deterministic test generator — contract-first from `contracts.json` alone (greenfield) or extract-first against `manifests.json` (brownfield); write to `generated/` |
 
+## 12.2 Monorepo layout (bun workspaces)
+
+The repo is a bun workspaces monorepo (`"workspaces": ["packages/*"]`); packages are
+`@versailles/*`. Per ADR-0014 D3, the restructure to this layout landed in Phase 0:
+
+```
+versailles
+├── packages/core/         ← grammar parser + validator (core/), joint loader (loader/), predicates (predicates/)
+├── packages/engine/       ← deterministic generator + vitest/xUnit/pytest emitters (generator/)
+├── packages/cli/          ← five-command machine-readable CLI (cli/)
+├── packages/frontend-ts/  ← TypeScript manifest extractor (extractors/)
+└── packages/ir/           ← VIR schema placeholder (Apache-2.0, scaffold-only; full schema deferred to D1 phase)
+```
+
+Root `src/index.ts` is the public package entry (`packageName` const). Per-package
+licensing (core/engine/cli/frontend-ts MIT, `packages/ir` Apache-2.0) is recorded in
+ADR-0015 (§15).
+
 ---
 
 ## 13. Build milestones (implementation order; roadmap phase sequence per ADR-0014)
@@ -644,6 +662,33 @@ parser-sanity view (raw `expr` + parsed AST) is folded into `validate --verbose`
 | Rejection idiom for precondition-violation tests | Configurable in `config.json`, default "throws" |
 | Multi-language support | Manifest extractor pluggable per-language; grammar/validator/generator stay language-agnostic |
 | Package/CLI naming | Package `versailles-dbc` (or scoped), CLI binary `versailles` via `bin` field |
+
+---
+
+## 15. Licensing
+
+The licensing model is recorded in detail in
+[ADR-0015](decisions/0015-licensing-and-contribution-model.md); this section is the
+build-spec summary.
+
+### 15.3 Per-package licensing layout
+
+- `packages/core`, `packages/engine`, `packages/cli`, `packages/frontend-ts`: **MIT** —
+  free tier (L0–L2), permanent.
+- `packages/ir` (VIR schema): **Apache-2.0**.
+- `versailles-pro` (L3/L4 advanced code-analysis + evidence layer): separate private
+  repo — the commercial tier, not a relicensing of the core.
+
+### 15.7 Planned bundled artifacts
+
+Third-party artifacts planned to ship inside bundled packages are tracked in
+`THIRD-PARTY-NOTICES.md` (root); their license notices must travel with any bundled
+artifact when shipped.
+
+Contributions require a CLA via EasyCLA (ICLA + CCLA, Apache ICLA / Harmony templates
+unmodified). The core-license commitment — the free tier stays MIT permanently — is
+published in [CONTRIBUTING.md](../CONTRIBUTING.md) and enforced by the per-package
+layout above.
 
 ---
 

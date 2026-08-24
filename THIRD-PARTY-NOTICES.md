@@ -8,8 +8,8 @@ These packages are installed as part of the standard build and test workflow. Ve
 
 | Package | Version | License | Notes |
 |---------|---------|---------|-------|
-| [ajv](https://github.com/ajv-validator/ajv) | ^8.17.0 | MIT | JSON schema validator; used at runtime by the workspace loader (`src/loader/workspace.ts`) |
-| [typescript](https://github.com/microsoft/TypeScript) | ^5.8.0 | Apache-2.0 | TypeScript compiler; used at runtime by the TypeScript manifest extractor (`src/extractors/typescript.ts`) |
+| [ajv](https://github.com/ajv-validator/ajv) | ^8.17.0 | MIT | JSON schema validator; used at runtime by the workspace loader (`packages/core/src/loader/workspace.ts`) |
+| [typescript](https://github.com/microsoft/TypeScript) | ^5.8.0 | Apache-2.0 | TypeScript compiler; used at runtime by the TypeScript manifest extractor (`packages/frontend-ts/src/extractors/typescript.ts`) |
 | [fast-check](https://github.com/dubzzz/fast-check) | ^4.9.0 | MIT | Property-based testing framework |
 | [vitest](https://github.com/vitest-dev/vitest) | ^3.0.0 | MIT | Test runner |
 | [@biomejs/biome](https://github.com/biomejs/biome) | ^1.9.4 | MIT | Linting and formatting |

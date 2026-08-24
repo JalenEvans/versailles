@@ -82,3 +82,4 @@ Chosen option: **MIT core permanently; per-package mixed licensing (ir = Apache-
 |------|--------|--------|
 | 2026-08-24 | associate-head-coach | Initial proposal |
 | 2026-08-24 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-24 | general-manager | D3 restructure landed; IR naming disambiguated — the generator's in-memory test-case IR stays MIT, `packages/ir` (VIR schema) is Apache-2.0 |

@@ -23,7 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * Both flows use the REAL CLI (node <repoRoot>/bin/versailles <command>) with
  * cwd = a fresh mkdtemp workspace, and the REAL test runner (repo vitest
  * binary) for the generated suite. The CLI reads dist/ (bin/versailles
- * imports ../dist/cli/index.js) — guaranteed by a `bun run build` in beforeAll.
+ * imports ../dist/packages/cli/src/cli/index.js) — guaranteed by a `bun run build` in beforeAll.
  *
  * The suite runs serially (vitest `fileParallelism: false` for this file) so
  * the beforeAll build keeps dist/ fresh without racing other test files.
@@ -78,7 +78,7 @@ let tempRoot: string;
 
 beforeAll(async () => {
 	tempRoot = await mkdtemp(join(tmpdir(), "versailles-e2e-"));
-	// Guarantee dist/ is built (bin/versailles imports ../dist/cli/index.js).
+	// Guarantee dist/ is built (bin/versailles imports ../dist/packages/cli/src/cli/index.js).
 	const build = spawnSync("bun", ["run", "build"], {
 		cwd: REPO_ROOT,
 		encoding: "utf8",
