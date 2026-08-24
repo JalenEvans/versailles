@@ -7,5 +7,7 @@
 	"types": "./dist/index.d.ts",
 	"license": "MIT",
 	"description": "TypeScript manifest extractor for Versailles contracts",
-	"dependencies": {}
+	"dependencies": {
+		"typescript": "^5.8.0"
+	}
 }

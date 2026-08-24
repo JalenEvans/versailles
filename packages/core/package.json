@@ -8,6 +8,7 @@
 	"license": "MIT",
 	"description": "Grammar, parser, and validator for Versailles contracts",
 	"dependencies": {
-		"@versailles/frontend-ts": "workspace:*"
+		"@versailles/frontend-ts": "workspace:*",
+		"ajv": "^8.17.0"
 	}
 }

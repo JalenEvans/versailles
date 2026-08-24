@@ -40,12 +40,14 @@
 		"check": "biome check .",
 		"example:generate": "bun run build && (cd examples/order-service && node ../../bin/versailles extract-manifests && node ../../bin/versailles generate) && git diff --quiet -- examples || { echo 'ERROR: example:generate produced a diff under examples/ — regenerated output drifted from the committed workspace'; git diff --stat -- examples; exit 1; }"
 	},
+	"dependencies": {
+		"ajv": "^8.17.0",
+		"typescript": "^5.8.0"
+	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",
 		"@types/node": "^26.2.0",
-		"ajv": "^8.17.0",
 		"fast-check": "^4.9.0",
-		"typescript": "^5.8.0",
 		"vitest": "^3.0.0"
 	},
 	"workspaces": ["packages/*"],
