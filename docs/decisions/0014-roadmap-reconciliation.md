@@ -47,6 +47,19 @@ Chosen option: **Option A — roadmap supersedes build-spec §9.5 and §13; SMT 
 - Build-spec §13 item 9 is replaced with the roadmap phase sequence (Phase 0 foundation → L3/L4 engine phases 1–8 per ADR-0014 / roadmap §16).
 - `scripts/validate-docs.sh` passes with this ADR linked from the decisions index.
 
+### D3 decision (restructure timing)
+
+**D3 = Restructure now.** The repo will be restructured to the §12.2 monorepo layout (bun workspaces: `packages/ir`, `packages/core`, `packages/engine`, `packages/cli`, plus future `frontend-ts`, `bridge-ts`, `emitter-*`) in the current phase — **not** deferred to phase 11 as the roadmap's original timeline suggested.
+
+**Rationale (Head Coach, 2026-08-24):**
+
+- **Per-package licensing is executable now.** Splitting `packages/ir` (Apache-2.0) from the rest of the workspace is a prerequisite for the planned `versailles-pro` repo and the pro-tier dependency surface; doing it later forces a mid-engine migration.
+- **Clean dependency surface for pro tier.** Restructuring before phase 9 (bounded path enumeration) avoids carrying a single-package layout through the compositional-summaries and paid-packaging phases, where the licensing boundary becomes load-bearing.
+- **Roadmap §18-D3 timing argument.** Restructuring before phase 9 is materially cheaper than restructuring after the engine's core is in place; the roadmap explicitly argues for early restructuring on these grounds.
+- **Migration cost is acceptable now.** Phase 0 is the natural restructuring window — the workspace is small, the dependency graph is shallow, and the bun-workspaces migration is a one-time cost that compounds positively for every subsequent phase.
+
+**Tracking:** the actual restructure is tracked by **R-3 (VERSAILLES-37)** and its subtasks **VERSAILLES-80, VERSAILLES-81, VERSAILLES-82, VERSAILLES-83**. This ADR records the *decision*; R-3 records the *execution*.
+
 ## More Information / Links
 
 - Ticket: VERSAILLES-35
@@ -63,3 +76,4 @@ Chosen option: **Option A — roadmap supersedes build-spec §9.5 and §13; SMT 
 |------|--------|--------|
 | 2026-08-24 | associate-head-coach | Initial proposal |
 | 2026-08-24 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-24 | associate-head-coach | D3 recorded — restructure now (Head Coach decision) |
