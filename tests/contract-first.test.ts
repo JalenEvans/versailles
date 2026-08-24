@@ -8,8 +8,8 @@ import { describe, expect, it } from "vitest";
 
 import { loadWorkspace } from "../packages/core/src/loader/workspace.js";
 import type { LoaderWarning } from "../packages/core/src/loader/workspace.js";
-import { planTestCases } from "../src/generator/index.js";
-import type { PlannedSuite } from "../src/generator/index.js";
+import { planTestCases } from "../packages/engine/src/generator/index.js";
+import type { PlannedSuite } from "../packages/engine/src/generator/index.js";
 
 /**
  * Contract-first emission (VERSAILLES-149, ADR-0011) — pinned against
@@ -256,7 +256,9 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 
 				const suite = planTestCases(context);
 				// Import emitSuite dynamically to avoid circular deps in the test file.
-				const { emitSuite } = await import("../src/generator/index.js");
+				const { emitSuite } = await import(
+					"../packages/engine/src/generator/index.js"
+				);
 				const files = emitSuite(suite, "vitest", {
 					generatedDir: ".versailles/generated",
 					modulePaths: {}, // no manifest sourcePath → deterministic default
@@ -357,7 +359,9 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 
 				// Also pin the emitter-level symptom: the emitted file must NOT
 				// contain an `expect(() => ...).toThrow()` for a valid input.
-				const { emitSuite } = await import("../src/generator/index.js");
+				const { emitSuite } = await import(
+					"../packages/engine/src/generator/index.js"
+				);
 				const files = emitSuite(suite, "vitest", {
 					generatedDir: ".versailles/generated",
 					modulePaths: {},

@@ -19,8 +19,8 @@ import {
 	coverageManifest,
 	emitSuite,
 	planTestCases,
-} from "../../generator/index.js";
-import type { EmitOptions } from "../../generator/index.js";
+} from "../../../packages/engine/src/generator/index.js";
+import type { EmitOptions } from "../../../packages/engine/src/generator/index.js";
 import { contextErrors, contextWarnings, messageOf } from "../context.js";
 import type { CliResult } from "../types.js";
 

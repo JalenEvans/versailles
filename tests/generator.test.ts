@@ -21,14 +21,14 @@ import {
 	coverageManifest,
 	emitSuite,
 	planTestCases,
-} from "../src/generator/index.js";
+} from "../packages/engine/src/generator/index.js";
 import type {
 	CoverageManifest,
 	EmittedFile,
 	OperationCaseGroup,
 	PlannedCase,
 	PlannedSuite,
-} from "../src/generator/index.js";
+} from "../packages/engine/src/generator/index.js";
 
 /**
  * Deterministic generator core (Phase 4, VERSAILLES-6) — pinned against

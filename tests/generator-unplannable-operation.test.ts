@@ -17,13 +17,13 @@ import {
 	coverageManifest,
 	emitSuite,
 	planTestCases,
-} from "../src/generator/index.js";
+} from "../packages/engine/src/generator/index.js";
 import type {
 	CoverageManifest,
 	EmitOptions,
 	PlannedCase,
 	PlannedSuite,
-} from "../src/generator/index.js";
+} from "../packages/engine/src/generator/index.js";
 
 /**
  * Non-silent unplannable-operation warnings (VERSAILLES-25, build-spec §9.1) —

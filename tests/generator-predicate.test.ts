@@ -14,12 +14,15 @@ import type {
 // The generator core (src/generator/) is implemented; these value imports
 // resolve at runtime. The assertions below pin the generator contract the
 // implementation must satisfy.
-import { coverageManifest, planTestCases } from "../src/generator/index.js";
+import {
+	coverageManifest,
+	planTestCases,
+} from "../packages/engine/src/generator/index.js";
 import type {
 	CoverageManifest,
 	PlannedCase,
 	PlannedSuite,
-} from "../src/generator/index.js";
+} from "../packages/engine/src/generator/index.js";
 
 /**
  * Predicate-call precondition planning (VERSAILLES-22 F3, build-spec §9.1) —

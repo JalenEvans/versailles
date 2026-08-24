@@ -13,6 +13,29 @@
         "vitest": "^3.0.0",
       },
     },
+    "packages/cli": {
+      "name": "@versailles/cli",
+      "version": "0.1.0",
+    },
+    "packages/core": {
+      "name": "@versailles/core",
+      "version": "0.1.0",
+    },
+    "packages/engine": {
+      "name": "@versailles/engine",
+      "version": "0.1.0",
+      "dependencies": {
+        "@versailles/core": "workspace:*",
+      },
+    },
+    "packages/frontend-ts": {
+      "name": "@versailles/frontend-ts",
+      "version": "0.1.0",
+    },
+    "packages/ir": {
+      "name": "@versailles/ir",
+      "version": "0.1.0",
+    },
   },
   "packages": {
     "@biomejs/biome": ["@biomejs/biome@1.9.4", "", { "optionalDependencies": { "@biomejs/cli-darwin-arm64": "1.9.4", "@biomejs/cli-darwin-x64": "1.9.4", "@biomejs/cli-linux-arm64": "1.9.4", "@biomejs/cli-linux-arm64-musl": "1.9.4", "@biomejs/cli-linux-x64": "1.9.4", "@biomejs/cli-linux-x64-musl": "1.9.4", "@biomejs/cli-win32-arm64": "1.9.4", "@biomejs/cli-win32-x64": "1.9.4" }, "bin": { "biome": "bin/biome" } }, "sha512-1rkd7G70+o9KkTn5KLmDYXihGoTaIGO9PIIN2ZB7UJxFrWw04CZHPYiMRjYsaDvVV7hP1dYNRLxSANLaBFGpog=="],
@@ -146,6 +169,16 @@
     "@types/estree": ["@types/estree@1.0.9", "", {}, "sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg=="],
 
     "@types/node": ["@types/node@26.2.0", "", { "dependencies": { "undici-types": "~8.3.0" } }, "sha512-5IviulTZeRNp2vAJ514cc/HUlY5nZ9fCbq9DMyC52BrhFZACo3nI0R7qBxhQmo/d27NFe96ur/b7Wwxklda+kg=="],
+
+    "@versailles/cli": ["@versailles/cli@workspace:packages/cli"],
+
+    "@versailles/core": ["@versailles/core@workspace:packages/core"],
+
+    "@versailles/engine": ["@versailles/engine@workspace:packages/engine"],
+
+    "@versailles/frontend-ts": ["@versailles/frontend-ts@workspace:packages/frontend-ts"],
+
+    "@versailles/ir": ["@versailles/ir@workspace:packages/ir"],
 
     "@vitest/expect": ["@vitest/expect@3.2.7", "", { "dependencies": { "@types/chai": "^5.2.2", "@vitest/spy": "3.2.7", "@vitest/utils": "3.2.7", "chai": "^5.2.0", "tinyrainbow": "^2.0.0" } }, "sha512-E8eBXaKibuvH2pSZErOjdVb5vF4PbKYcrnluBTYxEk1l/VhhwZg1kZQsdtjq+CsF5CFydf2Rdkz7jDHKSisi3w=="],
 

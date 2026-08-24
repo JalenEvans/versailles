@@ -1095,7 +1095,7 @@ describe("generate — generator module surface (src/generator/index.js)", () =>
 
 	beforeAll(async () => {
 		try {
-			generator = await import("../src/generator/index.js");
+			generator = await import("../packages/engine/src/generator/index.js");
 		} catch (error) {
 			generatorImportError = error;
 		}

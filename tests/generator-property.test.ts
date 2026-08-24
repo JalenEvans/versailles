@@ -10,8 +10,11 @@ import {
 	coverageManifest,
 	emitSuite,
 	planTestCases,
-} from "../src/generator/index.js";
-import type { PlannedCase, PlannedSuite } from "../src/generator/index.js";
+} from "../packages/engine/src/generator/index.js";
+import type {
+	PlannedCase,
+	PlannedSuite,
+} from "../packages/engine/src/generator/index.js";
 
 /**
  * Deterministic generator core — property tests (ADR-0002, build-spec §9.4).

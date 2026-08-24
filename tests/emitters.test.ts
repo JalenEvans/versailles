@@ -21,17 +21,20 @@ import type {
 	VersaillesContext,
 	WorkspaceConfig,
 } from "../packages/core/src/loader/workspace.js";
-import { extractManifests } from "../src/extractors/index.js";
 // The generator core (src/generator/) is implemented; these value imports
 // resolve at runtime. The assertions below pin the xunit/pytest emitter
 // contract the implementation must satisfy.
-import { emitSuite, planTestCases } from "../src/generator/index.js";
+import {
+	emitSuite,
+	planTestCases,
+} from "../packages/engine/src/generator/index.js";
 import type {
 	EmittedFile,
 	EmitterFramework,
 	PlannedCase,
 	PlannedSuite,
-} from "../src/generator/index.js";
+} from "../packages/engine/src/generator/index.js";
+import { extractManifests } from "../src/extractors/index.js";
 
 /**
  * xUnit and pytest emitters (ADR-0008/0009, build-spec §9.4) — regression

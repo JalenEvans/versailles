@@ -6,5 +6,8 @@
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"license": "MIT",
-	"description": "Deterministic generator, planner, IR types, and emitters"
+	"description": "Deterministic generator, planner, IR types, and emitters",
+	"dependencies": {
+		"@versailles/core": "workspace:*"
+	}
 }
