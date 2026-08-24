@@ -12,12 +12,15 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 
 import {
+	type ManifestsFile,
+	loadWorkspace,
+} from "../../../packages/core/src/loader/workspace.js";
+import {
 	coverageManifest,
 	emitSuite,
 	planTestCases,
 } from "../../generator/index.js";
 import type { EmitOptions } from "../../generator/index.js";
-import { type ManifestsFile, loadWorkspace } from "../../loader/workspace.js";
 import { contextErrors, contextWarnings, messageOf } from "../context.js";
 import type { CliResult } from "../types.js";
 

@@ -14,9 +14,9 @@
  */
 import { join } from "node:path";
 
-import type { Node } from "../../core/parser.js";
-import { loadWorkspace } from "../../loader/workspace.js";
-import type { ContractsFile } from "../../loader/workspace.js";
+import type { Node } from "../../../packages/core/src/core/parser.js";
+import { loadWorkspace } from "../../../packages/core/src/loader/workspace.js";
+import type { ContractsFile } from "../../../packages/core/src/loader/workspace.js";
 import { contextErrors, contextWarnings } from "../context.js";
 import type { CliResult } from "../types.js";
 

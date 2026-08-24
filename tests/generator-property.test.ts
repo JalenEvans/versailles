@@ -1,8 +1,9 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
-import { parseExpression } from "../src/core/parser.js";
-import type { Node } from "../src/core/parser.js";
+import { parseExpression } from "../packages/core/src/core/parser.js";
+import type { Node } from "../packages/core/src/core/parser.js";
+import type { VersaillesContext } from "../packages/core/src/loader/workspace.js";
 // The generator core (src/generator/) is implemented; these value imports
 // resolve at runtime.
 import {
@@ -11,7 +12,6 @@ import {
 	planTestCases,
 } from "../src/generator/index.js";
 import type { PlannedCase, PlannedSuite } from "../src/generator/index.js";
-import type { VersaillesContext } from "../src/loader/workspace.js";
 
 /**
  * Deterministic generator core — property tests (ADR-0002, build-spec §9.4).

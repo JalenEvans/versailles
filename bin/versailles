@@ -3,7 +3,7 @@
 // surface from src/cli/index.ts: prints the stable JSON envelope on stdout and
 // exits with the computed exit code (0 clean · 1 parse/validation/usage ·
 // 2 blocking staleness). No LLM is ever invoked (ADR-0010).
-import { runCli } from "../dist/cli/index.js";
+import { runCli } from "../dist/src/cli/index.js";
 
 const result = await runCli(process.argv.slice(2), { cwd: process.cwd() });
 process.stdout.write(`${JSON.stringify(result)}\n`);

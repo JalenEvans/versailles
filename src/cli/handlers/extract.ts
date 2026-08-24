@@ -13,9 +13,9 @@
  */
 import { join } from "node:path";
 
+import { loadWorkspace } from "../../../packages/core/src/loader/workspace.js";
 import { extractManifests, mergeManifests } from "../../extractors/index.js";
 import type { ManifestMap } from "../../extractors/types.js";
-import { loadWorkspace } from "../../loader/workspace.js";
 import {
 	contextErrors,
 	expandSourceRoots,

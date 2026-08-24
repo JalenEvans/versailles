@@ -6,10 +6,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { loadWorkspace } from "../packages/core/src/loader/workspace.js";
+import type { LoaderWarning } from "../packages/core/src/loader/workspace.js";
 import { planTestCases } from "../src/generator/index.js";
 import type { PlannedSuite } from "../src/generator/index.js";
-import { loadWorkspace } from "../src/loader/workspace.js";
-import type { LoaderWarning } from "../src/loader/workspace.js";
 
 /**
  * Contract-first emission (VERSAILLES-149, ADR-0011) — pinned against
@@ -600,7 +600,9 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 			// This is the existing V-25 behavior — the brownfield path. The test constructs
 			// a context with manifests present but the op missing from the methods map.
 			// This should warn+skip (UNPLANNABLE_OPERATION warning, empty cases).
-			const { parseExpression } = await import("../src/core/parser.js");
+			const { parseExpression } = await import(
+				"../packages/core/src/core/parser.js"
+			);
 			const contracts = {
 				version: "1.0",
 				contracts: {

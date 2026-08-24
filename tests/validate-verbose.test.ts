@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import type { Node } from "../src/core/parser.js";
+import type { Node } from "../packages/core/src/core/parser.js";
 
 /**
  * validate --verbose (ADR-0012 Phase 2, VERSAILLES-152) — pins the new

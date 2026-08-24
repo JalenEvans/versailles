@@ -52,14 +52,14 @@
  *   to complete (the bug class DbC is designed to catch). Lives in
  *   suite.invariantCases.
  */
-import type { Node } from "../core/parser.js";
+import type { Node } from "../../packages/core/src/core/parser.js";
 import type {
 	ContractClause,
 	ContractOperation,
 	LoaderWarning,
 	VersaillesContext,
-} from "../loader/workspace.js";
-import type { PredicateEntry } from "../predicates/registry.js";
+} from "../../packages/core/src/loader/workspace.js";
+import type { PredicateEntry } from "../../packages/core/src/predicates/registry.js";
 import type {
 	AssertionDescriptor,
 	CaseKind,

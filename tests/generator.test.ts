@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { parseExpression } from "../src/core/parser.js";
-import type { ClauseKind, Node, ParseError } from "../src/core/parser.js";
+import { parseExpression } from "../packages/core/src/core/parser.js";
+import type {
+	ClauseKind,
+	Node,
+	ParseError,
+} from "../packages/core/src/core/parser.js";
+import type {
+	ContractClause,
+	ContractsFile,
+	ManifestsFile,
+	PredicatesFile,
+	VersaillesContext,
+	WorkspaceConfig,
+} from "../packages/core/src/loader/workspace.js";
 // The generator core (src/generator/) is implemented; these value imports
 // resolve at runtime. The assertions below pin the generator contract the
 // implementation must satisfy.
@@ -17,14 +29,6 @@ import type {
 	PlannedCase,
 	PlannedSuite,
 } from "../src/generator/index.js";
-import type {
-	ContractClause,
-	ContractsFile,
-	ManifestsFile,
-	PredicatesFile,
-	VersaillesContext,
-	WorkspaceConfig,
-} from "../src/loader/workspace.js";
 
 /**
  * Deterministic generator core (Phase 4, VERSAILLES-6) — pinned against

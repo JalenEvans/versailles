@@ -1,8 +1,12 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
-import { parseExpression } from "../src/core/parser.js";
-import type { ClauseKind, Node, ParseResult } from "../src/core/parser.js";
+import { parseExpression } from "../packages/core/src/core/parser.js";
+import type {
+	ClauseKind,
+	Node,
+	ParseResult,
+} from "../packages/core/src/core/parser.js";
 
 /**
  * Parser property tests — never-throws robustness under the ADR-0010

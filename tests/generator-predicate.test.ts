@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { parseExpression } from "../src/core/parser.js";
-import type { ClauseKind, Node } from "../src/core/parser.js";
+import { parseExpression } from "../packages/core/src/core/parser.js";
+import type { ClauseKind, Node } from "../packages/core/src/core/parser.js";
+import type { LoaderWarning } from "../packages/core/src/loader/workspace.js";
+import type {
+	ContractClause,
+	ContractsFile,
+	ManifestsFile,
+	PredicatesFile,
+	VersaillesContext,
+	WorkspaceConfig,
+} from "../packages/core/src/loader/workspace.js";
 // The generator core (src/generator/) is implemented; these value imports
 // resolve at runtime. The assertions below pin the generator contract the
 // implementation must satisfy.
@@ -11,15 +20,6 @@ import type {
 	PlannedCase,
 	PlannedSuite,
 } from "../src/generator/index.js";
-import type { LoaderWarning } from "../src/loader/workspace.js";
-import type {
-	ContractClause,
-	ContractsFile,
-	ManifestsFile,
-	PredicatesFile,
-	VersaillesContext,
-	WorkspaceConfig,
-} from "../src/loader/workspace.js";
 
 /**
  * Predicate-call precondition planning (VERSAILLES-22 F3, build-spec §9.1) —

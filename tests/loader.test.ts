@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { initWorkspace } from "../src/cli/init.js";
 // The joint .versailles/ loader (Phase 3.1, chunk 3.1; semantic wiring in
 // chunk 3.3). The loader runs the semantic validator (src/core/validator.ts)
 // over every successfully-parsed clause and aggregates its errors/warnings
 // into validationErrors/validationWarnings, which feed the aggregated isValid
 // flag (build-spec §6.5) alongside parse, version, and config errors.
-import { loadWorkspace } from "../src/loader/workspace.js";
+import { loadWorkspace } from "../packages/core/src/loader/workspace.js";
+import { initWorkspace } from "../src/cli/init.js";
 
 /**
  * Loader/context — pinned against build-spec §6, §2, §3.1 and the

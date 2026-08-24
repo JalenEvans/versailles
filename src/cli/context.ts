@@ -8,8 +8,8 @@ import { existsSync, statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import type { VersaillesContext } from "../../packages/core/src/loader/workspace.js";
 import type { ExtractorWarning } from "../extractors/types.js";
-import type { VersaillesContext } from "../loader/workspace.js";
 import type { CliError, CliResult } from "./types.js";
 
 /** Converts loader ParseError/ValidationError entries into CliError entries. */
