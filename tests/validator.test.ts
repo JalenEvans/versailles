@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { parseExpression } from "../src/core/parser.js";
-import type { ClauseKind, Node } from "../src/core/parser.js";
-import { semanticValidate } from "../src/core/validator.js";
+import { parseExpression } from "../packages/core/src/core/parser.js";
+import type { ClauseKind, Node } from "../packages/core/src/core/parser.js";
+import { semanticValidate } from "../packages/core/src/core/validator.js";
 import type {
 	ValidationResult,
 	ValidatorScope,
-} from "../src/core/validator.js";
+} from "../packages/core/src/core/validator.js";
 import type {
 	ContractsFile,
 	VersaillesContext,
-} from "../src/loader/workspace.js";
+} from "../packages/core/src/loader/workspace.js";
 
 /**
  * Semantic validator — pinned against build-spec §5.1–§5.2, the

@@ -1,8 +1,8 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
-import { computeSourceHash } from "../src/extractors/index.js";
-import type { FieldEntry } from "../src/extractors/index.js";
+import { computeSourceHash } from "../packages/frontend-ts/src/extractors/index.js";
+import type { FieldEntry } from "../packages/frontend-ts/src/extractors/index.js";
 
 /**
  * Extractor property tests — pin the structural-hash contract of

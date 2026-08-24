@@ -4,7 +4,7 @@ import { join } from "node:path";
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { extractManifests } from "../src/extractors/index.js";
+import { extractManifests } from "../packages/frontend-ts/src/extractors/index.js";
 
 /**
  * CLI property tests — pin the machine-readable contract of runCli under
@@ -90,7 +90,7 @@ beforeAll(async () => {
 	// Red phase: this rejects with ERR_MODULE_NOT_FOUND until the Power
 	// Forward implements src/cli/index.ts (the surface pinned in
 	// tests/cli.test.ts). The rejection fails every property below.
-	({ runCli } = await import("../src/cli/index.js"));
+	({ runCli } = await import("../packages/cli/src/cli/index.js"));
 
 	// Build one real, loader-valid workspace (generator fixture + source for
 	// staleness-aware commands) shared by every property run.

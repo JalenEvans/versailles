@@ -9,7 +9,7 @@ import configSchema from "../config.schema.json";
 // workspace files (build-spec §2): a default config plus two versioned stores.
 // ADR-0013 (Phase 3): predicates.json is retired; predicates now live inline in
 // contracts.json's top-level `predicates` map.
-import { initWorkspace } from "../src/cli/init.js";
+import { initWorkspace } from "../packages/cli/src/cli/init.js";
 
 /**
  * Verifies `versailles init` seeds the .versailles/ workspace (build-spec §2,

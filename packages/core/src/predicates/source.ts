@@ -6,7 +6,10 @@
  * seam (fnv1aHex) — this is NOT manifest derivation (manifest-extraction owns
  * that; contract limits) and nothing is ever invented (ADR-0005).
  */
-import { fnv1aHex, resolveExportedFunction } from "../extractors/index.js";
+import {
+	fnv1aHex,
+	resolveExportedFunction,
+} from "../../../frontend-ts/src/extractors/index.js";
 
 /**
  * Parses a `Module.functionName` sourceRef. Module = file basename without

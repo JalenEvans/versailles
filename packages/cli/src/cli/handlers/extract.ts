@@ -13,9 +13,12 @@
  */
 import { join } from "node:path";
 
-import { extractManifests, mergeManifests } from "../../extractors/index.js";
-import type { ManifestMap } from "../../extractors/types.js";
-import { loadWorkspace } from "../../loader/workspace.js";
+import { loadWorkspace } from "../../../../core/src/loader/workspace.js";
+import {
+	extractManifests,
+	mergeManifests,
+} from "../../../../frontend-ts/src/extractors/index.js";
+import type { ManifestMap } from "../../../../frontend-ts/src/extractors/types.js";
 import {
 	contextErrors,
 	expandSourceRoots,

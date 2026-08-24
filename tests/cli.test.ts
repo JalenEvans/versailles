@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { extractManifests } from "../src/extractors/index.js";
+import { extractManifests } from "../packages/frontend-ts/src/extractors/index.js";
 
 /**
  * CLI surface + machine-readable output (Phases 6+7, VERSAILLES-8 +
@@ -327,7 +327,7 @@ type RunCli = (
 let runCli!: RunCli;
 
 beforeAll(async () => {
-	({ runCli } = await import("../src/cli/index.js"));
+	({ runCli } = await import("../packages/cli/src/cli/index.js"));
 });
 
 // ── Routing (build-spec §12, ADR-0010) ─────────────────────────────────────
@@ -1095,7 +1095,7 @@ describe("generate — generator module surface (src/generator/index.js)", () =>
 
 	beforeAll(async () => {
 		try {
-			generator = await import("../src/generator/index.js");
+			generator = await import("../packages/engine/src/generator/index.js");
 		} catch (error) {
 			generatorImportError = error;
 		}

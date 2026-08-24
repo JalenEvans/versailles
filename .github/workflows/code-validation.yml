@@ -7,6 +7,19 @@ permissions:
   contents: read
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # TypeScript validation — runs unconditionally on every PR / push.
+  # Validates the full bun-workspaces monorepo:
+  #   packages/core/        – shared TypeScript library
+  #   packages/engine/      – contract engine
+  #   packages/cli/         – CLI wrapper
+  #   packages/frontend-ts/ – TypeScript frontend
+  #   packages/ir/          – intermediate representation
+  #   src/                  – root-level source
+  #
+  # Build emits: dist/packages/*/  and  dist/src/
+  # Tests import from: packages/*/src  and  src/
+  # ---------------------------------------------------------------------------
   code-validation:
     name: Code validation (lint, format, build, tests)
     runs-on: ubuntu-latest
@@ -35,3 +48,5 @@ jobs:
 
       - name: All tests
         run: bun run test
+
+  # .NET CI (dotnet build/test) will be added when frontends/csharp/ is scaffolded.

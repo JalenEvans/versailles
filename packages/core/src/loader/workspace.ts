@@ -28,7 +28,7 @@ import { Ajv, type ValidateFunction } from "ajv";
 
 import { existsSync, statSync } from "node:fs";
 
-import configSchema from "../../config.schema.json" with { type: "json" };
+import configSchema from "../../../../config.schema.json" with { type: "json" };
 import { parseExpression } from "../core/parser.js";
 import type { ClauseKind, Node, ParseError } from "../core/parser.js";
 import { semanticValidate } from "../core/validator.js";

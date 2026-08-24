@@ -6,10 +6,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { planTestCases } from "../src/generator/index.js";
-import type { PlannedSuite } from "../src/generator/index.js";
-import { loadWorkspace } from "../src/loader/workspace.js";
-import type { LoaderWarning } from "../src/loader/workspace.js";
+import { loadWorkspace } from "../packages/core/src/loader/workspace.js";
+import type { LoaderWarning } from "../packages/core/src/loader/workspace.js";
+import { planTestCases } from "../packages/engine/src/generator/index.js";
+import type { PlannedSuite } from "../packages/engine/src/generator/index.js";
 
 /**
  * Contract-first emission (VERSAILLES-149, ADR-0011) — pinned against
@@ -256,7 +256,9 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 
 				const suite = planTestCases(context);
 				// Import emitSuite dynamically to avoid circular deps in the test file.
-				const { emitSuite } = await import("../src/generator/index.js");
+				const { emitSuite } = await import(
+					"../packages/engine/src/generator/index.js"
+				);
 				const files = emitSuite(suite, "vitest", {
 					generatedDir: ".versailles/generated",
 					modulePaths: {}, // no manifest sourcePath → deterministic default
@@ -357,7 +359,9 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 
 				// Also pin the emitter-level symptom: the emitted file must NOT
 				// contain an `expect(() => ...).toThrow()` for a valid input.
-				const { emitSuite } = await import("../src/generator/index.js");
+				const { emitSuite } = await import(
+					"../packages/engine/src/generator/index.js"
+				);
 				const files = emitSuite(suite, "vitest", {
 					generatedDir: ".versailles/generated",
 					modulePaths: {},
@@ -600,7 +604,9 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 			// This is the existing V-25 behavior — the brownfield path. The test constructs
 			// a context with manifests present but the op missing from the methods map.
 			// This should warn+skip (UNPLANNABLE_OPERATION warning, empty cases).
-			const { parseExpression } = await import("../src/core/parser.js");
+			const { parseExpression } = await import(
+				"../packages/core/src/core/parser.js"
+			);
 			const contracts = {
 				version: "1.0",
 				contracts: {

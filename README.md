@@ -172,3 +172,7 @@ no separate `predicates.json`, no staged directory, no review step.
 - **Master build spec:** [docs/build-spec.md](docs/build-spec.md)
 - **Contract language:** [docs/specs/contract-language.md](docs/specs/contract-language.md)
 - **Contributor map:** [docs/index.md](docs/index.md)
+
+## Trademark
+
+Versailles™ is a trademark of Jalen Evans. Common-law trademark rights accrue from use in commerce; registration is deferred. Use of the name for derived works or distributions requires permission.

@@ -15,7 +15,7 @@
  * generate handler merges these into CliResult.warnings (non-blocking, exit 0).
  * Emitters ignore the field entirely.
  */
-import type { LoaderWarning } from "../loader/workspace.js";
+import type { LoaderWarning } from "../../../core/src/loader/workspace.js";
 
 /** §9.1–§9.2 case kinds. */
 export type CaseKind =

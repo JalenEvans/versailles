@@ -17,6 +17,13 @@ How Versailles stays language-agnostic at its core while shipping three language
 - The seams exist from day one even though v1 could have shipped one pair; adding language #2 is a new plugin, not a forklift refactor.
 - Consequence: the **plugin interfaces are public seams** — they must be defined early and treated as contracts (registered via the contract pipeline), not internal details.
 
+**Current caveat (predicate source verification):** the predicates-verification path in
+`packages/core/src/predicates/source.ts` reuses the TypeScript frontend's static-analysis
+seam (`resolveExportedFunction`, `fnv1aHex`) to mechanically verify predicate sourceRefs
+(build-spec §3.4). This is an intentional, documented core → frontend-ts dependency that
+inverts the strict ADR-0008 layering; a future non-TS frontend (e.g. C# / Roslyn) must
+generalize this seam so predicate verification is not TS-specific.
+
 ## v1 matrix (ADR-0009)
 
 | # | Source language | Manifest extractor | Test framework | Output emitter | Sequencing |

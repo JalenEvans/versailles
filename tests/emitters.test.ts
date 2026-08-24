@@ -7,19 +7,12 @@ import { fileURLToPath } from "node:url";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
-import { parseExpression } from "../src/core/parser.js";
-import type { ClauseKind, Node, ParseError } from "../src/core/parser.js";
-import { extractManifests } from "../src/extractors/index.js";
-// The generator core (src/generator/) is implemented; these value imports
-// resolve at runtime. The assertions below pin the xunit/pytest emitter
-// contract the implementation must satisfy.
-import { emitSuite, planTestCases } from "../src/generator/index.js";
+import { parseExpression } from "../packages/core/src/core/parser.js";
 import type {
-	EmittedFile,
-	EmitterFramework,
-	PlannedCase,
-	PlannedSuite,
-} from "../src/generator/index.js";
+	ClauseKind,
+	Node,
+	ParseError,
+} from "../packages/core/src/core/parser.js";
 import type {
 	ContractClause,
 	ContractsFile,
@@ -27,7 +20,21 @@ import type {
 	PredicatesFile,
 	VersaillesContext,
 	WorkspaceConfig,
-} from "../src/loader/workspace.js";
+} from "../packages/core/src/loader/workspace.js";
+// The generator core (src/generator/) is implemented; these value imports
+// resolve at runtime. The assertions below pin the xunit/pytest emitter
+// contract the implementation must satisfy.
+import {
+	emitSuite,
+	planTestCases,
+} from "../packages/engine/src/generator/index.js";
+import type {
+	EmittedFile,
+	EmitterFramework,
+	PlannedCase,
+	PlannedSuite,
+} from "../packages/engine/src/generator/index.js";
+import { extractManifests } from "../packages/frontend-ts/src/extractors/index.js";
 
 /**
  * xUnit and pytest emitters (ADR-0008/0009, build-spec §9.4) — regression

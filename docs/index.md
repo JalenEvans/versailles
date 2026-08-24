@@ -13,8 +13,17 @@ versailles
 ├── .versailles/      ← tool state: config.json, contracts.json (with top-level predicates
 │   │                    map), manifests.json, generated/ — versioned and loaded as one unit
 │   └── generated/    ← deterministic generator output (tool-owned, never hand-edited)
-├── src/              ← implemented: core parser+validator, joint loader, TS extractor, generator + vitest/xUnit/pytest
-│   │                    emitters, five-command CLI (src/cli + bin/versailles)
+├── packages/            ← bun workspaces monorepo ("workspaces": ["packages/*"]); packages are
+│   │                     @versailles/*; per-package licensing recorded in ADR-0015
+│   │                     (core/engine/cli/frontend-ts MIT, ir Apache-2.0)
+│   ├── core/src/        ← grammar parser+validator (core/), joint loader (loader/), predicates (predicates/)
+│   ├── engine/src/      ← deterministic generator + vitest/xUnit/pytest emitters (generator/)
+│   ├── cli/src/         ← five-command CLI (cli/)
+│   ├── frontend-ts/src/ ← TypeScript manifest extractor (extractors/)
+│   └── ir/              ← VIR schema placeholder (Apache-2.0, scaffold-only; full schema deferred to D1 phase)
+├── src/                 ← public package entry: index.ts (packageName const)
+│   ├── index.ts         ← packageName const export
+│   └── emitters/        ← empty placeholder dir
 ├── tests/            ← implemented: init, config-schema enum, smoke, parser, validator, loader, generator,
 │                       extractor, CLI (unit + property, vitest)
 ├── examples/         ← committed reference example: order-service/ — a real TypeScript service with a
@@ -39,11 +48,11 @@ Module boundaries per the build spec (§13 milestones). Contracts/specs are regi
 
 | Module | Path | Owns | Spec | Contract |
 |--------|------|------|------|----------|
-| Contract language (grammar + parser + validator) | `src/core/parser`, `src/core/validator` | expression grammar, AST, semantic checks, structured error contract | [docs/specs/contract-language.md](specs/contract-language.md) | [draft](contracts/contract-language.contract.yaml) |
-| Loader / context | `src/loader` | unified versioned context, version gates, scoped extraction helper | [docs/specs/workspace-context.md](specs/workspace-context.md) | [draft](contracts/workspace-context.contract.yaml) |
-| Manifest extractor | `src/extractors` | source → `manifests.json`, structural `sourceHash` | [docs/specs/manifest-extraction.md](specs/manifest-extraction.md) | [draft](contracts/manifest-extraction.contract.yaml) |
-| Deterministic generator | `src/generator` | test-case IR → test files, `generated/coverage.json` | [docs/specs/deterministic-generation.md](specs/deterministic-generation.md) | [draft](contracts/deterministic-generation.contract.yaml) |
-| CLI | `src/cli` | command surface (`init`, `extract-manifests`, `validate`, `check`, `generate`), machine-readable structured output + exit codes for CI and external consumers | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/versailles.contract.yaml) |
+| Contract language (grammar + parser + validator) | `packages/core/src/core/parser`, `packages/core/src/core/validator` | expression grammar, AST, semantic checks, structured error contract | [docs/specs/contract-language.md](specs/contract-language.md) | [draft](contracts/contract-language.contract.yaml) |
+| Loader / context | `packages/core/src/loader` | unified versioned context, version gates, scoped extraction helper | [docs/specs/workspace-context.md](specs/workspace-context.md) | [draft](contracts/workspace-context.contract.yaml) |
+| Manifest extractor | `packages/frontend-ts/src/extractors` | source → `manifests.json`, structural `sourceHash` | [docs/specs/manifest-extraction.md](specs/manifest-extraction.md) | [draft](contracts/manifest-extraction.contract.yaml) |
+| Deterministic generator | `packages/engine/src/generator` | test-case IR → test files, `generated/coverage.json` | [docs/specs/deterministic-generation.md](specs/deterministic-generation.md) | [draft](contracts/deterministic-generation.contract.yaml) |
+| CLI | `packages/cli/src/cli` | command surface (`init`, `extract-manifests`, `validate`, `check`, `generate`), machine-readable structured output + exit codes for CI and external consumers | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/versailles.contract.yaml) |
 
 Each module maps to a [bounded context](domains/index.md); the shared vocabulary is the [ubiquitous language](glossary.md).
 
@@ -57,7 +66,7 @@ Each module maps to a [bounded context](domains/index.md); the shared vocabulary
 
 ## Run / Build / Test
 
-The v1 pipeline is implemented: parser/validator (`src/core`), joint loader (`src/loader`), TypeScript manifest extractor (`src/extractors`), deterministic generator with the vitest/xUnit/pytest emitters (`src/generator`), and the five-command machine-readable CLI (`src/cli` + `bin/versailles`). Tests cover each module (unit + property).
+The v1 pipeline is implemented: parser/validator (`packages/core/src/core`), joint loader (`packages/core/src/loader`), TypeScript manifest extractor (`packages/frontend-ts/src/extractors`), deterministic generator with the vitest/xUnit/pytest emitters (`packages/engine/src/generator`), and the five-command machine-readable CLI (`packages/cli/src/cli` + `bin/versailles`). Tests cover each module (unit + property).
 
 A committed reference example lives at `examples/order-service/` — `bun run example:generate` rebuilds, re-extracts, regenerates, and asserts the output is byte-identical to the committed workspace.
 

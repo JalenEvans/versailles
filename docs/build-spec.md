@@ -544,13 +544,21 @@ For each operation:
 - Regeneration is idempotent and full-file (the `generated/` directory is fully
   tool-owned — never hand-edited, always regenerated from `contracts.json`).
 
-### 9.5 v2 stretch: SMT-backed generation
+### 9.5 SMT-backed generation (soundness requirement, roadmap §16)
+
+SMT-backed witness synthesis is a **soundness requirement** for the L3/L4 code-path
+analysis engine (ADR-0014), not a v1 stretch goal. V1 does not ship SMT-based synthesis —
+that sequencing is unchanged — but the framing shifts from "stretch" to "soundness
+requirement, sequenced after v1" per the roadmap phase sequence (ADR-0014 / roadmap §16).
 
 - Translate the AST (§4.3) to SMT-LIB, use Z3 to synthesize precise satisfying/violating
   witnesses instead of heuristic boundary values, particularly valuable for compound
   boolean preconditions where heuristic partition generation misses interaction cases.
+  This capability is required for the L3/L4 engine's soundness guarantees (roadmap §4).
 - Design the AST and grammar now to keep this translation mechanical later (already true
-  given the grammar's restricted, side-effect-free shape).
+  given the grammar's restricted, side-effect-free shape). The grammar's side-effect-free
+  shape is a deliberate design-for-it decision that keeps the SMT-LIB translation
+  mechanical when the L3/L4 engine phases begin.
 
 ---
 
@@ -593,9 +601,27 @@ parser-sanity view (raw `expr` + parsed AST) is folded into `validate --verbose`
 | `versailles check` | CI-mode: validate + staleness check, proper exit codes |
 | `versailles generate` | Run deterministic test generator — contract-first from `contracts.json` alone (greenfield) or extract-first against `manifests.json` (brownfield); write to `generated/` |
 
+## 12.2 Monorepo layout (bun workspaces)
+
+The repo is a bun workspaces monorepo (`"workspaces": ["packages/*"]`); packages are
+`@versailles/*`. Per ADR-0014 D3, the restructure to this layout landed in Phase 0:
+
+```
+versailles
+├── packages/core/         ← grammar parser + validator (core/), joint loader (loader/), predicates (predicates/)
+├── packages/engine/       ← deterministic generator + vitest/xUnit/pytest emitters (generator/)
+├── packages/cli/          ← five-command machine-readable CLI (cli/)
+├── packages/frontend-ts/  ← TypeScript manifest extractor (extractors/)
+└── packages/ir/           ← VIR schema placeholder (Apache-2.0, scaffold-only; full schema deferred to D1 phase)
+```
+
+Root `src/index.ts` is the public package entry (`packageName` const). Per-package
+licensing (core/engine/cli/frontend-ts MIT, `packages/ir` Apache-2.0) is recorded in
+ADR-0015 (§15).
+
 ---
 
-## 13. Build milestones (implementation order; 1–8 shipped, 9 is v2 stretch)
+## 13. Build milestones (implementation order; roadmap phase sequence per ADR-0014)
 
 1. **Grammar + parser** — standalone, unit-testable against hand-written `contracts.json`
    fixtures. No dependency on anything else.
@@ -612,7 +638,16 @@ parser-sanity view (raw `expr` + parsed AST) is folded into `validate --verbose`
 8. **Predicate registry tooling** — **superseded by ADR-0013.** The registration CLI
    (`register-predicate` / `verify-purity` / `remind-unverified`) is removed; predicates
    are declared inline in `contracts.json` and verified by `validate`.
-9. **SMT-backed generation (v2 stretch)** — only after v1 pipeline is proven end-to-end.
+9. **Roadmap phase sequence (per ADR-0014 / roadmap §16)** — after v1 (milestones 1–8) is
+   proven end-to-end, the L3/L4 analysis engine proceeds through the roadmap phase
+   sequence: **Phase 0** foundation (licensing/phase-0 sprint, current), then L3/L4 engine
+   phases **1** Roslyn CFG viability spike, **2** D1 decision + VIR design, **3** CFG
+   front-end (first VIR front-end), **4** branch coverage with contract oracle (L3),
+   **5** spec-vs-code divergence report, **6** bounded path enumeration + incremental
+   pruning (L4), **7** compositional summaries + memory model, **8** paid packaging +
+   evidence layer. SMT-backed generation (§9.5) is a soundness requirement for this engine,
+   not a stretch goal. The roadmap (external Llama plans / Obsidian) is the authoritative
+   source for phase details.
 
 ---
 
@@ -627,6 +662,33 @@ parser-sanity view (raw `expr` + parsed AST) is folded into `validate --verbose`
 | Rejection idiom for precondition-violation tests | Configurable in `config.json`, default "throws" |
 | Multi-language support | Manifest extractor pluggable per-language; grammar/validator/generator stay language-agnostic |
 | Package/CLI naming | Package `versailles-dbc` (or scoped), CLI binary `versailles` via `bin` field |
+
+---
+
+## 15. Licensing
+
+The licensing model is recorded in detail in
+[ADR-0015](decisions/0015-licensing-and-contribution-model.md); this section is the
+build-spec summary.
+
+### 15.3 Per-package licensing layout
+
+- `packages/core`, `packages/engine`, `packages/cli`, `packages/frontend-ts`: **MIT** —
+  free tier (L0–L2), permanent.
+- `packages/ir` (VIR schema): **Apache-2.0**.
+- `versailles-pro` (L3/L4 advanced code-analysis + evidence layer): separate private
+  repo — the commercial tier, not a relicensing of the core.
+
+### 15.7 Planned bundled artifacts
+
+Third-party artifacts planned to ship inside bundled packages are tracked in
+`THIRD-PARTY-NOTICES.md` (root); their license notices must travel with any bundled
+artifact when shipped.
+
+Contributions require a CLA via EasyCLA (ICLA + CCLA, Apache ICLA / Harmony templates
+unmodified). The core-license commitment — the free tier stays MIT permanently — is
+published in [CONTRIBUTING.md](../CONTRIBUTING.md) and enforced by the per-package
+layout above.
 
 ---
 

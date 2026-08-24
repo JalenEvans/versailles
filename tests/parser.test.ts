@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseExpression } from "../src/core/parser.js";
+import { parseExpression } from "../packages/core/src/core/parser.js";
 
 /**
  * Parser contract — pinned against build-spec §4.1–§4.4.
