@@ -14,13 +14,13 @@ import { dirname, join, relative, sep } from "node:path";
 import {
 	type ManifestsFile,
 	loadWorkspace,
-} from "../../../packages/core/src/loader/workspace.js";
+} from "../../../../core/src/loader/workspace.js";
 import {
 	coverageManifest,
 	emitSuite,
 	planTestCases,
-} from "../../../packages/engine/src/generator/index.js";
-import type { EmitOptions } from "../../../packages/engine/src/generator/index.js";
+} from "../../../../engine/src/generator/index.js";
+import type { EmitOptions } from "../../../../engine/src/generator/index.js";
 import { contextErrors, contextWarnings, messageOf } from "../context.js";
 import type { CliResult } from "../types.js";
 

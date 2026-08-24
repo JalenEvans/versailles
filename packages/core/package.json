@@ -7,5 +7,7 @@
 	"types": "./dist/index.d.ts",
 	"license": "MIT",
 	"description": "Grammar, parser, and validator for Versailles contracts",
-	"dependencies": {}
+	"dependencies": {
+		"@versailles/frontend-ts": "workspace:*"
+	}
 }

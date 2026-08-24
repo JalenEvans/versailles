@@ -7,14 +7,14 @@ import {
 	computeSourceHash,
 	extractManifests,
 	mergeManifests,
-} from "../src/extractors/index.js";
+} from "../packages/frontend-ts/src/extractors/index.js";
 import type {
 	ExtractorResult,
 	ExtractorWarning,
 	FieldEntry,
 	ManifestEntry,
 	ManifestMap,
-} from "../src/extractors/index.js";
+} from "../packages/frontend-ts/src/extractors/index.js";
 
 /**
  * Manifest extractor — pinned against build-spec §3.3 (manifests.json,

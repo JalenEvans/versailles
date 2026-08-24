@@ -16,10 +16,18 @@
     "packages/cli": {
       "name": "@versailles/cli",
       "version": "0.1.0",
+      "dependencies": {
+        "@versailles/core": "workspace:*",
+        "@versailles/engine": "workspace:*",
+        "@versailles/frontend-ts": "workspace:*",
+      },
     },
     "packages/core": {
       "name": "@versailles/core",
       "version": "0.1.0",
+      "dependencies": {
+        "@versailles/frontend-ts": "workspace:*",
+      },
     },
     "packages/engine": {
       "name": "@versailles/engine",

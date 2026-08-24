@@ -194,7 +194,7 @@ let tempRoot: string;
 
 beforeAll(async () => {
 	tempRoot = await mkdtemp(join(tmpdir(), "versailles-vv-"));
-	({ runCli } = await import("../src/cli/index.js"));
+	({ runCli } = await import("../packages/cli/src/cli/index.js"));
 });
 
 afterAll(async () => {

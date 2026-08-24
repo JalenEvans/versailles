@@ -36,7 +36,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const PACKAGE_JSON_PATH = join(REPO_ROOT, "package.json");
 const EXAMPLE_ROOT = join(REPO_ROOT, "examples");
-const DISPATCH_SOURCE_PATH = join(REPO_ROOT, "src", "cli", "index.ts");
+const DISPATCH_SOURCE_PATH = join(
+	REPO_ROOT,
+	"packages",
+	"cli",
+	"src",
+	"cli",
+	"index.ts",
+);
 
 // Two full example:generate runs (each builds + regenerates) plus a git call:
 // generous so CI is never flaky, bounded so a hung script fails the test.

@@ -212,7 +212,7 @@ type RunCli = (
 let runCli!: RunCli;
 
 beforeAll(async () => {
-	({ runCli } = await import("../src/cli/index.js"));
+	({ runCli } = await import("../packages/cli/src/cli/index.js"));
 });
 
 describe("runCli — JSON-round-trippable envelope + clean exit 0 (VERSAILLES-16)", () => {

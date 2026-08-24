@@ -34,7 +34,7 @@ import type {
 	PlannedCase,
 	PlannedSuite,
 } from "../packages/engine/src/generator/index.js";
-import { extractManifests } from "../src/extractors/index.js";
+import { extractManifests } from "../packages/frontend-ts/src/extractors/index.js";
 
 /**
  * xUnit and pytest emitters (ADR-0008/0009, build-spec §9.4) — regression

@@ -6,5 +6,10 @@
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"license": "MIT",
-	"description": "Versailles CLI with five commands"
+	"description": "Versailles CLI with five commands",
+	"dependencies": {
+		"@versailles/core": "workspace:*",
+		"@versailles/engine": "workspace:*",
+		"@versailles/frontend-ts": "workspace:*"
+	}
 }

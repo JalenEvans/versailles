@@ -12,8 +12,11 @@
  */
 import { join } from "node:path";
 
-import { loadWorkspace } from "../../../packages/core/src/loader/workspace.js";
-import { computeSourceHash, extractManifests } from "../../extractors/index.js";
+import { loadWorkspace } from "../../../../core/src/loader/workspace.js";
+import {
+	computeSourceHash,
+	extractManifests,
+} from "../../../../frontend-ts/src/extractors/index.js";
 import {
 	contextErrors,
 	contextWarnings,
