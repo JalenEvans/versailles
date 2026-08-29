@@ -169,7 +169,7 @@ function renderComponentFile(
 				lines.push(`import { ${name} } from "${specifier}";`);
 			}
 		}
-		lines.push('import { fc } from "fast-check";');
+		lines.push('import fc from "fast-check";');
 	}
 	lines.push("");
 

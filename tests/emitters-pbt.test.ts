@@ -80,7 +80,7 @@ import type {
  *
  * import { OrderService } from "../../src/OrderService.js";
  * import { isPositive } from "../../src/OrderService.js";
- * import { fc } from "fast-check";
+ * import fc from "fast-check";
  * ```
  *
  * Property blocks render INSIDE the operation's describe, AFTER that
@@ -195,7 +195,7 @@ import type {
  *   "<specifier>"` for every predicate whose name appears in the component's
  *   property clause code strings, ordered by first appearance across the
  *   component's descriptors in plan order, placed after the component import
- *   and before `import { fc } from "fast-check"`. Evidence from the committed
+ *   and before `import fc from "fast-check"`. Evidence from the committed
  *   example: contracts.json predicates.isPositive.source = "OrderService.isPositive"
  *   (a `<Module>.<function>` sourceRef) and manifests.json OrderService.sourcePath
  *   = "src/OrderService.ts" — the predicate is CO-LOCATED with the component,
@@ -644,7 +644,7 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		const account = accountFile(files);
 		expect(account).toBeDefined();
 		// The fast-check import appears in the header, after the component import.
-		expect(account?.content).toContain('import { fc } from "fast-check";');
+		expect(account?.content).toContain('import fc from "fast-check";');
 		// The compound satisfies descriptor renders an fc.assert block.
 		expect(account?.content).toContain(
 			'it("AccountService.withdraw.property-satisfies-0", () => {',
@@ -779,7 +779,7 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		const componentImport = order?.content.indexOf(
 			'import { OrderService } from "../../src/OrderService.js";',
 		);
-		const fcImport = order?.content.indexOf('import { fc } from "fast-check";');
+		const fcImport = order?.content.indexOf('import fc from "fast-check";');
 		expect(componentImport).toBeGreaterThan(-1);
 		expect(fcImport).toBeGreaterThan(-1);
 		expect(orderImport).toBeGreaterThan(componentImport ?? -1);
@@ -929,7 +929,7 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		// The returns descriptor never falls back to throws.
 		expect(customer?.content).not.toContain("toThrow");
 		// The fast-check import is present in the returns descriptor's file too.
-		expect(customer?.content).toContain('import { fc } from "fast-check";');
+		expect(customer?.content).toContain('import fc from "fast-check";');
 	});
 
 	it("renders the full property block layout byte-for-byte — INSTANCE satisfies with positional params, filter line, oracle assertion (GAP 1 + GAP 3)", () => {

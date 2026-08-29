@@ -9,5 +9,9 @@
   "generatedDir": ".versailles/generated",
   "staleness": {
     "blockOnStale": true
+  },
+  "propertyBased": {
+    "enabled": true,
+    "numRuns": 100
   }
 }
