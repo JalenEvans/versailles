@@ -18,9 +18,9 @@ This is a formal commitment, not an internal intent. The free tier (contract gra
 
 **Contributions (pull requests) require signing a Contributor License Agreement before merging.**
 
-The CLA mechanism is EasyCLA (Linux Foundation), with both an Individual CLA (ICLA) and a Corporate CLA (CCLA) available. Templates are Apache ICLA / Harmony, used unmodified.
+The CLA mechanism is **CLA Assistant** (cla-assistant.io); contributors sign via the CLA Assistant bot on their first PR; templates are derived from the Apache ICLA v2.2 and Corporate CLA, adapted for Versailles per the ASF's reuse permission (see [ADR-0016](docs/decisions/0016-cla-assistant-derived-templates.md)).
 
-You'll be prompted to sign via EasyCLA when you open your first PR. The CLA must be signed before your PR can merge. For the full rationale (why CLA over DCO, why EasyCLA, the open-core model), see [ADR-0015](docs/decisions/0015-licensing-and-contribution-model.md).
+You'll be prompted to sign via the CLA Assistant bot when you open your first PR. The CLA must be signed before your PR can merge. For the rationale on the CLA mechanism (why CLA over DCO, why CLA Assistant over EasyCLA), see [ADR-0016](docs/decisions/0016-cla-assistant-derived-templates.md); for the overall licensing model (MIT core, open-core commitment), see [ADR-0015](docs/decisions/0015-licensing-and-contribution-model.md).
 
 ## Development Setup
 
