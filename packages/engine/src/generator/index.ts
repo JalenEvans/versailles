@@ -8,6 +8,12 @@
  * on the target framework through the emitter plugin seam (§9.4) across the
  * full v1 matrix (vitest | xunit | pytest, ADR-0009); an unknown framework is
  * rejected at the seam.
+ *
+ * derivePropertySeed (ADR-0017) derives the reproducible fast-check seed for
+ * seeded property-based emission from the ordered source clause-id stream plus
+ * the grammar version — the PBT IR types (PropertyOutcome / ArbitrarySpec /
+ * PropertyClause / PropertyDescriptor) describe the property blocks the
+ * planner produces and the emitter renders.
  */
 import { emitPytest } from "./emitters/pytest.js";
 import { emitVitest } from "./emitters/vitest.js";
@@ -19,8 +25,9 @@ import type {
 	PlannedSuite,
 } from "./ir.js";
 import { coverageManifest, planTestCases } from "./planner.js";
+import { derivePropertySeed } from "./seed.js";
 
-export { planTestCases, coverageManifest };
+export { planTestCases, coverageManifest, derivePropertySeed };
 
 /**
  * Renders a planned suite into full-file output for the target framework.
@@ -52,6 +59,7 @@ export function emitSuite(
 }
 
 export type {
+	ArbitrarySpec,
 	AssertionDescriptor,
 	CaseKind,
 	CoverageManifest,
@@ -62,4 +70,7 @@ export type {
 	OperationCaseGroup,
 	PlannedCase,
 	PlannedSuite,
+	PropertyClause,
+	PropertyDescriptor,
+	PropertyOutcome,
 } from "./ir.js";

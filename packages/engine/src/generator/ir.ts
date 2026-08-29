@@ -132,3 +132,60 @@ export type CoverageManifest = { coverage: Record<string, string[]> };
 
 /** Frameworks the emitter seam can dispatch to (ADR-0008/0009). */
 export type EmitterFramework = "vitest" | "xunit" | "pytest";
+
+// ── PBT IR (ADR-0017) ────────────────────────────────────────────────────────
+//
+// The property-based test IR: everything a property block needs to plan and
+// emit, mirroring the PlannedCase conventions above (<component>.<operation>
+// ids, ADR-0007 rejectionIdiom passthrough, §9.3 traces). Like the rest of the
+// IR it is framework-agnostic — no framework strings, only the rejection idiom
+// NAME passthrough that emitters translate into real assertion syntax.
+
+/** The three planned property outcomes (ADR-0017). */
+export type PropertyOutcome = "satisfies" | "rejects" | "invariant-preserving";
+
+/**
+ * Per-param arbitrary derivation inputs. `kind` selects the fast-check
+ * arbitrary the emitter renders (number → fc.integer within `bounds` when
+ * present, enum → fc.constantFrom over `members`, ...), `typeRef` carries the
+ * raw source type reference for type-level mapping.
+ */
+export type ArbitrarySpec = {
+	/** Operation param name. */
+	param: string;
+	/** Raw typeRef from ContractOperation.params[].type. */
+	typeRef: string;
+	kind: "number" | "string" | "boolean" | "enum";
+	/** Numeric constraint bounds (planner-derived). */
+	bounds?: { min: number; max: number };
+	/** Enum members, when kind === "enum". */
+	members?: unknown[];
+};
+
+/** A codegen'd clause predicate — the oracle — paired with its source clause id. */
+export type PropertyClause = {
+	/** Source clause id — the coverage trace key (§9.3). */
+	clauseId: string;
+	/** Codegen'd predicate text (the oracle). */
+	code: string;
+};
+
+/**
+ * A planned property block. `params` carries the per-param arbitrary
+ * derivation inputs, `clauses` the codegen'd clause predicates (the oracle),
+ * `outcome` the expected result, `rejectionIdiom` the ADR-0007 passthrough on
+ * rejects, and `traces` the clause ids for coverage mapping (§9.3).
+ */
+export type PropertyDescriptor = {
+	/** Unique id, "<component>.<operation>.property-<kind>-<n>". */
+	id: string;
+	component: string;
+	operation: string;
+	params: ArbitrarySpec[];
+	clauses: PropertyClause[];
+	outcome: PropertyOutcome;
+	/** ADR-0007 passthrough on rejects; read from config, default "throws". */
+	rejectionIdiom?: string;
+	/** Clause ids for coverage mapping (§9.3). */
+	traces: string[];
+};
