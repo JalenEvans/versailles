@@ -459,6 +459,15 @@ function referencedPredicates(
  *   target is derived inside the callback (`const <target> = <source>;`), the
  *   equality oracle is asserted but NEVER filtered (the mirror guarantees it),
  *   and the call uses ALL descriptor params in order.
+ * - FIELD-BOUND (Center B1) — the block's OWN asserted multi-param oracle
+ *   references a manifest FIELD (a callback param not in descriptor.params,
+ *   e.g. `status == newStatus` where status is instance state). No record or
+ *   filter can bound the field — it is never a sampled param — so the block
+ *   samples ONLY the op-param arbitraries, binds the component instance
+ *   (`const instance = new <Component>();`), calls with the sampled params
+ *   (positional, matching the concrete-case call shape), and asserts the
+ *   oracle with the field mapped to `instance.<field>`. No mirror const, no
+ *   record, no filter.
  * - RECORD — ANY guard oracle is multi-param non-mirror. No per-param
  *   arbitrary declarations, no per-param `.filter(...)`: the record carries
  *   the non-mirror params' arbitraries inline, a record-level `.filter(({
@@ -554,15 +563,22 @@ function renderPropertyBlock(
 	//     target: the mirror construction (`const <target> = <source>;`)
 	//     guarantees it, so it is asserted but NEVER filtered.
 	//   multi-param non-mirror — a multi-param oracle with no mirror target:
-	//     its joint region needs the record + bounded filter.
+	//     its joint region needs the record + bounded filter — UNLESS the
+	//     block's OWN asserted oracle references a manifest FIELD, in which
+	//     case it needs the FIELD-BOUND layout (Center B1).
 	//   single-param — the per-param `.filter(...)` layout below.
 	//
 	// A descriptor with a mirror param and NO multi-param non-mirror oracle
 	// renders the MIRROR layout; ANY multi-param non-mirror oracle renders the
 	// RECORD layout (the planner only passes joint-plannable descriptors, so
-	// reaching here is expected — never the old belt-and-suspenders error);
-	// otherwise every guard oracle is single-param and the per-param layout is
-	// byte-identical to the pre-joint emitter.
+	// reaching here is expected — never the old belt-and-suspenders error) —
+	// EXCEPT when the block's own asserted multi-param oracle references a
+	// manifest field (a param not in descriptor.params): that oracle can never
+	// be destructured from the record nor filter the sampled joint region, so
+	// the block renders the FIELD-BOUND layout (op-param arbitraries only, the
+	// component instance bound, the field mapped to instance.<field> in the
+	// assertion). Otherwise every guard oracle is single-param and the
+	// per-param layout is byte-identical to the pre-joint emitter.
 	const multiParamNonMirror = guardOracles.filter(
 		(oracle) =>
 			oracle.oracleParams.length > 1 &&
@@ -571,6 +587,18 @@ function renderPropertyBlock(
 	const useMirrorLayout =
 		mirrorTargets.size > 0 && multiParamNonMirror.length === 0;
 	const useRecordLayout = !useMirrorLayout && multiParamNonMirror.length > 0;
+	// Center B1 FIELD-BOUND detection: the record layout would be chosen, but
+	// the block's OWN asserted oracle is a multi-param oracle referencing a
+	// manifest FIELD (a callback param absent from descriptor.params — the
+	// same instance-bound signal the single-param layout uses). Sampling a
+	// record cannot bound such an oracle — the field is instance state, never a
+	// sampled param — so the record/filter layout is wrong for it.
+	const fieldBound =
+		useRecordLayout &&
+		descriptor.clauses.some((clause) => {
+			const ps = oracleParamsOf(clause.code);
+			return ps.length > 1 && ps.some((param) => !paramNames.has(param));
+		});
 
 	const ownClauseIds = new Set(
 		descriptor.clauses.map((clause) => clause.clauseId),
@@ -629,6 +657,59 @@ function renderPropertyBlock(
 		return lines;
 	}
 
+	// ── Field-bound layout (Center B1) ──────────────────────────────────────
+	// A multi-param oracle in the block's OWN clauses references a manifest
+	// FIELD (a callback param not in descriptor.params — e.g. `status ==
+	// newStatus` where status is instance state). No record/filter can bound
+	// it (the field is never a sampled param), so the block samples ONLY the
+	// op-param arbitraries, binds the component instance, calls with the
+	// sampled params (positional, matching the concrete-case call shape), and
+	// asserts the oracle with the field mapped to instance.<field> — no mirror
+	// const, no record, no filter.
+	if (fieldBound) {
+		// Sample only the op-param arbitraries (a field-bound descriptor never
+		// carries a mirror target).
+		for (const spec of descriptor.params) {
+			assertIdentifier(spec.param, "param name");
+			lines.push(`\t\tconst ${spec.param} = ${renderArbitrary(spec)};`);
+		}
+		// The block EMBEDS exactly the guard oracles it uses — its own asserted
+		// clauses (the field-referencing oracle is asserted, never filtered) —
+		// in guard order, never a dead const.
+		const embedded = guardOracles.filter((oracle) =>
+			ownClauseIds.has(oracle.clauseId),
+		);
+		for (const oracle of embedded) {
+			lines.push(`\t\tconst ${oracle.constName} = ${oracle.code};`);
+		}
+		lines.push(
+			`\t\tconst prop = fc.property(${params.join(", ")}, (${params.join(", ")}) => {`,
+		);
+		// Bind the component instance inside the callback, before the call.
+		lines.push(`\t\t\tconst instance = new ${descriptor.component}();`);
+		const call = renderPropertyCall(descriptor, methods, true);
+		lines.push(`\t\t\t${call};`);
+		// Oracle assertion: params stay as callback locals; the field param is
+		// read from the bound instance (instance.<field>).
+		const asserted = descriptor.clauses.map((clause) => ({
+			constName: sanitizeId(clause.clauseId),
+			oracleParams: oracleParamsOf(clause.code),
+		}));
+		for (const a of asserted) {
+			const args = a.oracleParams
+				.map((p) => (paramNames.has(p) ? p : `instance.${p}`))
+				.join(", ");
+			lines.push(`\t\t\texpect(${a.constName}(${args})).toBe(true);`);
+		}
+		lines.push("\t\t});");
+		lines.push(
+			`\t\tfc.assert(prop, { seed: ${String(descriptor.seed)}, numRuns: ${String(propertyNumRuns)} });`,
+		);
+		lines.push("\t});");
+		lines.push("");
+		return lines;
+	}
+
 	// ── Record layout ────────────────────────────────────────────────────────
 	// No per-param arbitrary declarations, no per-param `.filter(...)` — the
 	// record carries the non-mirror params' arbitraries inline and the
@@ -644,6 +725,17 @@ function renderPropertyBlock(
 				oracle.oracleParams.length > 0 &&
 				oracle.oracleParams.every((param) => sourceParams.has(param)),
 		);
+		// Center S2 (belt-and-suspenders): a record layout whose computed
+		// record filter oracle list is EMPTY — every guard oracle is
+		// field-referencing and was excluded above — would emit
+		// `.filter(({ a, b }) => )` syntax garbage. The planner's B1 gate
+		// routes field-referencing descriptors to the FIELD-BOUND layout, so
+		// reaching here is an internal invariant violation — refuse loudly.
+		if (recordFilterOracles.length === 0) {
+			throw new Error(
+				`Refusing to emit: record-layout property "${descriptor.id}" has an empty record filter — every guard oracle is field-referencing and cannot be destructured from the record. The planner's B1 gate should have routed this descriptor to the FIELD-BOUND layout; refusing loudly instead of emitting \`filter(({ ... }) => )\` syntax garbage.`,
+			);
+		}
 		const filterConsts = new Set(
 			recordFilterOracles.map((oracle) => oracle.constName),
 		);

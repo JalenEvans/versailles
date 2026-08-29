@@ -1380,8 +1380,8 @@ function execSingleParamContext(): VersaillesContext {
  * and bounded couplings route to joint sampling, but a sum compared by `==` is
  * a thin hyperslice of the joint space, not a bounded region, so it stays
  * PROPERTY_UNPLANNABLE. (The old coupled-bounded fixture
- * `a >= 0 and b >= 0 and a + b <= 100` is now PLANNED — its per-param record
- * layout lands with the Chunk 2 emitter rework.)
+ * `a >= 0 and b >= 0 and a + b <= 100` is now PLANNED — its record + bounded
+ * filter layout is pinned in tests/emitters-pbt-joint.test.ts.)
  */
 function execMultiParamContext(): VersaillesContext {
 	const contracts: ContractsFile = {
@@ -1425,6 +1425,49 @@ const EXEC_ORDER_SOURCE = `export class OrderService {
 /** The REAL vitest runner (vitest.mjs under process.execPath — the established emitters.test.ts harness). */
 function execVitestBin(): string {
 	return join(EXEC_REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
+}
+
+/**
+ * The hardened W1 execution helper — spawns the REAL vitest runner in the
+ * temp workspace (shared harness hardening with emitters-pbt-joint.test.ts:
+ * the spawned runner can transiently die on startup under load — spawn
+ * timeout / no summary — while the generated property itself is fine). A
+ * GENUINE test failure always prints the "Test Files ... failed" summary, so:
+ *   - exit 0 → success, return immediately;
+ *   - a run with NO vitest summary (or killed by the 60s timeout) is a
+ *     harness flake → retry (up to attempts);
+ *   - a run that SUMMARIZED a failure is real → never retried.
+ */
+function execVitestRun(
+	root: string,
+	attempts = 3,
+): { status: number | null; stdout: string; stderr: string } {
+	let last: { status: number | null; stdout: string; stderr: string } = {
+		status: null,
+		stdout: "",
+		stderr: "",
+	};
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		const run = spawnSync(process.execPath, [execVitestBin(), "run"], {
+			cwd: root,
+			encoding: "utf8",
+			timeout: 60_000,
+		});
+		last = {
+			status: run.status,
+			stdout: run.stdout ?? "",
+			stderr: run.stderr ?? "",
+		};
+		if (run.status === 0) {
+			return last;
+		}
+		const summarized = /\d+ failed/.test(last.stdout);
+		if (!summarized && attempt < attempts - 1) {
+			continue;
+		}
+		return last;
+	}
+	return last;
 }
 
 describe("emitted PBT — the single-param compound property RUNS under the REAL vitest runner (W1 execution gate)", () => {
@@ -1491,10 +1534,7 @@ describe("emitted PBT — the single-param compound property RUNS under the REAL
 			// EXECUTE under the real vitest runner — the W1 gate that string
 			// pins alone cannot provide. The bounded arbitrary + single-param
 			// filter must run 100 seeded runs green.
-			const run = spawnSync(process.execPath, [execVitestBin(), "run"], {
-				cwd: root,
-				encoding: "utf8",
-			});
+			const run = execVitestRun(root);
 			expect(
 				run.status,
 				`emitted single-param compound property did not run clean:\n${run.stdout}\n${run.stderr}`,
@@ -1546,11 +1586,12 @@ describe("emitted PBT — the single-param compound property RUNS under the REAL
 // (`.filter(<oracle>)` — fast-check's filter passes exactly ONE value), so
 // every oracle this file's hand-built plan embeds as a filter/assert must be
 // SINGLE-param. Under VERSAILLES-165 a multi-param guard oracle routes to a
-// joint-sampling strategy (equality-mirror / record + bounded filter) whose
-// record layout the emitter rework lands in Chunk 2 — the hand-built pbtPlan()
-// fixture stays single-param until then. This integrity pin catches a future
-// fixture that sneaks a multi-param oracle into a satisfies/invariant-
-// preserving descriptor.
+// joint-sampling strategy (equality-mirror / FIELD-BOUND / record + bounded
+// filter) whose layouts are pinned separately in tests/emitters-pbt-joint.test.ts
+// — this fixture intentionally models the committed example (addItem etc.),
+// which is entirely single-param. This integrity pin catches a future fixture
+// that sneaks a multi-param oracle into a satisfies/invariant-preserving
+// descriptor.
 
 describe("emitters-pbt fixture integrity — single-param-only oracles (Center B1)", () => {
 	it("every satisfies/invariant-preserving oracle in the pinned plan has exactly ONE callback param — rejects blocks are exempt (they never embed filters)", () => {
@@ -1568,7 +1609,7 @@ describe("emitters-pbt fixture integrity — single-param-only oracles (Center B
 						: head.split(", ").map((param) => param.trim());
 				expect(
 					params.length,
-					`oracle ${clause.clauseId} must be single-param (the pinned per-param .filter layout embeds single-param guard oracles only; multi-param oracles route to joint sampling in the Chunk 2 record layout): ${clause.code}`,
+					`oracle ${clause.clauseId} must be single-param (the pinned per-param .filter layout embeds single-param guard oracles only; multi-param oracles route to the joint layouts pinned in emitters-pbt-joint.test.ts): ${clause.code}`,
 				).toBe(1);
 			}
 		}

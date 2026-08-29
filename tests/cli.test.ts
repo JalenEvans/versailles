@@ -1051,14 +1051,12 @@ describe("runCli generate — non-silent UNPLANNABLE_OPERATION warnings for stag
 });
 
 // VERSAILLES-165 re-pin: the coupled-bounded compound `a >= 0 and b >= 0 and
-// a + b <= 100` is now PLANNED (record + bounded filter), so it no longer
-// surfaces PROPERTY_UNPLANNABLE — and the current emitter's belt-and-suspenders
-// still refuses multi-param guard oracles (the joint-sampling record layout
-// lands in Chunk 2), so generating THAT fixture today would hard-fail instead
-// of warning. The CLI-warning channel pin therefore uses a RETAINED-unplannable
-// multi-param shape: equality-of-sums `a + b == 100` (a thin hyperslice, not a
-// bounded region — planner.ts classifyMultiParamGuard keeps it
-// PROPERTY_UNPLANNABLE).
+// a + b <= 100` is PLANNED (record + bounded filter) and the emitter renders
+// the joint record layout — it no longer surfaces PROPERTY_UNPLANNABLE and no
+// longer trips the emitter's belt-and-suspenders. The CLI-warning channel pin
+// therefore uses a RETAINED-unplannable multi-param shape: equality-of-sums
+// `a + b == 100` (a thin hyperslice, not a bounded region — planner.ts
+// classifyMultiParamGuard keeps it PROPERTY_UNPLANNABLE).
 describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for retained-unplannable multi-param oracle clauses (Center B1/B2)", () => {
 	it("a retained-unplannable multi-param oracle clause (equality-of-sums a + b == 100) + propertyBased enabled surfaces PROPERTY_UNPLANNABLE in warnings — never a silent zero, never an emitted filter, exit 0", async () => {
 		const cwd = await freshWorkspace("g-property-unplannable");
@@ -1131,10 +1129,9 @@ describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for retai
 
 		// The generated surface contains NO fast-check / fc.property for the
 		// unplannable clause — never a broken multi-param `.filter((a, b) => ...)`
-		// layout (the B1 bug shape). The emitter rework for the joint-sampling
-		// record layout lands in Chunk 2; today a planned multi-param descriptor
-		// would trip the emitter's belt-and-suspenders instead of rendering, so
-		// the emitted-content assertion stays pinned to the unplannable path.
+		// layout (the B1 bug shape). This fixture stays RETAINED-unplannable, so
+		// the emitted-content assertion pins the unplannable path: no descriptor
+		// ⇒ no fast-check surface for the clause.
 		const content = await readFile(
 			join(cwd, ".versailles", "generated", "OrderService.test.ts"),
 			"utf8",

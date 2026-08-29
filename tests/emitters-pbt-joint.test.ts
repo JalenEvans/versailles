@@ -29,13 +29,14 @@ import type {
 } from "../packages/engine/src/generator/index.js";
 
 /**
- * Joint-sampling emitter layouts (VERSAILLES-165, Chunk 2) — the byte-pinned
- * contract for the emitter rework that renders the two joint strategies the
- * Chunk 1 planner now plans:
+ * Joint-sampling emitter layouts (VERSAILLES-165) — the byte-pinned contract
+ * for the emitter rendering the joint strategies the planner now plans:
  *
  *   1. EQUALITY-MIRROR — a descriptor whose clause is a bothSideFieldRef
- *      equality `p1 == p2` (the mirror TARGET's ArbitrarySpec carries
- *      `mirrorOf: "<source>"`). The mirror is guaranteed by construction, so:
+ *      equality `p1 == p2` with BOTH operands operation params (Center B1:
+ *      the mirror is ONLY for the param-param subset). The mirror TARGET's
+ *      ArbitrarySpec carries `mirrorOf: "<source>"`. The mirror is guaranteed
+ *      by construction, so:
  *        - ONLY the SOURCE (non-mirror) params get arbitrary declarations.
  *        - The mirror TARGET is rendered INSIDE the fc.property callback as
  *          `const <target> = <source>;` — it is never sampled independently,
@@ -43,10 +44,24 @@ import type {
  *        - The equality oracle is NOT filtered (the mirror guarantees it) —
  *          but IS asserted after the call.
  *
- *   2. RECORD + BOUNDED FILTER — a descriptor whose guard oracle is a
+ *   2. FIELD-BOUND (Center B1) — a descriptor whose clause is a bothSideFieldRef
+ *      equality `p1 == p2` where at least ONE operand is a manifest FIELD (not
+ *      an op param — e.g. `status == newStatus` with status a component
+ *      field). The planner plans OP-PARAMS ONLY in descriptor.params (no field
+ *      source spec, no mirrorOf). The emitter samples only the param
+ *      arbitraries, binds the component instance inside the callback, calls
+ *      with the params only, and asserts the oracle with the FIELD mapped to
+ *      `instance.<field>` — a genuine post-state check, no mirror, no record:
+ *        - NO mirror const (`const <field> = <param>;`), NO record, NO filter.
+ *        - `const instance = new <Component>();` inside the callback; the call
+ *          runs on the bound instance.
+ *        - The assertion passes each oracle param the callback value when it is
+ *          a callback param, else `instance.<field>`.
+ *
+ *   3. RECORD + BOUNDED FILTER — a descriptor whose guard oracle is a
  *      multi-param NON-mirror compound (a conjunction of numeric bounds /
  *      literal inequalities / boundable sum-difference couplings). The
- *      derived cross-param bounds (Chunk 1 propagation) feed per-param record
+ *      derived cross-param bounds (planner propagation) feed per-param record
  *      entries, the joint region is filtered at the RECORD level, and the
  *      callback DESTRUCTURES the record:
  *        - NO per-param arbitrary declarations (they live inline in the
@@ -58,21 +73,22 @@ import type {
  *          participate in the composed record filter (the MIXED layout).
  *        - The block asserts its OWN clauses (destructured values).
  *
- * The rework MUST keep every existing single-param pin green: the per-param
+ * The emitter MUST keep every existing single-param pin green: the per-param
  * `.filter(...)` layout stays when ALL guard oracles are single-param (or the
  * only multi-param oracle is a MIRROR), rejects descriptors stay unchanged
  * (per-param arbitraries, NO filters/oracles), and `fc.assert(prop, { seed,
  * numRuns })` / traceability / determinism / enabled=false semantics are
  * untouched.
  *
- * ── RED TODAY ─────────────────────────────────────────────────────────────
- * The current renderPropertyBlock (vitest.ts) builds the guard set and then
- * refuses loudly when a guard oracle takes >1 callback params — the B1
- * belt-and-suspenders throw (`Refusing to emit: guard oracle ... takes 2
- * callback params`). It has NO mirror rendering (it declares an arbitrary for
- * every spec, mirror target included) and NO record rendering. So every
- * byte-pin below that emits a joint plan FAILS at emitSuite with that throw —
- * the Red proof that the Chunk 2 rework has not landed yet.
+ * ── SHIPPED (Center-review fix set) ───────────────────────────────────────
+ * The three layouts above are the shipped joint-sampling surface: the
+ * equality-mirror renders for param-param equalities, the field-bound layout
+ * renders for field-operand equalities (B1), and the record + bounded filter
+ * renders for coupled compounds. The planner's B2 (field-operand couplings)
+ * / W1 (inverted derived bounds) / W4 (`or`-derived bounds) gates keep
+ * unplannable shapes OUT of the descriptor stream, so the emitter never sees
+ * a multi-param guard it cannot render — the old belt-and-suspenders throw is
+ * no longer the expected path.
  */
 
 // ── Fixture: a concrete suite + a joint property plan (hand-built, mirroring
@@ -200,6 +216,61 @@ const JOINT_REJECTS_DESCRIPTOR: PropertyDescriptor = {
 	traces: [`${ORDER}.placeOrder.pre0`],
 	seed: 42,
 };
+
+/**
+ * The FIELD-BOUND descriptor (Center B1): a bothSideFieldRef equality
+ * postcondition `status == newStatus` where `status` is a MANIFEST FIELD (the
+ * only operation param is newStatus — the accountPbtContext fixture shape).
+ * The planner plans OP-PARAMS ONLY: descriptor.params = [newStatus], NO field
+ * source spec, NO mirrorOf. The emitter renders the field-bound layout — no
+ * mirror const, no record, no filter; the assertion maps the field to
+ * `instance.status` after the call.
+ */
+const FIELD_BOUND_DESCRIPTOR: PropertyDescriptor = {
+	id: `${ACCOUNT}.setStatus.property-satisfies-0`,
+	component: ACCOUNT,
+	operation: "setStatus",
+	params: [{ param: "newStatus", typeRef: "string", kind: "string" }],
+	clauses: [
+		{
+			clauseId: `${ACCOUNT}.setStatus.post0`,
+			code: "(status, newStatus) => status === newStatus",
+		},
+	],
+	outcome: "satisfies",
+	traces: [`${ACCOUNT}.setStatus.post0`],
+	seed: 777,
+};
+
+/**
+ * The full emitSuite options for the FIELD-BOUND descriptor — setStatus is an
+ * INSTANCE method with the SINGLE op param newStatus (status is manifest
+ * state, never an op param), matching the planner's field-bound wiring.
+ */
+function fieldBoundOptions(overrides: Partial<EmitOptions> = {}): EmitOptions {
+	return {
+		methods: {
+			[ACCOUNT]: {
+				setStatus: {
+					static: false,
+					params: ["newStatus"],
+					returnType: "boolean",
+				},
+			},
+		},
+		propertyPlan: {
+			descriptors: [FIELD_BOUND_DESCRIPTOR],
+			strategies: {},
+			warnings: [],
+		},
+		propertyNumRuns: 100,
+		...overrides,
+	};
+}
+
+function emitFieldBound(overrides: Partial<EmitOptions> = {}) {
+	return emitSuite(jointSuite(), "vitest", fieldBoundOptions(overrides));
+}
 
 /**
  * The joint property plan the implementer's emitter must render. Order
@@ -419,6 +490,50 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165 C
 		expect(account?.content).toContain(block);
 	});
 
+	it("byte-pins the FIELD-BOUND layout (Center B1) — only the op-param arbitrary, the component instance bound, the field mapped to instance.status in the assertion, no mirror/record/filter", () => {
+		const files = emitFieldBound();
+		const account = accountFile(files);
+		expect(account).toBeDefined();
+
+		const block = [
+			'\t// traces: "AccountService.setStatus.post0"',
+			'\tit("AccountService.setStatus.property-satisfies-0", () => {',
+			"\t\tconst newStatus = fc.string();",
+			"\t\tconst AccountService_setStatus_post0 = (status, newStatus) => status === newStatus;",
+			"\t\tconst prop = fc.property(newStatus, (newStatus) => {",
+			"\t\t\tconst instance = new AccountService();",
+			"\t\t\tinstance.setStatus(newStatus);",
+			"\t\t\texpect(AccountService_setStatus_post0(instance.status, newStatus)).toBe(true);",
+			"\t\t});",
+			"\t\tfc.assert(prop, { seed: 777, numRuns: 100 });",
+			"\t});",
+			"",
+		].join("\n");
+		expect(account?.content).toContain(block);
+	});
+
+	it("rendering-rule pins for the FIELD-BOUND layout: the manifest field is never sampled/mirrored/recorded, no record, no filter, no mirror const (Center B1)", () => {
+		const files = emitFieldBound();
+		const account = accountFile(files);
+		expect(account).toBeDefined();
+
+		// The field `status` is NEVER declared as an arbitrary, NEVER mirrored
+		// (`const status = newStatus;`), NEVER a record key, NEVER filtered.
+		expect(account?.content).not.toContain("const status = fc.string();");
+		expect(account?.content).not.toContain("\t\t\tconst status = newStatus;");
+		expect(account?.content).not.toContain("status.filter(");
+		expect(account?.content).not.toContain("status:");
+		// No record layout, no record filter for the field-bound block.
+		expect(account?.content).not.toContain("fc.record(");
+		expect(account?.content).not.toContain(".filter(({");
+		// The call runs on the bound instance with the op param only.
+		expect(account?.content).toContain("instance.setStatus(newStatus);");
+		// The assertion maps the field to the bound instance's state.
+		expect(account?.content).toContain(
+			"expect(AccountService_setStatus_post0(instance.status, newStatus)).toBe(true);",
+		);
+	});
+
 	it("byte-pins the RECORD + BOUNDED FILTER layout — fc.record over the derived joint bounds, record-level filter, destructured callback", () => {
 		const files = emitJoint();
 		const order = orderFile(files);
@@ -534,8 +649,8 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165 C
 
 	it("rejects descriptors stay UNCHANGED under joint sampling — per-param arbitraries, NO filters, NO oracle consts, the configured throws idiom (stability pin)", () => {
 		// Emit a REJECTS-ONLY plan so this pin isolates the rejects path from
-		// the joint layouts (which throw in the current emitter). After the
-		// rework the rejects block must render byte-identically.
+		// the joint layouts (which the mirror/record/field-bound pins exercise
+		// separately). Rejects must render byte-identically.
 		const rejectsPlan: PropertyPlan = {
 			descriptors: [JOINT_REJECTS_DESCRIPTOR],
 			strategies: {},
@@ -690,11 +805,13 @@ describe("emitters-pbt-joint fixture integrity", () => {
 // ── W1 (extended): real-runner execution gates for the joint layouts ───────
 // The Chunk 1 W1 gate in emitters-pbt.test.ts proves the SINGLE-param layout
 // runs and that a RETAINED-unplannable multi-param descriptor is never emitted
-// as a filter. These gates extend W1 to the two joint strategies: the emitted
-// equality-mirror block and the emitted record + bounded-filter block must
-// EXECUTE green under the REAL vitest runner — exit 0, no hang, no
-// "too many pre-conditions" (the derived bounds make the record's valid region
-// healthy, unlike a naive filter over an unbounded joint domain).
+// as a filter. These gates extend W1 to the joint strategies: the emitted
+// equality-mirror block, the emitted FIELD-BOUND block (Center B1 — a genuine
+// post-state check: the field is read off the bound instance after the call),
+// and the emitted record + bounded-filter block must EXECUTE green under the
+// REAL vitest runner — exit 0, no hang, no "too many pre-conditions" (the
+// derived bounds make the record's valid region healthy, unlike a naive filter
+// over an unbounded joint domain).
 
 const EXEC_REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -746,11 +863,12 @@ function execParseAll(contracts: ContractsFile): Record<string, Node> {
 function execContext(
 	contracts: ContractsFile,
 	propertyBased: WorkspaceConfig["propertyBased"],
+	manifests: ManifestsFile = EXEC_EMPTY_MANIFESTS,
 ): VersaillesContext {
 	return {
 		config: execConfig(propertyBased),
 		contracts,
-		manifests: EXEC_EMPTY_MANIFESTS,
+		manifests,
 		predicates: EXEC_EMPTY_PREDICATES,
 		parsedContracts: execParseAll(contracts),
 		parseErrors: [],
@@ -762,9 +880,9 @@ function execContext(
 
 /**
  * The equality-mirror contract: a bothSideFieldRef equality postcondition
- * `status == newStatus` — the Chunk 1 planner wires the mirror (the real
- * probe: descriptor params [status, newStatus mirrorOf: "status"], oracle
- * `(status, newStatus) => status === newStatus`).
+ * `status == newStatus` with BOTH operands operation params — the planner
+ * wires the mirror (descriptor params [status, newStatus mirrorOf: "status"],
+ * oracle `(status, newStatus) => status === newStatus`).
  */
 function execMirrorContext(): VersaillesContext {
 	const contracts: ContractsFile = {
@@ -794,6 +912,51 @@ function execMirrorContext(): VersaillesContext {
 		},
 	};
 	return execContext(contracts, { enabled: true, numRuns: 100 });
+}
+
+/**
+ * The FIELD-BOUND contract (Center B1): a bothSideFieldRef equality
+ * postcondition `status == newStatus` where `status` is a MANIFEST FIELD (the
+ * only operation param is newStatus). The planner plans OP-PARAMS ONLY —
+ * descriptor params [newStatus], no mirrorOf, no field source spec — and the
+ * emitter renders the field-bound layout; the field is read off the bound
+ * instance (`instance.status`) AFTER the call, so the property is a genuine
+ * post-state check.
+ */
+function execFieldBoundContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			AccountService: {
+				invariants: [],
+				operations: {
+					setStatus: {
+						id: "AccountService.setStatus",
+						params: [{ name: "newStatus", type: "string" }],
+						preconditions: [],
+						postconditions: [
+							{
+								id: "AccountService.setStatus.post0",
+								expr: "status == newStatus",
+							},
+						],
+						effects: [{ field: "status", kind: "mutate" }],
+						sourceHash: "exec-fieldbound-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		version: "1.0",
+		manifests: {
+			AccountService: {
+				sourceHash: "man-exec-fieldbound",
+				fields: { status: "string" },
+			},
+		},
+	};
+	return execContext(contracts, { enabled: true, numRuns: 100 }, manifests);
 }
 
 /**
@@ -841,6 +1004,22 @@ const EXEC_MIRROR_SOURCE = `export class AccountService {
 }
 `;
 
+/**
+ * Real AccountService source for the FIELD-BOUND W1 runnability pin (Center
+ * B1): setStatus takes ONLY the op param newStatus and mutates the manifest
+ * field `status` to match — so the emitted `expect(...(instance.status,
+ * newStatus)).toBe(true)` genuine post-state check holds for every sampled
+ * newStatus (the source accepts all strings).
+ */
+const EXEC_FIELD_BOUND_SOURCE = `export class AccountService {
+	status: string = "initial";
+	setStatus(newStatus: string): boolean {
+		this.status = newStatus;
+		return true;
+	}
+}
+`;
+
 /** Real OrderService source for the record W1 runnability pin. */
 const EXEC_RECORD_SOURCE = `export class OrderService {
 	placeOrder(a: number, b: number): number {
@@ -855,8 +1034,55 @@ function execVitestBin(): string {
 	return join(EXEC_REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
 }
 
+/**
+ * The hardened W1 execution helper — spawns the REAL vitest runner in the
+ * temp workspace. The transient flake this guards against: the spawned runner
+ * occasionally dies on startup (spawn timeout / no summary emitted) while the
+ * generated property itself is fine. A GENUINE test failure always prints the
+ * "Test Files ... failed" summary, so:
+ *   - exit 0 → success, return immediately;
+ *   - a run that produced NO vitest summary (or was killed by the timeout) is
+ *     a harness flake → retry (up to attempts);
+ *   - a run that SUMMARIZED a failure is a real failure → never retried, the
+ *     assertion below reports it.
+ */
+function execVitestRun(
+	root: string,
+	attempts = 3,
+): { status: number | null; stdout: string; stderr: string } {
+	let last: { status: number | null; stdout: string; stderr: string } = {
+		status: null,
+		stdout: "",
+		stderr: "",
+	};
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		const run = spawnSync(process.execPath, [execVitestBin(), "run"], {
+			cwd: root,
+			encoding: "utf8",
+			// 60s spawn budget — a cold vitest boot under load can exceed the
+			// default; an exceeded budget (status null) is a flake, not a
+			// property failure (a real failure summarizes well within 60s).
+			timeout: 60_000,
+		});
+		last = {
+			status: run.status,
+			stdout: run.stdout ?? "",
+			stderr: run.stderr ?? "",
+		};
+		if (run.status === 0) {
+			return last;
+		}
+		const summarized = /\d+ failed/.test(last.stdout);
+		if (!summarized && attempt < attempts - 1) {
+			continue;
+		}
+		return last;
+	}
+	return last;
+}
+
 describe("emitted joint-sampling properties RUN under the REAL vitest runner (W1, VERSAILLES-165 Chunk 2)", () => {
-	it("executes an emitted EQUALITY-MIRROR property — exit 0 (Red today: the emitter throws on the 2-param mirror oracle before any file is written)", async () => {
+	it("executes an emitted EQUALITY-MIRROR property — exit 0 (param-param equality, Center B1: the mirror stays the param-param strategy)", async () => {
 		const ctx = execMirrorContext();
 		const suite = planTestCases(ctx);
 		const plan = planPropertyBlocks(suite, ctx);
@@ -932,10 +1158,7 @@ describe("emitted joint-sampling properties RUN under the REAL vitest runner (W1
 			// EXECUTE under the real vitest runner — the W1 gate that string
 			// pins alone cannot provide. The mirror must run 100 seeded runs
 			// green (the oracle holds by construction — zero filter sparsity).
-			const run = spawnSync(process.execPath, [execVitestBin(), "run"], {
-				cwd: root,
-				encoding: "utf8",
-			});
+			const run = execVitestRun(root);
 			expect(
 				run.status,
 				`emitted equality-mirror property did not run clean:\n${run.stdout}\n${run.stderr}`,
@@ -947,7 +1170,7 @@ describe("emitted joint-sampling properties RUN under the REAL vitest runner (W1
 		}
 	});
 
-	it("executes an emitted RECORD + BOUNDED FILTER property — exit 0, no hang, no 'too many pre-conditions' (Red today: the emitter throws on the 2-param coupled oracle)", async () => {
+	it("executes an emitted RECORD + BOUNDED FILTER property — exit 0, no hang, no 'too many pre-conditions'", async () => {
 		const ctx = execRecordContext();
 		const suite = planTestCases(ctx);
 		const plan = planPropertyBlocks(suite, ctx);
@@ -1030,10 +1253,7 @@ describe("emitted joint-sampling properties RUN under the REAL vitest runner (W1
 			// exhausting fast-check's skip budget — the derived bounds make the
 			// valid region ~50% of the joint box, so "too many pre-conditions"
 			// is impossible.
-			const run = spawnSync(process.execPath, [execVitestBin(), "run"], {
-				cwd: root,
-				encoding: "utf8",
-			});
+			const run = execVitestRun(root);
 			expect(
 				run.status,
 				`emitted record + bounded filter property did not run clean:\n${run.stdout}\n${run.stderr}`,
@@ -1042,6 +1262,99 @@ describe("emitted joint-sampling properties RUN under the REAL vitest runner (W1
 			// the fast-check skip-budget failure mode must be absent.
 			expect(run.stdout).not.toMatch(/\d+ failed/);
 			expect(run.stdout).not.toContain("too many pre-conditions");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("executes an emitted FIELD-BOUND property — exit 0, the genuine post-state check holds on the real instance (Center B1)", async () => {
+		const ctx = execFieldBoundContext();
+		const suite = planTestCases(ctx);
+		const plan = planPropertyBlocks(suite, ctx);
+
+		// Planner pin: the field-operand equality IS planned via the
+		// FIELD-BOUND layout — OP-PARAMS ONLY ([newStatus]), NO mirrorOf, NO
+		// field source spec, no warning.
+		expect(plan.warnings).toEqual([]);
+		expect(plan.descriptors).toHaveLength(1);
+		const params = plan.descriptors[0].params.map((spec) => spec.param);
+		expect(params).toEqual(["newStatus"]);
+		expect(
+			plan.descriptors[0].params.some((spec) => spec.mirrorOf !== undefined),
+		).toBe(false);
+		expect(plan.descriptors[0].clauses[0].code).toBe(
+			"(status, newStatus) => status === newStatus",
+		);
+
+		const root = await mkdtemp(
+			join(tmpdir(), "versailles-pbt-fieldbound-exec-"),
+		);
+		try {
+			await symlink(
+				join(EXEC_REPO_ROOT, "node_modules"),
+				join(root, "node_modules"),
+				"dir",
+			);
+			await writeFile(
+				join(root, "account.ts"),
+				`${EXEC_FIELD_BOUND_SOURCE}\n`,
+				"utf8",
+			);
+
+			const files = emitSuite(suite, "vitest", {
+				generatedDir: ".",
+				modulePaths: { AccountService: "./account" },
+				methods: {
+					AccountService: {
+						setStatus: {
+							static: false,
+							params: ["newStatus"],
+							returnType: "boolean",
+						},
+					},
+				},
+				propertyPlan: plan,
+				propertyNumRuns: 100,
+			});
+			const account = files.find((file) =>
+				file.path.endsWith("AccountService.test.ts"),
+			);
+			expect(account).toBeDefined();
+
+			// The string pin: the FIELD-BOUND layout — the op-param arbitrary
+			// only, the component instance bound inside the callback, the call
+			// with the sampled param only, and the assertion mapping the field
+			// to instance.status (a genuine post-state check).
+			expect(account?.content).toContain(
+				"const prop = fc.property(newStatus, (newStatus) => {",
+			);
+			expect(account?.content).toContain(
+				"\t\t\tconst instance = new AccountService();",
+			);
+			expect(account?.content).toContain("instance.setStatus(newStatus);");
+			expect(account?.content).toContain(
+				"expect(AccountService_setStatus_post0(instance.status, newStatus)).toBe(true);",
+			);
+			expect(account?.content).not.toContain("const status = fc.string();");
+			expect(account?.content).not.toContain("fc.record(");
+
+			await writeFile(
+				join(root, "AccountService.test.ts"),
+				account?.content ?? "",
+				"utf8",
+			);
+
+			// EXECUTE under the real vitest runner. The emitted field-bound
+			// block samples newStatus, calls the real setStatus (which mutates
+			// this.status = newStatus), and asserts the oracle on the POST-state
+			// — 100 seeded runs must pass, proving the field-bound layout is a
+			// genuine runnable post-state check, not a vacuous filter.
+			const run = execVitestRun(root);
+			expect(
+				run.status,
+				`emitted field-bound property did not run clean:\n${run.stdout}\n${run.stderr}`,
+			).toBe(0);
+			expect(run.stdout).not.toMatch(/\d+ failed/);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

@@ -145,35 +145,52 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  *    planner CLASSIFIES the guard oracle's AST and routes it to a
  *    joint-sampling strategy:
  *    - Equality-mirror — a bothSideFieldRef equality `p1 == p2` / `p1 === p2`
- *      (e.g. `status == newStatus` → `(status, newStatus) => status ===
- *      newStatus`): the planner generates the SOURCE (p1, the left operand)
- *      from its arbitrary and mirrors the value to the TARGET (p2, the right
- *      operand) — the emitted callback contains `const p2 = p1;`. No filter is
- *      needed (the mirror guarantees the oracle), so filter sparsity is zero.
- *      The TARGET's ArbitrarySpec carries `mirrorOf: "<source param>"` and has
- *      NO independent arbitrary; the SOURCE's spec has no mirrorOf and
- *      precedes the target's in descriptor.params.
+ *      with BOTH operands operation params (e.g. `a == b` → `(a, b) => a ===
+ *      b`): the planner generates the SOURCE (p1, the left operand) from its
+ *      arbitrary and mirrors the value to the TARGET (p2, the right operand) —
+ *      the emitted callback contains `const p2 = p1;`. No filter is needed
+ *      (the mirror guarantees the oracle), so filter sparsity is zero. The
+ *      TARGET's ArbitrarySpec carries `mirrorOf: "<source param>"` and has NO
+ *      independent arbitrary; the SOURCE's spec has no mirrorOf and precedes
+ *      the target's in descriptor.params. Center B1: the mirror is ONLY for
+ *      the param-param subset — a manifest-FIELD operand is never mirrored
+ *      (the field is instance state, never a sampled arbitrary).
+ *    - FIELD-BOUND equality — a bothSideFieldRef equality `p1 == p2` where at
+ *      least ONE operand is a manifest FIELD (e.g. `status == newStatus` with
+ *      `status` a component field): PLANNED (never PROPERTY_UNPLANNABLE) with
+ *      OP-PARAMS ONLY in descriptor.params — no field source spec, no mirrorOf
+ *      (Center B1). The emitter renders the field-bound layout: sample only
+ *      the op-param arbitraries, bind the component instance, call with the
+ *      params only, and assert the oracle with the field mapped to
+ *      `instance.<field>` after the call — a genuine post-state check.
  *    - Record + bounded filter — a conjunction of numeric comparisons and
  *      sum/difference couplings over multiple params (e.g. `a >= 0 and b >= 0
  *      and a + b <= 100` → `(a, b) => a >= 0 && b >= 0 && a + b <= 100`): the
  *      planner derives per-param bounds INCLUDING cross-param propagation from
  *      sum/difference leaves BEFORE any filter (`p1 + p2 <= C` with lower
  *      bounds L1, L2 → `p1 <= C - L2`, `p2 <= C - L1`; mirrored for `>=`/`>`
- *      with upper bounds) so the sampled joint region is bounded first and the
+ *      with upper bounds; `p1 - p2 <= C` with U2, L1 → `p1 <= C + U2`,
+ *      `p2 >= L1 - C`) so the sampled joint region is bounded first and the
  *      valid region stays healthy (~>=50%) — never filter-sparse, never a
- *      hang. The descriptor's ArbitrarySpecs carry the derived bounds.
- *    A multi-param oracle that matches NEITHER strategy — non-mirrorable
- *    equality (`!=`/`!==`), equality-of-sums (`a + b == C`), an unboundable
- *    coupling (no derivable cross-param bounds), an unrenderable oracle, or a
- *    component-typed param — stays PROPERTY_UNPLANNABLE: the same non-silent
- *    LoaderWarning { code: "PROPERTY_UNPLANNABLE", field: <clause id>,
- *    detail: non-empty }, the descriptor is SKIPPED, and the strategy record
- *    keeps "property" (the SELECTOR still chooses property for the resolved
- *    shape; the PLANNER finds it unplannable). Single-param oracles stay
- *    runnable per-param-filter properties. The oracle's parameter count is
- *    read from the byte-pinned `(<params>) => <expr>` codegen output (split
- *    at the first `) => `, params on ", " — the same parsing the vitest
- *    emitter's oracleParamsOf uses).
+ *      hang. The descriptor's ArbitrarySpecs carry the derived bounds. Strict
+ *      ops follow the numericConstraintBounds convention (`< C` → C−1,
+ *      `> C` → C+1). Center W4: an `or`-clause's bounds are NEVER collected
+ *      (a disjunct does not imply either side holds), so a sibling coupling
+ *      can only rely on sound `and`-chain bounds.
+ *    A multi-param oracle that matches NONE of the joint strategies —
+ *    non-mirrorable equality (`!=`/`!==`), equality-of-sums (`a + b == C`), an
+ *    unboundable coupling (no derivable cross-param bounds), a coupling whose
+ *    propagation yields INVERTED bounds (min > max — an unsatisfiable region,
+ *    Center W1), a coupling referencing a manifest-FIELD operand (Center B2),
+ *    an unrenderable oracle, or a component-typed param — stays
+ *    PROPERTY_UNPLANNABLE: the same non-silent LoaderWarning { code:
+ *    "PROPERTY_UNPLANNABLE", field: <clause id>, detail: non-empty }, the
+ *    descriptor is SKIPPED, and the strategy record keeps "property" (the
+ *    SELECTOR still chooses property for the resolved shape; the PLANNER finds
+ *    it unplannable). Single-param oracles stay runnable per-param-filter
+ *    properties. The oracle's parameter count is read from the byte-pinned
+ *    `(<params>) => <expr>` codegen output (split at the first `) => `, params
+ *    on ", " — the same parsing the vitest emitter's oracleParamsOf uses).
  *    SCOPE — the rejects (expected-rejection) descriptor is NOT subject to
  *    the joint-sampling routing: its clauses are never embedded as filters
  *    (the emitter renders NO oracle consts and NO filter for a rejects
@@ -239,20 +256,22 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  *   config.propertyBased.numRuns (default 100) via the Chunk 6 seam.
  * - Multi-param oracles are ROUTED (VERSAILLES-165), not blanket-unplannable:
  *   the planner classifies the guard oracle's AST — a bothSideFieldRef
- *   equality (`==`/`===`) routes to the equality-mirror strategy (the mirror
- *   TARGET's spec carries `mirrorOf: "<source>"`; the source's spec has no
- *   mirrorOf and precedes it), a conjunction of numeric comparisons +
- *   sum/difference couplings routes to record + bounded filter (cross-param
- *   bounds derived BEFORE any filter), and anything else — `!=`/`!==`,
- *   equality-of-sums, unboundable couplings, unrenderable oracles,
- *   component-typed params — stays PROPERTY_UNPLANNABLE. A manifest-field
- *   reference like `(status, newStatus) => status === newStatus` is still a
- *   2-param oracle; under the mirror it is PLANNED (source `status` sampled,
- *   target `newStatus` mirrored — `const newStatus = status;`). `preState`
- *   (old(field) resolution) is never mirror-able or record-samplable — but
- *   only accept-side blocks route at all: a rejects descriptor never embeds
- *   its clauses as filters, so its preState-carrying multi-param oracles are
- *   NOT unplannable.
+ *   equality (`==`/`===`) routes to the equality-mirror strategy when BOTH
+ *   operands are operation params (the mirror TARGET's spec carries
+ *   `mirrorOf: "<source>"`; the source's spec has no mirrorOf and precedes
+ *   it), a bothSideFieldRef equality with a manifest-FIELD operand routes to
+ *   the FIELD-BOUND layout (Center B1 — op-params only in descriptor.params,
+ *   no mirrorOf, no field source spec; the emitter maps the field to
+ *   `instance.<field>`), a conjunction of numeric comparisons + sum/difference
+ *   couplings routes to record + bounded filter (cross-param bounds derived
+ *   BEFORE any filter), and anything else — `!=`/`!==`, equality-of-sums,
+ *   unboundable couplings, couplings that reference a manifest-FIELD operand
+ *   (Center B2), couplings whose propagation yields inverted bounds (Center
+ *   W1), unrenderable oracles, component-typed params — stays
+ *   PROPERTY_UNPLANNABLE. `preState` (old(field) resolution) is never
+ *   mirror-able or record-samplable — but only accept-side blocks route at
+ *   all: a rejects descriptor never embeds its clauses as filters, so its
+ *   preState-carrying multi-param oracles are NOT unplannable.
  */
 
 // ── Fixture helpers (mirroring tests/generator.test.ts conventions) ────────
@@ -919,7 +938,7 @@ function accountPbtContext(
 }
 
 describe("planPropertyBlocks — invariant-preservation + postcondition strategy mapping", () => {
-	it("plans an invariant-preserving property for the effects-overlap invariant; literal postconditions stay example; the bothSideFieldRef equality postcondition is PLANNED via the mirror (VERSAILLES-165)", () => {
+	it("plans an invariant-preserving property for the effects-overlap invariant; literal postconditions stay example; the bothSideFieldRef equality postcondition with a manifest-FIELD operand is PLANNED via the FIELD-BOUND layout (Center B1, VERSAILLES-165)", () => {
 		const ctx = accountPbtContext({ enabled: true, numRuns: 100 });
 		const suite = planTestCases(ctx);
 		const { descriptors, strategies, warnings } = planPropertyBlocks(
@@ -956,14 +975,15 @@ describe("planPropertyBlocks — invariant-preservation + postcondition strategy
 		);
 
 		// bothSideFieldRef equality postcondition (status == newStatus)
-		// codegen's to a TWO-param oracle (status, newStatus). Under
-		// VERSAILLES-165 this routes to the EQUALITY-MIRROR strategy: the
-		// SOURCE (status, the left operand — a manifest field) is sampled
-		// from its arbitrary and the TARGET (newStatus, the right operand)
-		// mirrors it — `const newStatus = status;`, no filter, zero filter
-		// sparsity. The target's ArbitrarySpec carries mirrorOf: "status" and
-		// has NO independent arbitrary; the source's spec has no mirrorOf and
-		// precedes the target's in params.
+		// codegen's to a TWO-param oracle (status, newStatus). Center B1: the
+		// left operand `status` is a MANIFEST FIELD (the manifest declares
+		// fields { balance, status } — it is NOT an operation param; the only
+		// setStatus param is newStatus). A field operand has no arbitrary to
+		// sample from, so this equality is NOT mirror-able — it routes to the
+		// FIELD-BOUND layout instead: descriptor.params carries OP-PARAMS ONLY
+		// ([newStatus], NO field source spec, NO mirrorOf) and the emitter maps
+		// the field to `instance.status` after the call (a genuine post-state
+		// check). The mirror strategy is reserved for param-param equalities.
 		// Fixture clause-code verification: the manifest-field reference is
 		// STILL a 2-param oracle — the oracle params count both callback
 		// params, manifest-field references included.
@@ -980,17 +1000,9 @@ describe("planPropertyBlocks — invariant-preservation + postcondition strategy
 			component: "AccountService",
 			operation: "setStatus",
 			params: [
-				// Mirror SOURCE: the left operand of `status == newStatus`,
-				// sampled from its own arbitrary — no mirrorOf.
-				{ param: "status", typeRef: "string", kind: "string" },
-				// Mirror TARGET: mirrors the source (`const newStatus =
-				// status;`) — no independent arbitrary.
-				{
-					param: "newStatus",
-					typeRef: "string",
-					kind: "string",
-					mirrorOf: "status",
-				},
+				// OP-PARAMS ONLY — the manifest-field operand `status` is never
+				// a sampled spec, and no mirrorOf is wired (Center B1).
+				{ param: "newStatus", typeRef: "string", kind: "string" },
 			],
 			clauses: [
 				{
@@ -1003,14 +1015,14 @@ describe("planPropertyBlocks — invariant-preservation + postcondition strategy
 			seed: derivePropertySeed(["AccountService.setStatus.post0"], "1.0"),
 		});
 
-		// The mirror-planned clause carries NO PROPERTY_UNPLANNABLE warning.
+		// The field-bound clause carries NO PROPERTY_UNPLANNABLE warning.
 		const warning = warnings.find(
 			(w) => w.field === "AccountService.setStatus.post0",
 		);
 		expect(warning).toBeUndefined();
 
 		// The clause id stays in the suite's clause stream — mapped to the
-		// planned mirror descriptor, not a zero-coverage gap.
+		// planned field-bound descriptor, not a zero-coverage gap.
 		expect(suite.clauseIds).toContain("AccountService.setStatus.post0");
 
 		// Per-clause strategy record — the SELECTOR still maps the
@@ -1026,6 +1038,108 @@ describe("planPropertyBlocks — invariant-preservation + postcondition strategy
 			"AccountService.setStatus.pre0": "example",
 			"AccountService.setStatus.post0": "property",
 		});
+		expectStrategyCoverage(ctx, strategies);
+	});
+});
+
+// ── Fixture: param-param equality — the mirror strategy's ONLY domain ────────
+// Center B1 keeps the equality-mirror for the param-param subset: a
+// bothSideFieldRef equality where BOTH operands are operation params (the
+// accountPbtContext setStatus fixture above has `status` as a MANIFEST FIELD,
+// so it routes to the FIELD-BOUND layout). This fixture pins the mirror with
+// both operands as op params: `oldName == newName` on rename(oldName, newName).
+function paramParamEqualityContext(
+	propertyBased?: WorkspaceConfig["propertyBased"],
+): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			AccountService: {
+				invariants: [],
+				operations: {
+					rename: {
+						id: "AccountService.rename",
+						params: [
+							{ name: "oldName", type: "string" },
+							{ name: "newName", type: "string" },
+						],
+						preconditions: [],
+						postconditions: [
+							{
+								id: "AccountService.rename.post0",
+								expr: "oldName == newName",
+							},
+						],
+						effects: [],
+						sourceHash: "rename-hash",
+					},
+				},
+			},
+		},
+	};
+	return makeContext(contracts, EMPTY_MANIFESTS, EMPTY_PREDICATES, {
+		enabled: true,
+		numRuns: 100,
+	});
+}
+
+describe("planPropertyBlocks — param-param equality stays a true mirror (Center B1, VERSAILLES-165)", () => {
+	it("a bothSideFieldRef equality with BOTH operands op params is PLANNED via the equality-mirror — source spec first, target carries mirrorOf, no warning", () => {
+		const ctx = paramParamEqualityContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
+		);
+
+		// Fixture clause-code verification: `oldName == newName` codegen's to a
+		// TWO-param oracle — both params are operation params here.
+		const code = renderOracle(ctx, "AccountService.rename.post0");
+		expect(code).toBe("(oldName, newName) => oldName === newName");
+		expect(oracleParamsOf(code)).toEqual(["oldName", "newName"]);
+
+		// The mirror IS planned: the SOURCE (oldName, the left operand) is
+		// sampled from its own arbitrary; the TARGET (newName, the right
+		// operand) mirrors it (`const newName = oldName;`). The target's
+		// ArbitrarySpec carries mirrorOf: "oldName" and NO independent
+		// arbitrary; the source's spec has no mirrorOf and precedes it.
+		const post = descriptors.find(
+			(d) => d.id === "AccountService.rename.property-satisfies-0",
+		);
+		expect(post).toBeDefined();
+		expect(post).toEqual({
+			id: "AccountService.rename.property-satisfies-0",
+			component: "AccountService",
+			operation: "rename",
+			params: [
+				{ param: "oldName", typeRef: "string", kind: "string" },
+				{
+					param: "newName",
+					typeRef: "string",
+					kind: "string",
+					mirrorOf: "oldName",
+				},
+			],
+			clauses: [
+				{
+					clauseId: "AccountService.rename.post0",
+					code: "(oldName, newName) => oldName === newName",
+				},
+			],
+			outcome: "satisfies",
+			traces: ["AccountService.rename.post0"],
+			seed: derivePropertySeed(["AccountService.rename.post0"], "1.0"),
+		});
+
+		// The mirror-planned clause carries NO PROPERTY_UNPLANNABLE warning.
+		const warning = warnings.find(
+			(w) => w.field === "AccountService.rename.post0",
+		);
+		expect(warning).toBeUndefined();
+
+		// The SELECTOR maps the bothSideFieldRef shape to property.
+		expect(strategies["AccountService.rename.post0"]).toBe("property");
+		expect(suite.clauseIds).toContain("AccountService.rename.post0");
 		expectStrategyCoverage(ctx, strategies);
 	});
 });
