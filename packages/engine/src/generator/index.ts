@@ -13,7 +13,9 @@
  * seeded property-based emission from the ordered source clause-id stream plus
  * the grammar version — the PBT IR types (PropertyOutcome / ArbitrarySpec /
  * PropertyClause / PropertyDescriptor) describe the property blocks the
- * planner produces and the emitter renders.
+ * planner produces and the emitter renders. selectStrategy (ADR-0017 Phase 3)
+ * decides, per clause shape, whether PBT adds value over the concrete case
+ * (property / property-with-falsifier) or the example wins (example).
  */
 import { emitPytest } from "./emitters/pytest.js";
 import { emitVitest } from "./emitters/vitest.js";
@@ -30,6 +32,7 @@ import { derivePropertySeed } from "./seed.js";
 export { planTestCases, coverageManifest, derivePropertySeed };
 export { renderClausePredicate } from "./codegen.js";
 export type { CodegenContext } from "./codegen.js";
+export { selectStrategy } from "./strategy.js";
 
 /**
  * Renders a planned suite into full-file output for the target framework.
@@ -76,3 +79,11 @@ export type {
 	PropertyDescriptor,
 	PropertyOutcome,
 } from "./ir.js";
+export type {
+	ClauseShape,
+	ClauseSurface,
+	PbtStrategy,
+	StrategyMap,
+	StrategyOptions,
+	StrategyRecord,
+} from "./strategy.js";
