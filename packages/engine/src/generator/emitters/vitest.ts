@@ -427,8 +427,8 @@ function referencedPredicates(
 /**
  * Renders one seeded property block (ADR-0017, build-spec §9.6) — a §9.3
  * tab-indented traceability comment plus an `it` whose body builds the
- * per-param arbitraries, embeds the codegen'd clause oracles verbatim at the
- * it-body level, runs the operation shape-aware, and asserts the outcome.
+ * arbitraries, embeds the codegen'd clause oracles verbatim at the it-body
+ * level, runs the operation shape-aware, and asserts the outcome.
  *
  * Satisfies / invariant-preserving blocks (GAP 3):
  *
@@ -438,43 +438,39 @@ function referencedPredicates(
  * - The FILTER oracles are the clause oracles of EVERY satisfies +
  *   invariant-preserving descriptor for the same (component, operation), in
  *   plan order — the "satisfy invariants + all other preconditions" rule.
- *   Each callback param referenced by a guard oracle gets
- *   `.filter(<first guard oracle referencing it>)` on its arbitrary. The
- *   block EMBEDS exactly the guard oracles it uses (its filters + its own
- *   asserted clause) — never a dead const.
  * - The call is SHAPE-AWARE (GAP 1): instance → `new <Component>().<op>(
  *   <positional>)`, static → `<Component>.<op>(<positional>)`, with the
- *   descriptor's callback param names in declared order; the legacy
- *   options-object static call is preserved when no methods metadata exists.
- *   Satisfies/invariant blocks render the BARE call (no `const result =` —
- *   void-safe; the clause IS the check).
+ *   descriptor's params in declared order; the legacy options-object static
+ *   call is preserved when no methods metadata exists. Satisfies/invariant
+ *   blocks render the BARE call (no `const result =` — void-safe; the clause
+ *   IS the check).
  * - The assertion `expect(<oracle>(<params>)).toBe(true)` passes each oracle
  *   parameter the callback value when it is a callback param, else
  *   `<instance>.<param>` (a manifest field) — the instance binding
  *   (`const instance = new <Component>(); instance.<op>(...);`) is emitted
  *   when any asserted oracle parameter is a field.
  *
+ * Joint-sampling layouts (VERSAILLES-165) — chosen per descriptor from its
+ * params + guard oracle set:
+ *
+ * - MIRROR — the descriptor has a mirror TARGET (its ArbitrarySpec carries
+ *   mirrorOf) and every multi-param guard oracle is mirror-satisfied. Only
+ *   NON-mirror params get arbitrary declarations and callback params; the
+ *   target is derived inside the callback (`const <target> = <source>;`), the
+ *   equality oracle is asserted but NEVER filtered (the mirror guarantees it),
+ *   and the call uses ALL descriptor params in order.
+ * - RECORD — ANY guard oracle is multi-param non-mirror. No per-param
+ *   arbitrary declarations, no per-param `.filter(...)`: the record carries
+ *   the non-mirror params' arbitraries inline, a record-level `.filter(({
+ *   <params> }) => <non-mirror oracles joined " && " in guard order>)` guards
+ *   the joint region, and the callback DESTRUCTURES the record.
+ * - SINGLE-PARAM — all guard oracles single-param (no mirror). The per-param
+ *   `.filter(<oracle>)` layout, byte-identical to the pre-joint emitter.
+ *
  * Rejects blocks embed NO oracle consts (the clause is never embedded as dead
  * code), NO filter; the block asserts the descriptor's configured rejection
  * idiom (ADR-0007): "throws" → `expect(() => <call>).toThrow()`, "returns" →
  * `expect(<call>).toBeNull()`.
- *
- * Pinned layout (tab-indented, space after commas):
- *
- * ```ts
- * 	// traces: "OrderService.addItem.pre0"
- * 	it("OrderService.addItem.property-satisfies-0", () => {
- * 		const sku = fc.string();
- * 		const price = fc.integer();
- * 		const OrderService_addItem_pre0 = (sku) => sku !== "";
- * 		const OrderService_addItem_pre1 = (price) => isPositive(price);
- * 		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
- * 			new OrderService().addItem(sku, price);
- * 			expect(OrderService_addItem_pre0(sku)).toBe(true);
- * 		});
- * 		fc.assert(prop, { seed: 101, numRuns: 100 });
- * 	});
- * ```
  */
 function renderPropertyBlock(
 	descriptor: PropertyDescriptor,
@@ -487,17 +483,29 @@ function renderPropertyBlock(
 		`\t// traces: ${descriptor.traces.map((id) => JSON.stringify(id)).join(", ")}`,
 	);
 	lines.push(`\tit(${JSON.stringify(descriptor.id)}, () => {`);
-	for (const spec of descriptor.params) {
-		assertIdentifier(spec.param, "param name");
-		lines.push(`\t\tconst ${spec.param} = ${renderArbitrary(spec)};`);
-	}
+
 	const params = descriptor.params.map((spec) => spec.param);
 	const paramNames = new Set(params);
+	// VERSAILLES-165 joint sampling: the mirror TARGET's spec carries mirrorOf
+	// — its value is mirrored from the SOURCE inside the callback, so it never
+	// gets its own arbitrary, never filters, never becomes a record key, and
+	// never appears in the callback param list.
+	const mirrorTargets = new Set(
+		descriptor.params
+			.filter((spec) => spec.mirrorOf !== undefined)
+			.map((spec) => spec.param),
+	);
+	const nonMirrorParams = params.filter((param) => !mirrorTargets.has(param));
 
 	// Rejects — NO oracle consts (the clause is never embedded as dead code),
 	// NO filter; only the descriptor's configured rejection idiom asserts
-	// (ADR-0007).
+	// (ADR-0007). Per-param arbitraries render for EVERY param (rejects
+	// descriptors never carry mirrors).
 	if (descriptor.outcome === "rejects") {
+		for (const spec of descriptor.params) {
+			assertIdentifier(spec.param, "param name");
+			lines.push(`\t\tconst ${spec.param} = ${renderArbitrary(spec)};`);
+		}
 		const call = renderPropertyCall(descriptor, methods, false);
 		lines.push(
 			`\t\tconst prop = fc.property(${params.join(", ")}, (${params.join(", ")}) => {`,
@@ -541,19 +549,173 @@ function renderPropertyBlock(
 		}
 	}
 
+	// Joint-layout decision (VERSAILLES-165): classify each guard oracle.
+	//   mirror-satisfied — a multi-param oracle whose params include a mirror
+	//     target: the mirror construction (`const <target> = <source>;`)
+	//     guarantees it, so it is asserted but NEVER filtered.
+	//   multi-param non-mirror — a multi-param oracle with no mirror target:
+	//     its joint region needs the record + bounded filter.
+	//   single-param — the per-param `.filter(...)` layout below.
+	//
+	// A descriptor with a mirror param and NO multi-param non-mirror oracle
+	// renders the MIRROR layout; ANY multi-param non-mirror oracle renders the
+	// RECORD layout (the planner only passes joint-plannable descriptors, so
+	// reaching here is expected — never the old belt-and-suspenders error);
+	// otherwise every guard oracle is single-param and the per-param layout is
+	// byte-identical to the pre-joint emitter.
+	const multiParamNonMirror = guardOracles.filter(
+		(oracle) =>
+			oracle.oracleParams.length > 1 &&
+			!oracle.oracleParams.some((param) => mirrorTargets.has(param)),
+	);
+	const useMirrorLayout =
+		mirrorTargets.size > 0 && multiParamNonMirror.length === 0;
+	const useRecordLayout = !useMirrorLayout && multiParamNonMirror.length > 0;
+
+	const ownClauseIds = new Set(
+		descriptor.clauses.map((clause) => clause.clauseId),
+	);
+
+	// ── Mirror layout ────────────────────────────────────────────────────────
+	// Only NON-mirror params get arbitrary declarations and callback params;
+	// the mirror TARGET is derived inside the callback, the equality oracle is
+	// asserted but NEVER filtered (the mirror guarantees it), and the call uses
+	// ALL descriptor params in order.
+	if (useMirrorLayout) {
+		for (const spec of descriptor.params) {
+			if (spec.mirrorOf !== undefined) {
+				continue;
+			}
+			assertIdentifier(spec.param, "param name");
+			lines.push(`\t\tconst ${spec.param} = ${renderArbitrary(spec)};`);
+		}
+		// The block EMBEDS exactly the guard oracles it uses — its own asserted
+		// clauses (the mirror oracle is asserted, never filtered) — in guard
+		// order, never a dead const.
+		const embedded = guardOracles.filter((oracle) =>
+			ownClauseIds.has(oracle.clauseId),
+		);
+		for (const oracle of embedded) {
+			lines.push(`\t\tconst ${oracle.constName} = ${oracle.code};`);
+		}
+		lines.push(
+			`\t\tconst prop = fc.property(${nonMirrorParams.join(", ")}, (${nonMirrorParams.join(", ")}) => {`,
+		);
+		// Mirror derivation inside the callback, before the call.
+		for (const spec of descriptor.params) {
+			if (spec.mirrorOf !== undefined) {
+				assertIdentifier(spec.mirrorOf, "mirror source param");
+				lines.push(`\t\t\tconst ${spec.param} = ${spec.mirrorOf};`);
+			}
+		}
+		const asserted = descriptor.clauses.map((clause) => ({
+			constName: sanitizeId(clause.clauseId),
+			oracleParams: oracleParamsOf(clause.code),
+		}));
+		const call = renderPropertyCall(descriptor, methods, false);
+		lines.push(`\t\t\t${call};`);
+		// Oracle assertion: mirror targets are in-scope locals — pass oracle
+		// params directly, never mapped to instance.<field>.
+		for (const a of asserted) {
+			const args = a.oracleParams.join(", ");
+			lines.push(`\t\t\texpect(${a.constName}(${args})).toBe(true);`);
+		}
+		lines.push("\t\t});");
+		lines.push(
+			`\t\tfc.assert(prop, { seed: ${String(descriptor.seed)}, numRuns: ${String(propertyNumRuns)} });`,
+		);
+		lines.push("\t});");
+		lines.push("");
+		return lines;
+	}
+
+	// ── Record layout ────────────────────────────────────────────────────────
+	// No per-param arbitrary declarations, no per-param `.filter(...)` — the
+	// record carries the non-mirror params' arbitraries inline and the
+	// record-level filter composes ALL non-mirror guard oracles (each invoked
+	// with the params it references, joined `&&` in guard order) to guard the
+	// joint region. Mirror-satisfied oracles never filter (the mirror
+	// guarantees them); field-referencing oracles cannot be destructured from
+	// the record (embedded only when the block asserts them itself).
+	if (useRecordLayout) {
+		const sourceParams = new Set(nonMirrorParams);
+		const recordFilterOracles = guardOracles.filter(
+			(oracle) =>
+				oracle.oracleParams.length > 0 &&
+				oracle.oracleParams.every((param) => sourceParams.has(param)),
+		);
+		const filterConsts = new Set(
+			recordFilterOracles.map((oracle) => oracle.constName),
+		);
+		const embedded = guardOracles.filter(
+			(oracle) =>
+				filterConsts.has(oracle.constName) || ownClauseIds.has(oracle.clauseId),
+		);
+		for (const oracle of embedded) {
+			lines.push(`\t\tconst ${oracle.constName} = ${oracle.code};`);
+		}
+		const recordEntries = descriptor.params
+			.filter((spec) => spec.mirrorOf === undefined)
+			.map((spec) => `${spec.param}: ${renderArbitrary(spec)}`);
+		const filterBody = recordFilterOracles
+			.map((oracle) => `${oracle.constName}(${oracle.oracleParams.join(", ")})`)
+			.join(" && ");
+		lines.push("\t\tconst prop = fc.property(");
+		lines.push(`\t\t\tfc.record({ ${recordEntries.join(", ")} })`);
+		lines.push(
+			`\t\t\t\t.filter(({ ${nonMirrorParams.join(", ")} }) => ${filterBody}),`,
+		);
+		lines.push(`\t\t\t({ ${nonMirrorParams.join(", ")} }) => {`);
+		// Mirror params carry no record key — derived inside the callback.
+		for (const spec of descriptor.params) {
+			if (spec.mirrorOf !== undefined) {
+				assertIdentifier(spec.mirrorOf, "mirror source param");
+				lines.push(`\t\t\t\tconst ${spec.param} = ${spec.mirrorOf};`);
+			}
+		}
+		const asserted = descriptor.clauses.map((clause) => ({
+			constName: sanitizeId(clause.clauseId),
+			oracleParams: oracleParamsOf(clause.code),
+		}));
+		const instanceBound = asserted.some((a) =>
+			a.oracleParams.some((p) => !paramNames.has(p)),
+		);
+		const call = renderPropertyCall(descriptor, methods, instanceBound);
+		if (instanceBound) {
+			lines.push(`\t\t\t\tconst instance = new ${descriptor.component}();`);
+		}
+		lines.push(`\t\t\t\t${call};`);
+		for (const a of asserted) {
+			const args = a.oracleParams
+				.map((p) => (paramNames.has(p) ? p : `instance.${p}`))
+				.join(", ");
+			lines.push(`\t\t\t\texpect(${a.constName}(${args})).toBe(true);`);
+		}
+		lines.push("\t\t\t}");
+		lines.push("\t\t);");
+		lines.push(
+			`\t\tfc.assert(prop, { seed: ${String(descriptor.seed)}, numRuns: ${String(propertyNumRuns)} });`,
+		);
+		lines.push("\t});");
+		lines.push("");
+		return lines;
+	}
+
+	// ── Single-param layout (byte-identical to the pre-joint emitter) ────────
+	for (const spec of descriptor.params) {
+		assertIdentifier(spec.param, "param name");
+		lines.push(`\t\tconst ${spec.param} = ${renderArbitrary(spec)};`);
+	}
 	const filters = new Map<string, string>();
 	for (const param of params) {
 		const first = guardOracles.find((oracle) =>
 			oracle.oracleParams.includes(param),
 		);
 		if (first !== undefined) {
-			// B1 belt-and-suspenders: a multi-param guard oracle can never be a
-			// valid `.filter(...)` — fast-check's filter passes exactly ONE
-			// value, so filtering with it would evaluate the predicate against
-			// undefined and silently discard the whole domain (a hanging
-			// property). The planner gate marks such descriptors
-			// PROPERTY_UNPLANNABLE before they reach the emitter, so reaching
-			// here is an internal invariant violation — refuse loudly rather
+			// B1 belt-and-suspenders (last-resort invariant): the joint-layout
+			// decision above routes every multi-param guard oracle to the
+			// mirror/record layouts, so a multi-param oracle reaching this
+			// branch is an internal invariant violation — refuse loudly rather
 			// than emit a broken property.
 			if (first.oracleParams.length > 1) {
 				throw new Error(
@@ -564,12 +726,6 @@ function renderPropertyBlock(
 		}
 	}
 	const filterConsts = new Set(filters.values());
-	const ownClauseIds = new Set(
-		descriptor.clauses.map((clause) => clause.clauseId),
-	);
-
-	// The block EMBEDS exactly the guard oracles it uses — its filters + its
-	// own asserted clauses — in guard order, never a dead const.
 	const embedded = guardOracles.filter(
 		(oracle) =>
 			filterConsts.has(oracle.constName) || ownClauseIds.has(oracle.clauseId),
@@ -577,7 +733,6 @@ function renderPropertyBlock(
 	for (const oracle of embedded) {
 		lines.push(`\t\tconst ${oracle.constName} = ${oracle.code};`);
 	}
-
 	const arbitraryExprs = descriptor.params.map((spec) => {
 		const filter = filters.get(spec.param);
 		return filter === undefined
