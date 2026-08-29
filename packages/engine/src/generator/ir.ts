@@ -126,6 +126,21 @@ export type EmitOptions = {
 		string,
 		Record<string, { static: boolean; params: string[]; returnType?: string }>
 	>;
+	/**
+	 * The property-block plan (ADR-0017, build-spec §9.6) computed by
+	 * planPropertyBlocks(suite, context) in the generate pipeline. Absent or
+	 * empty (config.propertyBased.enabled false) ⇒ the emitter renders nothing
+	 * new — byte-identical to v1 output. Only the vitest emitter reads it;
+	 * xunit/pytest ignore it (vitest + fast-check first, ADR-0017).
+	 */
+	propertyPlan?: PropertyPlan;
+	/**
+	 * config.propertyBased.numRuns threaded into every `fc.assert(prop, {
+	 * seed, numRuns })` call. PropertyPlan does not carry it (Phase 4 pinned
+	 * the plan shape), so it flows like rejection idiom / methods / modulePaths.
+	 * Default 100 when absent (build-spec §9.6).
+	 */
+	propertyNumRuns?: number;
 };
 
 /** Maps every source clause ID → the test IDs tracing it (§9.3). */

@@ -26,18 +26,27 @@
  * byte-identically.
  */
 import type {
+	ArbitrarySpec,
 	AssertionDescriptor,
 	EmitOptions,
 	EmittedFile,
 	OperationCaseGroup,
 	PlannedCase,
 	PlannedSuite,
+	PropertyDescriptor,
+	PropertyPlan,
 } from "../ir.js";
+import { sanitizeId } from "./shared.js";
 
 /** Tool-owned generated output directory (config default, build-spec §9.4). */
 const DEFAULT_GENERATED_DIR = ".versailles/generated";
 /** Default module import specifier relative to a generated file. */
 const DEFAULT_MODULE_PREFIX = "../../src/";
+/**
+ * Default run count for `fc.assert(prop, { seed, numRuns })` when
+ * config.propertyBased.numRuns is absent (build-spec §9.6, ADR-0017).
+ */
+const DEFAULT_PROPERTY_NUM_RUNS = 100;
 
 type ComponentGroup = {
 	operations: OperationCaseGroup[];
@@ -67,6 +76,8 @@ export function emitVitest(
 	const generatedDir = options?.generatedDir ?? DEFAULT_GENERATED_DIR;
 	const modulePaths = options?.modulePaths ?? {};
 	const methods = options?.methods;
+	const propertyPlan = options?.propertyPlan;
+	const propertyNumRuns = options?.propertyNumRuns ?? DEFAULT_PROPERTY_NUM_RUNS;
 	const groups = groupByComponent(suite);
 	const files: EmittedFile[] = [];
 	for (const component of Object.keys(groups)) {
@@ -77,6 +88,8 @@ export function emitVitest(
 			suite.clauseIds,
 			modulePaths,
 			methods,
+			propertyPlan,
+			propertyNumRuns,
 		);
 		files.push({ path: `${generatedDir}/${component}.test.ts`, content });
 	}
@@ -108,6 +121,8 @@ function renderComponentFile(
 	clauseIds: string[],
 	modulePaths: Record<string, string>,
 	methods: EmitOptions["methods"],
+	propertyPlan?: PropertyPlan,
+	propertyNumRuns: number = DEFAULT_PROPERTY_NUM_RUNS,
 ): string {
 	const lines: string[] = [];
 	lines.push(
@@ -133,16 +148,38 @@ function renderComponentFile(
 			? override
 			: `${DEFAULT_MODULE_PREFIX}${component}.js`;
 	lines.push(`import { ${component} } from "${modulePath}";`);
+	// ADR-0017: the fast-check import lands immediately after the component
+	// import, only when the component has at least one property descriptor.
+	// Absent/empty propertyPlan renders the v1 header byte-for-byte (the
+	// enabled=false backward-compat pin).
+	const componentDescriptors = (propertyPlan?.descriptors ?? []).filter(
+		(descriptor) => descriptor.component === component,
+	);
+	if (componentDescriptors.length > 0) {
+		lines.push('import { fc } from "fast-check";');
+	}
 	lines.push("");
 
 	for (const operation of group.operations) {
 		assertIdentifier(operation.operation, "operation name");
-		if (operation.cases.length > 0) {
+		const propertyDescriptors = componentDescriptors.filter(
+			(descriptor) => descriptor.operation === operation.operation,
+		);
+		// V-27 empty-group pin + ADR-0017: an operation with zero concrete
+		// cases but at least one property descriptor must still render its
+		// describe — the property blocks are the only content inside.
+		if (operation.cases.length > 0 || propertyDescriptors.length > 0) {
 			lines.push(`describe("${operation.operation}", () => {`);
 			for (const case_ of operation.cases) {
 				lines.push(
 					...renderCase(case_, component, operation.operation, methods),
 				);
+			}
+			// Property blocks render AFTER the operation's concrete cases, in
+			// plan.descriptors order (the planner already traverses operations
+			// in component order, so a per-operation filter preserves it).
+			for (const descriptor of propertyDescriptors) {
+				lines.push(...renderPropertyBlock(descriptor, propertyNumRuns));
 			}
 			lines.push("});");
 			lines.push("");
@@ -279,6 +316,110 @@ function renderCase(
 	lines.push("\t});");
 	lines.push("");
 	return lines;
+}
+
+/**
+ * Renders one seeded property block (ADR-0017, build-spec §9.6) — a §9.3
+ * tab-indented traceability comment plus an `it` whose body builds the
+ * per-param arbitraries, embeds the codegen'd clause oracles verbatim, runs
+ * the operation with the legacy options-object call, and asserts the outcome.
+ *
+ * Pinned layout (tab-indented, space after commas):
+ *
+ * ```ts
+ * 	// traces: "AccountService.withdraw.pre0"
+ * 	it("AccountService.withdraw.property-satisfies-0", () => {
+ * 		const amount = fc.integer({ min: 10, max: 100 });
+ * 		const prop = fc.property(amount, (amount) => {
+ * 			const AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;
+ * 			const result = AccountService.withdraw({ amount });
+ * 			expect(result).toBeDefined();
+ * 		});
+ * 		fc.assert(prop, { seed: 123456789, numRuns: 100 });
+ * 	});
+ * ```
+ *
+ * Rejects render the descriptor's configured rejection idiom (ADR-0007) —
+ * "throws" → `expect(() => call).toThrow()`, "returns" → `expect(call).toBeNull()`
+ * — never hardcoded. Satisfies and invariant-preserving share the uniform
+ * non-rejects layout (`const result = call; expect(result).toBeDefined();`).
+ */
+function renderPropertyBlock(
+	descriptor: PropertyDescriptor,
+	propertyNumRuns: number,
+): string[] {
+	const lines: string[] = [];
+	lines.push(
+		`\t// traces: ${descriptor.traces.map((id) => JSON.stringify(id)).join(", ")}`,
+	);
+	lines.push(`\tit(${JSON.stringify(descriptor.id)}, () => {`);
+	for (const spec of descriptor.params) {
+		assertIdentifier(spec.param, "param name");
+		lines.push(`\t\tconst ${spec.param} = ${renderArbitrary(spec)};`);
+	}
+	const params = descriptor.params.map((spec) => spec.param).join(", ");
+	lines.push(`\t\tconst prop = fc.property(${params}, (${params}) => {`);
+	for (const clause of descriptor.clauses) {
+		lines.push(`\t\t\tconst ${sanitizeId(clause.clauseId)} = ${clause.code};`);
+	}
+	const call = `${descriptor.component}.${descriptor.operation}({ ${params} })`;
+	if (descriptor.outcome === "rejects") {
+		const idiom = descriptor.rejectionIdiom ?? "throws";
+		switch (idiom) {
+			case "throws":
+				lines.push(`\t\t\texpect(() => ${call}).toThrow();`);
+				break;
+			case "returns":
+				lines.push(`\t\t\texpect(${call}).toBeNull();`);
+				break;
+			default:
+				throw new Error(
+					`Unknown rejection idiom "${idiom}" for property "${descriptor.id}"`,
+				);
+		}
+	} else {
+		lines.push(`\t\t\tconst result = ${call};`);
+		lines.push("\t\t\texpect(result).toBeDefined();");
+	}
+	lines.push("\t\t});");
+	lines.push(
+		`\t\tfc.assert(prop, { seed: ${String(descriptor.seed)}, numRuns: ${String(propertyNumRuns)} });`,
+	);
+	lines.push("\t});");
+	lines.push("");
+	return lines;
+}
+
+/**
+ * Renders one per-param arbitrary (ArbitrarySpec → fast-check call). The
+ * deterministic `default` (list<X> → `fc.constant([])`, optional<X> →
+ * `fc.constant(<inner default>)`) wins over the kind; otherwise kind selects
+ * the arbitrary family: number with bounds → `fc.integer({ min, max })`,
+ * number without → `fc.integer()`, enum → `fc.constantFrom(<members>)`
+ * (JSON-stringified, joined ", "), string → `fc.string()`, boolean →
+ * `fc.boolean()`.
+ */
+function renderArbitrary(spec: ArbitrarySpec): string {
+	if (spec.default !== undefined) {
+		return `fc.constant(${renderValue(spec.default)})`;
+	}
+	switch (spec.kind) {
+		case "number":
+			if (spec.bounds !== undefined) {
+				return `fc.integer({ min: ${spec.bounds.min}, max: ${spec.bounds.max} })`;
+			}
+			return "fc.integer()";
+		case "enum": {
+			const members = (spec.members ?? [])
+				.map((member) => JSON.stringify(member))
+				.join(", ");
+			return `fc.constantFrom(${members})`;
+		}
+		case "string":
+			return "fc.string()";
+		case "boolean":
+			return "fc.boolean()";
+	}
 }
 
 /**

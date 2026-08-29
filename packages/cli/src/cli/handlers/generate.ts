@@ -18,6 +18,7 @@ import {
 import {
 	coverageManifest,
 	emitSuite,
+	planPropertyBlocks,
 	planTestCases,
 } from "../../../../engine/src/generator/index.js";
 import type { EmitOptions } from "../../../../engine/src/generator/index.js";
@@ -54,6 +55,13 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 
 	try {
 		const suite = planTestCases(context);
+		// Seeded PBT emission (ADR-0017, build-spec §9.6): compute the
+		// property-block plan over the already-planned suite and thread it —
+		// plus the configured run count — into the emitSuite options seam.
+		// When config.propertyBased.enabled is false/absent planPropertyBlocks
+		// returns an EMPTY descriptors list, so the v1 output stays
+		// byte-identical (the enabled=false backward-compat pin).
+		const propertyPlan = planPropertyBlocks(suite, context);
 		const files = emitSuite(suite, context.config.testFramework, {
 			generatedDir: context.config.generatedDir,
 			modulePaths: deriveModulePaths(
@@ -66,6 +74,8 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 			// Absent for legacy entries → the emitter keeps the options-object
 			// static call (backward compatible).
 			methods: deriveMethods(context.manifests),
+			propertyPlan,
+			propertyNumRuns: context.config.propertyBased?.numRuns ?? 100,
 		});
 		for (const file of files) {
 			const target = join(cwd, file.path);
