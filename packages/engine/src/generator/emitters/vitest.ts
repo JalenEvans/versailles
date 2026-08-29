@@ -728,12 +728,15 @@ function renderPropertyBlock(
 		// Center S2 (belt-and-suspenders): a record layout whose computed
 		// record filter oracle list is EMPTY — every guard oracle is
 		// field-referencing and was excluded above — would emit
-		// `.filter(({ a, b }) => )` syntax garbage. The planner's B1 gate
-		// routes field-referencing descriptors to the FIELD-BOUND layout, so
-		// reaching here is an internal invariant violation — refuse loudly.
+		// `.filter(({ a, b }) => )` syntax garbage. The planner marks
+		// non-field-bound descriptors with field-referencing guard oracles
+		// PROPERTY_UNPLANNABLE (the FIELD-BOUND layout is reserved for
+		// descriptors whose OWN clause is the field-bound equality), so
+		// reaching here means a planner routing gap — refuse loudly rather
+		// than emit `filter(({ a, b }) => )` syntax garbage.
 		if (recordFilterOracles.length === 0) {
 			throw new Error(
-				`Refusing to emit: record-layout property "${descriptor.id}" has an empty record filter — every guard oracle is field-referencing and cannot be destructured from the record. The planner's B1 gate should have routed this descriptor to the FIELD-BOUND layout; refusing loudly instead of emitting \`filter(({ ... }) => )\` syntax garbage.`,
+				`Refusing to emit: record-layout property "${descriptor.id}" has an empty record filter — every guard oracle is field-referencing and cannot be destructured from the record. The planner marks non-field-bound descriptors with field-referencing guard oracles PROPERTY_UNPLANNABLE, so reaching here is a planner routing gap; refusing loudly instead of emitting \`filter(({ ... }) => )\` syntax garbage.`,
 			);
 		}
 		const filterConsts = new Set(

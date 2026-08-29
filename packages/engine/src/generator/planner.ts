@@ -2259,6 +2259,41 @@ function bothSideFieldRefEquality(ast: Node): boolean {
 	);
 }
 
+/**
+ * The manifest-FIELD operands of a bothSideFieldRef equality — the operands
+ * that are NOT operation params (Center re-review). `status == newStatus`
+ * with `status` a manifest field and `newStatus` the only op param →
+ * ["status"]; `status == balance` with BOTH operands manifest fields →
+ * ["status", "balance"] (zero op params — no arbitrary can drive the
+ * property, the Fix-2 zero-param case). Returns [] for any non-equality AST
+ * or an equality whose operands are all op params (the mirror subset).
+ */
+function fieldBoundFieldOperands(
+	ast: Node,
+	opParamNames: Set<string>,
+): string[] {
+	// Narrow the Node union to the compare shape before touching .left/.right
+	// (bothSideFieldRefEquality returns a plain boolean, not a type guard).
+	if (
+		ast.type !== "compare" ||
+		ast.op !== "==" ||
+		fieldRefName(ast.left) === null ||
+		fieldRefName(ast.right) === null
+	) {
+		return [];
+	}
+	const left = fieldRefName(ast.left);
+	const right = fieldRefName(ast.right);
+	const fields: string[] = [];
+	if (left !== null && !opParamNames.has(left)) {
+		fields.push(left);
+	}
+	if (right !== null && !opParamNames.has(right)) {
+		fields.push(right);
+	}
+	return fields;
+}
+
 /** A normalized sum/difference coupling leaf `p1 ± p2 <op> C`. */
 type CouplingLeaf = {
 	arithOp: "+" | "-";
@@ -2709,6 +2744,22 @@ export function planPropertyBlocks(
 			);
 			let multiParamUnplannable: { clauseId: string; detail: string } | null =
 				null;
+			// A field-referencing multi-param guard in the operation's guard
+			// set (Center re-review): a bothSideFieldRef equality with at least
+			// one manifest-FIELD operand (`f == a`). The emitter's FIELD-BOUND
+			// layout is reserved for descriptors whose OWN clause is such an
+			// equality; every OTHER satisfies/invariant-preserving descriptor
+			// would need to filter with the field-referencing sibling — and
+			// the mirror/record layouts cannot reference manifest fields in
+			// their filters (the record cannot destructure the field; the
+			// mirror cannot sample it) — so those siblings are
+			// PROPERTY_UNPLANNABLE. `zeroParam` flags the degenerate field ×
+			// field equality (`f1 == f2`, both operands manifest fields): even
+			// the field-bound layout has nothing to sample then.
+			let multiParamFieldBound: {
+				clauseId: string;
+				zeroParam: boolean;
+			} | null = null;
 			for (const oracle of guardOracles) {
 				if (oracleParamsOf(oracle.code).length <= 1) {
 					continue;
@@ -2729,6 +2780,15 @@ export function planPropertyBlocks(
 						detail: classification.detail,
 					};
 					break;
+				}
+				if (classification.kind === "field-bound") {
+					if (multiParamFieldBound === null) {
+						multiParamFieldBound = {
+							clauseId: oracle.clauseId,
+							zeroParam:
+								fieldBoundFieldOperands(ast, opParamNames).length === 2,
+						};
+					}
 				}
 			}
 
@@ -2776,6 +2836,49 @@ export function planPropertyBlocks(
 						code: "PROPERTY_UNPLANNABLE",
 						field: clauseId,
 						detail: `Cannot plan a property block for ${clauseId}: guard oracle ${multiParamUnplannable.clauseId} is a multi-param oracle that cannot be joint-sampled (${multiParamUnplannable.detail}) — fast-check's .filter() passes one value, so no satisfies/invariant-preserving block in ${componentName}.${operationName} can filter its arbitraries to a valid region with this guard set`,
+					});
+					return;
+				}
+				// Fix 2 (LOW, Center re-review): the clause's OWN
+				// bothSideFieldRef equality whose operands are ALL manifest
+				// fields (`f1 == f2` — zero op params to sample) cannot produce
+				// a valid fast-check property: the FIELD-BOUND layout samples
+				// op-param arbitraries only, so with no op params it would
+				// emit `fc.property(, () => {` syntax garbage. Route to
+				// PROPERTY_UNPLANNABLE — warning, descriptor absent, strategy
+				// stays "property".
+				const ownFieldOperands = fieldBoundFieldOperands(ast, opParamNames);
+				if (
+					(outcome === "satisfies" || outcome === "invariant-preserving") &&
+					ownFieldOperands.length === 2
+				) {
+					warnings.push({
+						code: "PROPERTY_UNPLANNABLE",
+						field: clauseId,
+						detail: `Cannot plan a property block for ${clauseId}: the bothSideFieldRef equality's operands are ALL manifest fields (${ownFieldOperands.join(", ")}) — no operation param can drive fast-check's fc.property, so the FIELD-BOUND layout has no arbitrary to sample`,
+					});
+					return;
+				}
+				// Fix 1 (MEDIUM, Center re-review): when the operation's guard
+				// set contains a field-referencing multi-param oracle (`f ==
+				// a`), ONLY descriptors whose OWN clause is such a field-bound
+				// equality are plannable — via the emitter's FIELD-BOUND
+				// layout, which never filters with siblings. Every OTHER
+				// satisfies/invariant-preserving descriptor would need to
+				// filter with the field-referencing sibling — the mirror and
+				// record layouts cannot reference manifest fields in their
+				// filters — so it is PROPERTY_UNPLANNABLE (warning, descriptor
+				// absent, strategy stays "property"). The SELECTOR still
+				// records "property"; the coverage gap stays visible.
+				if (
+					(outcome === "satisfies" || outcome === "invariant-preserving") &&
+					multiParamFieldBound !== null &&
+					ownFieldOperands.length === 0
+				) {
+					warnings.push({
+						code: "PROPERTY_UNPLANNABLE",
+						field: clauseId,
+						detail: `Cannot plan a property block for ${clauseId}: guard oracle ${multiParamFieldBound.clauseId} is a field-referencing multi-param equality (a manifest-FIELD operand) — only descriptors whose own clause is such a field-bound equality are plannable (the FIELD-BOUND layout), and the mirror/record layouts cannot filter with a field-referencing sibling, so no other satisfies/invariant-preserving block in ${componentName}.${operationName} can be planned with this guard set`,
 					});
 					return;
 				}

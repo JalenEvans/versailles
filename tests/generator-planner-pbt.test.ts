@@ -1586,6 +1586,222 @@ describe("planPropertyBlocks — retained unplannable shapes (VERSAILLES-165)", 
 	});
 });
 
+// ── Center re-review: MIXED guard sets — field-bound equality + sibling ──────
+// The reachable crash the Center re-review found: an operation whose guard set
+// carries a field-referencing multi-param equality (`f == a`, f a manifest
+// field) AND another multi-param oracle (`a == b`). The field-bound equality
+// itself is PLANNED (field-bound layout, Center B1). But ANY OTHER
+// satisfies/invariant-preserving descriptor of that operation — a param-param
+// mirror, a coupled compound — would need to filter with the field-referencing
+// sibling, and a manifest field can never be destructured from the record: the
+// record filter comes out EMPTY and the emitter throws ("Refusing to emit:
+// record-layout property ... has an empty record filter"). The ratified fix:
+// non-field-bound descriptors of a field-bound-guard operation are
+// PROPERTY_UNPLANNABLE — warning present, descriptor absent, strategy stays
+// property, the field-bound descriptor stays planned.
+
+function mixedGuardSetContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			MergeService: {
+				invariants: [],
+				operations: {
+					merge: {
+						id: "MergeService.merge",
+						params: [
+							{ name: "a", type: "string" },
+							{ name: "b", type: "string" },
+						],
+						preconditions: [
+							{ id: "MergeService.merge.pre0", expr: "f == a" },
+							{ id: "MergeService.merge.pre1", expr: "a == b" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "merge-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		version: "1.0",
+		manifests: {
+			MergeService: {
+				sourceHash: "man-merge",
+				fields: { f: "string" },
+			},
+		},
+	};
+	return makeContext(contracts, manifests, EMPTY_PREDICATES, {
+		enabled: true,
+		numRuns: 100,
+	});
+}
+
+describe("planPropertyBlocks — MIXED guard set: field-bound equality + mirror sibling (Center re-review)", () => {
+	it("the field-bound equality's OWN descriptor stays PLANNED when its guard set carries a mirror sibling — no warning for the field-bound clause", () => {
+		const ctx = mixedGuardSetContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, warnings } = planPropertyBlocks(suite, ctx);
+
+		// Fixture clause-code verification: pre0 `f == a` codegen's to a
+		// TWO-param oracle referencing the manifest field f.
+		const code = renderOracle(ctx, "MergeService.merge.pre0");
+		expect(code).toBe("(f, a) => f === a");
+		expect(oracleParamsOf(code)).toEqual(["f", "a"]);
+
+		// The field-bound clause is NOT warned.
+		expect(warnings.some((w) => w.field === "MergeService.merge.pre0")).toBe(
+			false,
+		);
+
+		// The field-bound descriptor IS planned — OP-PARAMS ONLY ([a, b], no
+		// mirrorOf); the manifest field is never a sampled spec.
+		const fieldBound = descriptors.find(
+			(d) => d.id === "MergeService.merge.property-satisfies-0",
+		);
+		expect(fieldBound).toBeDefined();
+		expect(fieldBound?.params.map((spec) => spec.param)).toEqual(["a", "b"]);
+		expect(fieldBound?.params.some((spec) => spec.mirrorOf !== undefined)).toBe(
+			false,
+		);
+		expect(
+			descriptors.flatMap((d) => d.params.map((spec) => spec.param)),
+		).not.toContain("f");
+		expect(fieldBound?.clauses[0].code).toBe("(f, a) => f === a");
+		expect(fieldBound?.clauses[0].clauseId).toBe("MergeService.merge.pre0");
+	});
+
+	it("any OTHER satisfies descriptor of a field-bound-guard operation is PROPERTY_UNPLANNABLE — the param-param mirror a == b is a warning, descriptor absent, strategy stays property", () => {
+		const ctx = mixedGuardSetContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
+		);
+
+		// Fixture clause-code verification: pre1 `a == b` codegen's to a
+		// TWO-param mirror oracle.
+		const code = renderOracle(ctx, "MergeService.merge.pre1");
+		expect(code).toBe("(a, b) => a === b");
+		expect(oracleParamsOf(code)).toEqual(["a", "b"]);
+
+		// The mirror sibling is a warning — its block would need to filter
+		// with the field-referencing sibling `f == a`, which can never be
+		// destructured from the record (the reachable empty-record-filter
+		// crash). Never a silent zero.
+		const warning = warnings.find((w) => w.field === "MergeService.merge.pre1");
+		expect(warning).toBeDefined();
+		expect(warning?.code).toBe("PROPERTY_UNPLANNABLE");
+		expect(warning?.detail.length).toBeGreaterThan(0);
+
+		// No descriptor carries the mirror clause.
+		expect(
+			descriptors.some((d) => d.traces.includes("MergeService.merge.pre1")),
+		).toBe(false);
+
+		// The SELECTOR still records property for both clauses (bothSideFieldRef
+		// shape); the PLANNER finds the mirror's mixed layout unplannable.
+		expect(strategies["MergeService.merge.pre1"]).toBe("property");
+		expect(strategies["MergeService.merge.pre0"]).toBe("property");
+
+		// The coverage gap stays visible for the warned clause.
+		expect(suite.clauseIds).toContain("MergeService.merge.pre1");
+		expect(suite.clauseIds).toContain("MergeService.merge.pre0");
+		expectStrategyCoverage(ctx, strategies);
+	});
+});
+
+// ── Center re-review: zero-param field-field equality ────────────────────────
+// `f1 == f2` with BOTH operands manifest fields and NO operation params: the
+// field-bound layout has nothing to sample — the emitter would render
+// `fc.property(, () => {` (syntax garbage). The ratified fix: the clause is
+// PROPERTY_UNPLANNABLE — warning present, descriptor absent, strategy stays
+// property, coverage gap visible.
+
+function zeroParamFieldEqualityContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			RegistryService: {
+				invariants: [],
+				operations: {
+					validate: {
+						id: "RegistryService.validate",
+						params: [],
+						preconditions: [
+							{
+								id: "RegistryService.validate.pre0",
+								expr: "f1 == f2",
+							},
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "validate-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		version: "1.0",
+		manifests: {
+			RegistryService: {
+				sourceHash: "man-registry",
+				fields: { f1: "string", f2: "string" },
+			},
+		},
+	};
+	return makeContext(contracts, manifests, EMPTY_PREDICATES, {
+		enabled: true,
+		numRuns: 100,
+	});
+}
+
+describe("planPropertyBlocks — zero-param field-field equality is PROPERTY_UNPLANNABLE (Center re-review)", () => {
+	it("f1 == f2 with no operation params cannot be sampled — warning present, descriptor absent, strategy stays property, coverage gap visible", () => {
+		const ctx = zeroParamFieldEqualityContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
+		);
+
+		// Fixture clause-code verification: `f1 == f2` codegen's to a TWO-param
+		// oracle with BOTH operands manifest fields — the operation has ZERO
+		// params, so the field-bound layout has nothing to sample.
+		const code = renderOracle(ctx, "RegistryService.validate.pre0");
+		expect(code).toBe("(f1, f2) => f1 === f2");
+		expect(oracleParamsOf(code)).toEqual(["f1", "f2"]);
+
+		// Same LoaderWarning channel as the retained-unplannable shapes.
+		const warning = warnings.find(
+			(w) => w.field === "RegistryService.validate.pre0",
+		);
+		expect(warning).toBeDefined();
+		expect(warning?.code).toBe("PROPERTY_UNPLANNABLE");
+		expect(warning?.detail.length).toBeGreaterThan(0);
+
+		// The clause contributes NO descriptor — never a silent zero, never an
+		// empty-param `fc.property(, () =>` block.
+		expect(
+			descriptors.some((d) =>
+				d.traces.includes("RegistryService.validate.pre0"),
+			),
+		).toBe(false);
+
+		// The SELECTOR still records property; the PLANNER finds the zero-param
+		// field-field equality unplannable.
+		expect(strategies["RegistryService.validate.pre0"]).toBe("property");
+
+		// The coverage gap stays visible.
+		expect(suite.clauseIds).toContain("RegistryService.validate.pre0");
+		expectStrategyCoverage(ctx, strategies);
+	});
+});
+
 // ── Determinism (ADR-0002 / ADR-0017) ───────────────────────────────────────
 
 describe("planPropertyBlocks — determinism (ADR-0002, re-scoped by ADR-0017)", () => {

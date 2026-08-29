@@ -444,7 +444,7 @@ function orderFile(files: ReturnType<typeof emitSuite>) {
 	return files.find((file) => file.path.endsWith("OrderService.test.ts"));
 }
 
-describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165 Chunk 2)", () => {
+describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165, shipped)", () => {
 	it("enabled=false backward-compat pin: the joint suite with no propertyPlan (or empty plan) is byte-identical to the no-plan baseline — no fast-check surface", () => {
 		const suite = jointSuite();
 		const baseline = emitSuite(suite, "vitest");
@@ -723,6 +723,85 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165 C
 		expect(second.map((file) => file.content)).toEqual(
 			first.map((file) => file.content),
 		);
+	});
+
+	it("mixed guard set (field-bound equality + mirror sibling): the field-bound descriptor IS emitted with the field-bound layout and the mirror sibling is a warning — the emitter NEVER crashes (Center re-review reachable crash)", async () => {
+		// The REAL pipeline, not a hand-built plan: planTestCases →
+		// planPropertyBlocks → emitSuite. The operation merge(a, b) carries
+		// pre0 `f == a` (f a manifest field — field-bound, PLANNED) and pre1
+		// `a == b` (param-param mirror). The mirror descriptor's layout would
+		// need to filter with the field-referencing sibling `f == a`, and a
+		// field can never be destructured from the record — the record filter
+		// comes out EMPTY and the emitter throws ("empty record filter", the
+		// reachable crash). The ratified fix: the field-bound descriptor stays
+		// planned, the mirror is a PROPERTY_UNPLANNABLE warning, and the emit
+		// succeeds.
+		const ctx = execMixedContext();
+		const suite = planTestCases(ctx);
+		const plan = planPropertyBlocks(suite, ctx);
+
+		// Planner pin: the mirror sibling is a warning; the field-bound clause
+		// is NOT.
+		const mirrorWarning = plan.warnings.find(
+			(w) => w.field === "MergeService.merge.pre1",
+		);
+		expect(mirrorWarning).toBeDefined();
+		expect(mirrorWarning?.code).toBe("PROPERTY_UNPLANNABLE");
+		expect(mirrorWarning?.detail.length).toBeGreaterThan(0);
+		expect(
+			plan.warnings.some((w) => w.field === "MergeService.merge.pre0"),
+		).toBe(false);
+
+		// Emit must NOT crash, and the field-bound block must render.
+		const files = emitSuite(suite, "vitest", {
+			methods: {
+				MergeService: {
+					merge: {
+						static: false,
+						params: ["a", "b"],
+						returnType: "number",
+					},
+				},
+			},
+			propertyPlan: plan,
+			propertyNumRuns: 100,
+		});
+		const merge = files.find((file) =>
+			file.path.endsWith("MergeService.test.ts"),
+		);
+		expect(merge).toBeDefined();
+
+		// The field-bound descriptor IS emitted — op-param arbitraries only,
+		// the component instance bound, the field mapped to instance.f in the
+		// assertion, no mirror const, no record, no filter.
+		expect(merge?.content).toContain(
+			'\tit("MergeService.merge.property-satisfies-0", () => {',
+		);
+		expect(merge?.content).toContain("const a = fc.string();");
+		expect(merge?.content).toContain("const b = fc.string();");
+		expect(merge?.content).toContain(
+			"const MergeService_merge_pre0 = (f, a) => f === a;",
+		);
+		expect(merge?.content).toContain(
+			"const prop = fc.property(a, b, (a, b) => {",
+		);
+		expect(merge?.content).toContain(
+			"\t\t\tconst instance = new MergeService();",
+		);
+		expect(merge?.content).toContain("instance.merge(a, b);");
+		expect(merge?.content).toContain(
+			"expect(MergeService_merge_pre0(instance.f, a)).toBe(true);",
+		);
+
+		// The mirror sibling is NOT emitted — no mirror block, no mirror const,
+		// no record/filter surface for it.
+		expect(merge?.content).not.toContain(
+			'"MergeService.merge.property-satisfies-1"',
+		);
+		expect(merge?.content).not.toContain(
+			"const MergeService_merge_pre1 = (a, b) => a === b;",
+		);
+		expect(merge?.content).not.toContain("fc.record(");
 	});
 });
 
@@ -1020,11 +1099,75 @@ const EXEC_FIELD_BOUND_SOURCE = `export class AccountService {
 }
 `;
 
+/**
+ * The MIXED guard-set contract (Center re-review crash): operation
+ * `merge(a: string, b: string)` with preconditions `f == a` (f a manifest
+ * FIELD — the field-bound layout, PLANNED) AND `a == b` (a param-param
+ * mirror). The mirror descriptor's layout would need to filter with the
+ * field-referencing sibling, which can never be destructured from the record —
+ * the record filter comes out EMPTY and the emitter throws. The ratified fix:
+ * the field-bound descriptor stays planned; the mirror sibling is a
+ * PROPERTY_UNPLANNABLE warning.
+ */
+function execMixedContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			MergeService: {
+				invariants: [],
+				operations: {
+					merge: {
+						id: "MergeService.merge",
+						params: [
+							{ name: "a", type: "string" },
+							{ name: "b", type: "string" },
+						],
+						preconditions: [
+							{ id: "MergeService.merge.pre0", expr: "f == a" },
+							{ id: "MergeService.merge.pre1", expr: "a == b" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "exec-mixed-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		version: "1.0",
+		manifests: {
+			MergeService: {
+				sourceHash: "man-exec-mixed",
+				fields: { f: "string" },
+			},
+		},
+	};
+	return execContext(contracts, { enabled: true, numRuns: 100 }, manifests);
+}
+
 /** Real OrderService source for the record W1 runnability pin. */
 const EXEC_RECORD_SOURCE = `export class OrderService {
 	placeOrder(a: number, b: number): number {
 		if (a < 0 || b < 0 || a + b > 100) throw new Error("out of range");
 		return a + b;
+	}
+}
+`;
+
+/**
+ * Real MergeService source for the MIXED W1 runnability pin (Center
+ * re-review): merge takes the two op params and mutates the manifest field
+ * `f` to match the first param — so the emitted field-bound
+ * `expect(...(instance.f, a)).toBe(true)` post-state check holds for every
+ * sampled a (the mirror sibling `a == b` is unplannable and never emitted, so
+ * no `a === b` constraint applies to the source).
+ */
+const EXEC_MIXED_SOURCE = `export class MergeService {
+	f: string = "initial";
+	merge(a: string, b: string): number {
+		this.f = a;
+		return 1;
 	}
 }
 `;
@@ -1081,7 +1224,7 @@ function execVitestRun(
 	return last;
 }
 
-describe("emitted joint-sampling properties RUN under the REAL vitest runner (W1, VERSAILLES-165 Chunk 2)", () => {
+describe("emitted joint-sampling properties RUN under the REAL vitest runner (W1, VERSAILLES-165, shipped)", () => {
 	it("executes an emitted EQUALITY-MIRROR property — exit 0 (param-param equality, Center B1: the mirror stays the param-param strategy)", async () => {
 		const ctx = execMirrorContext();
 		const suite = planTestCases(ctx);
@@ -1353,6 +1496,104 @@ describe("emitted joint-sampling properties RUN under the REAL vitest runner (W1
 			expect(
 				run.status,
 				`emitted field-bound property did not run clean:\n${run.stdout}\n${run.stderr}`,
+			).toBe(0);
+			expect(run.stdout).not.toMatch(/\d+ failed/);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("executes the MIXED guard-set case's emitted FIELD-BOUND property — exit 0, the field-referencing post-state check holds on the real instance (Center re-review crash closed)", async () => {
+		const ctx = execMixedContext();
+		const suite = planTestCases(ctx);
+		const plan = planPropertyBlocks(suite, ctx);
+
+		// Planner pin: the field-bound clause pre0 IS planned; the mirror
+		// sibling pre1 is PROPERTY_UNPLANNABLE — exactly ONE descriptor, the
+		// field-bound one, OP-PARAMS ONLY ([a, b], no mirrorOf).
+		expect(
+			plan.warnings.some((w) => w.field === "MergeService.merge.pre1"),
+		).toBe(true);
+		expect(
+			plan.warnings.some((w) => w.field === "MergeService.merge.pre0"),
+		).toBe(false);
+		const fieldBound = plan.descriptors.find(
+			(d) => d.id === "MergeService.merge.property-satisfies-0",
+		);
+		expect(fieldBound).toBeDefined();
+		expect(fieldBound?.params.map((spec) => spec.param)).toEqual(["a", "b"]);
+		expect(fieldBound?.params.some((spec) => spec.mirrorOf !== undefined)).toBe(
+			false,
+		);
+		expect(
+			plan.descriptors.some((d) =>
+				d.traces.includes("MergeService.merge.pre1"),
+			),
+		).toBe(false);
+		expect(fieldBound?.clauses[0].code).toBe("(f, a) => f === a");
+
+		const root = await mkdtemp(join(tmpdir(), "versailles-pbt-mixed-exec-"));
+		try {
+			await symlink(
+				join(EXEC_REPO_ROOT, "node_modules"),
+				join(root, "node_modules"),
+				"dir",
+			);
+			await writeFile(join(root, "merge.ts"), `${EXEC_MIXED_SOURCE}\n`, "utf8");
+
+			const files = emitSuite(suite, "vitest", {
+				generatedDir: ".",
+				modulePaths: { MergeService: "./merge" },
+				methods: {
+					MergeService: {
+						merge: {
+							static: false,
+							params: ["a", "b"],
+							returnType: "number",
+						},
+					},
+				},
+				propertyPlan: plan,
+				propertyNumRuns: 100,
+			});
+			const merge = files.find((file) =>
+				file.path.endsWith("MergeService.test.ts"),
+			);
+			expect(merge).toBeDefined();
+
+			// The string pin: the FIELD-BOUND layout for the field-bound
+			// descriptor — op-param arbitraries, the component instance bound,
+			// the call with the sampled params, the field mapped to instance.f.
+			expect(merge?.content).toContain(
+				"const prop = fc.property(a, b, (a, b) => {",
+			);
+			expect(merge?.content).toContain(
+				"\t\t\tconst instance = new MergeService();",
+			);
+			expect(merge?.content).toContain("instance.merge(a, b);");
+			expect(merge?.content).toContain(
+				"expect(MergeService_merge_pre0(instance.f, a)).toBe(true);",
+			);
+			// The mirror sibling is never emitted — no mirror block.
+			expect(merge?.content).not.toContain(
+				'"MergeService.merge.property-satisfies-1"',
+			);
+
+			await writeFile(
+				join(root, "MergeService.test.ts"),
+				merge?.content ?? "",
+				"utf8",
+			);
+
+			// EXECUTE under the real vitest runner. The emitted field-bound
+			// block samples a and b, calls the real merge (which mutates
+			// this.f = a), and asserts the oracle on the POST-state — 100
+			// seeded runs must pass, proving the mixed case's field-bound
+			// descriptor is a genuine runnable post-state check, not a crash.
+			const run = execVitestRun(root);
+			expect(
+				run.status,
+				`emitted mixed field-bound property did not run clean:\n${run.stdout}\n${run.stderr}`,
 			).toBe(0);
 			expect(run.stdout).not.toMatch(/\d+ failed/);
 		} finally {
