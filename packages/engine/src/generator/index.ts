@@ -28,6 +28,8 @@ import { coverageManifest, planTestCases } from "./planner.js";
 import { derivePropertySeed } from "./seed.js";
 
 export { planTestCases, coverageManifest, derivePropertySeed };
+export { renderClausePredicate } from "./codegen.js";
+export type { CodegenContext } from "./codegen.js";
 
 /**
  * Renders a planned suite into full-file output for the target framework.
