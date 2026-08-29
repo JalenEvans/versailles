@@ -18,115 +18,246 @@ import type {
  * (ir.ts: PropertyOutcome / ArbitrarySpec / PropertyClause / PropertyDescriptor
  * / PropertyPlan), the seed helper (seed.ts: derivePropertySeed), the strategy
  * selector (Phase 4), and the property-block planner (Phase 4: planPropertyBlocks
- * in planner.ts). The EMITTER does NOT render property blocks yet — every
- * enabled=true test in this file is Red until the implementer lands the render.
+ * in planner.ts).
  *
- * ── The emitter seam (what these tests pin) ─────────────────────────────────
+ * ── THE CHUNK-6 RE-PIN (three integration gaps the old pin missed) ──────────
  *
- * The property plan reaches the emitter through the EXISTING emitSuite options
- * seam — the same thread that already carries generatedDir / modulePaths /
- * methods (Center W4). The generate pipeline (src/cli/handlers/generate.ts)
- * computes `planPropertyBlocks(suite, context)` and passes the plan plus the
- * configured run count into emitSuite:
+ * The ORIGINAL Chunk 6 pin rendered property blocks with a broken layout that
+ * made the committed example (`examples/order-service`) produce BROKEN
+ * generated tests. This re-pin is the corrected contract; the emitter is Red
+ * against it until the implementer lands the fixes.
  *
- * ```ts
- * // packages/engine/src/generator/ir.ts — EmitOptions gains two OPTIONAL fields:
- * export type EmitOptions = {
- *   generatedDir?: string;
- *   modulePaths?: Record<string, string>;
- *   methods?: ...;
- *   propertyPlan?: PropertyPlan;   // ← NEW: planPropertyBlocks(suite, context)
- *   propertyNumRuns?: number;      // ← NEW: config.propertyBased.numRuns (default 100)
- * };
- * ```
+ *   GAP 1 — CALL SHAPE. The old layout hardcoded the legacy STATIC
+ *   options-object call `<Component>.<op>({ <params> })`. The manifest declares
+ *   `OrderService.addItem` as an INSTANCE method with positional params, so the
+ *   emitted `OrderService.addItem({ sku, price })` is a TypeError at runtime —
+ *   and the contract's `must_not` (deterministic-generation.contract.yaml)
+ *   forbids an options-object argument list where positional params are
+ *   declared. The property-block call is now SHAPE-AWARE from the SAME manifest
+ *   `methods` metadata the concrete cases use (renderCall, VERSAILLES-20 F1,
+ *   build-spec §9.4): instance → `new <Component>().<op>(<positional>)`,
+ *   static → `<Component>.<op>(<positional>)`, params in declared order. The
+ *   property block must reuse renderCall's callee computation (or an
+ *   equivalent) — the args come from the callback param names (descriptor
+ *   params), not from a case inputs object.
  *
- * Why this seam (not a separate emitPropertyBlocks call, not a signature
- * widening): emitSuite is already the only public emit seam, the plan is
- * additive IR like methods/modulePaths, and the enabled=false path is
- * byte-identical by construction — absent/empty propertyPlan renders nothing
- * new. `propertyNumRuns` carries `config.propertyBased.numRuns` (default 100,
- * build-spec §9.6) because PropertyPlan does NOT carry it (Phase 4 pinned the
- * plan shape { descriptors, strategies, warnings }); threading it as an option
- * mirrors how rejection idiom / methods / modulePaths flow today.
+ *   GAP 2 — PREDICATE RESOLUTION. A predicateCall oracle (e.g.
+ *   `isPositive(price)`) emits a bare reference that is never imported →
+ *   ReferenceError in the generated test. The emitter now imports every
+ *   registered predicate a component's property clauses reference, via the new
+ *   EmitOptions.predicates map (predicate name → module import specifier),
+ *   threaded through the emitter seam exactly like modulePaths / methods. The
+ *   generate handler derives the specifier from contracts.json's
+ *   predicates[].source: a `<Module>.<function>` sourceRef (e.g.
+ *   `"OrderService.isPositive"`) resolves to the module path used for that
+ *   component; a path-like source resolves verbatim.
  *
- * Only the vitest emitter reads these fields (ADR-0017 "vitest + fast-check
- * first behind the ADR-0009 seam") — xunit/pytest ignore them and stay
- * byte-identical.
+ *   GAP 3 — VALID-REGION FILTERING + ORACLE ASSERTION. The old layout embedded
+ *   the clause predicate as a DEAD const (never asserted) and the arbitraries
+ *   generated inputs OUTSIDE the valid region (fc.string() includes "",
+ *   fc.integer() includes ≤0), so the property called the op with invalid
+ *   inputs and the call threw. The redesign (build-spec §9.6 "Valid-space
+ *   filters via codegen'd clause predicates" + "the property asserts the clause
+ *   holds"):
+ *     - every satisfies/invariant-preserving block FILTERS its arbitrary chain
+ *       with the codegen'd oracle: `<arb>.filter(<oracle>)` (fast-check idiom;
+ *       the pinned valid regions — non-empty strings, positive ints — are
+ *       large, so filter sparsity warnings never fire),
+ *     - every satisfies/invariant-preserving block ASSERTS its own clause after
+ *       the call: `expect(<oracle>(<params>)).toBe(true)`.
  *
  * ── The pinned emitted layout (exact bytes the implementer MUST produce) ────
  *
- * File header — the v1 concrete header is preserved byte-for-byte; when the
- * component has at least one property descriptor, the fast-check import is
- * added immediately after the component import:
+ * File header — the v1 concrete header is preserved byte-for-byte; predicate
+ * imports land immediately after the component import, one line per referenced
+ * predicate, before the fast-check import:
  *
  * ```ts
  * // Auto-generated by the Versailles deterministic generator core.
  * // Do not edit — regenerate with `versailles generate`.
- * // traces: "AccountService.inv0", "AccountService.withdraw.pre0", ...
+ * // traces: "OrderService.inv0", "OrderService.addItem.pre0", ...
  * import { describe, expect, it } from "vitest";
  *
- * import { AccountService } from "../../src/AccountService.js";
+ * import { OrderService } from "../../src/OrderService.js";
+ * import { isPositive } from "../../src/OrderService.js";
  * import { fc } from "fast-check";
  * ```
  *
  * Property blocks render INSIDE the operation's describe, AFTER that
  * operation's concrete cases, in plan.descriptors order. One block per
  * descriptor, sharing the concrete case's traceability-comment convention
- * (§9.3 — a `// traces: <JSON-stringified ids>` line, tab-indented above the
- * it):
+ * (§9.3 — a tab-indented `// traces: <JSON-stringified ids>` line above the
+ * it). The oracle consts are HOISTED to the it-body level (indent 2) so the
+ * SAME codegen'd arrow function fills both the arbitrary `.filter(...)` and the
+ * in-callback assertion — never a dead const, never duplicated code.
+ *
+ * Satisfies — INSTANCE operation, void return, string `!= ""` clause (the
+ * committed example's exact shape; the sibling `isPositive(price)` precondition
+ * guards price in BOTH blocks — see the guard-set rule below):
  *
  * ```ts
- * describe("withdraw", () => {
- *   // ...concrete cases unchanged...
- *
- *   // traces: "AccountService.withdraw.pre0"
- *   it("AccountService.withdraw.property-satisfies-0", () => {
- *     const amount = fc.integer({ min: 10, max: 100 });
- *     const prop = fc.property(amount, (amount) => {
- *       const AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;
- *       const result = AccountService.withdraw({ amount });
- *       expect(result).toBeDefined();
- *     });
- *     fc.assert(prop, { seed: 123456789, numRuns: 100 });
- *   });
- * });
+ * 	// traces: "OrderService.addItem.pre0"
+ * 	it("OrderService.addItem.property-satisfies-0", () => {
+ * 		const sku = fc.string();
+ * 		const price = fc.integer();
+ * 		const OrderService_addItem_pre0 = (sku) => sku !== "";
+ * 		const OrderService_addItem_pre1 = (price) => isPositive(price);
+ * 		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
+ * 			new OrderService().addItem(sku, price);
+ * 			expect(OrderService_addItem_pre0(sku)).toBe(true);
+ * 		});
+ * 		fc.assert(prop, { seed: 101, numRuns: 100 });
+ * 	});
  * ```
  *
- * Per-param arbitraries (ArbitrarySpec → fc call):
- *   kind "number" + bounds → `fc.integer({ min, max })`
- *   kind "number" (no bounds) → `fc.integer()`
- *   kind "enum"   → `fc.constantFrom(<members>)`   (members via renderValue)
- *   kind "string" → `fc.string()`
- *   kind "boolean"→ `fc.boolean()`
- *   default present (list<X>/optional<X>) → `fc.constant(<default>)` —
- *     e.g. `fc.constant([])` for a list default, `fc.constant(0)` for an
- *     optional<number> default (the deterministic default IS the constant).
+ * Satisfies — STATIC operation (all arbitrary kinds, enum/boolean/string/
+ * list-default/optional-default):
  *
- * Clause predicates embed VERBATIM as executable JS inside the prop callback:
- * `const <sanitized-clause-id> = <PropertyClause.code>;` — the exact
- * arrow-function source from codegen.ts fills the right-hand side (sanitized
- * clause id via the shared sanitizeId convention, e.g.
- * "AccountService.withdraw.pre0" → AccountService_withdraw_pre0).
+ * ```ts
+ * 	// traces: "AccountService.setStatus.pre0"
+ * 	it("AccountService.setStatus.property-satisfies-0", () => {
+ * 		const newStatus = fc.constantFrom("ACTIVE", "FROZEN");
+ * 		const notify = fc.boolean();
+ * 		const reason = fc.string();
+ * 		const tags = fc.constant([]);
+ * 		const memo = fc.constant(0);
+ * 		const AccountService_setStatus_pre0 = (newStatus) => newStatus === "ACTIVE" || newStatus === "FROZEN";
+ * 		const prop = fc.property(newStatus.filter(AccountService_setStatus_pre0), notify, reason, tags, memo, (newStatus, notify, reason, tags, memo) => {
+ * 			AccountService.setStatus(newStatus, notify, reason, tags, memo);
+ * 			expect(AccountService_setStatus_pre0(newStatus)).toBe(true);
+ * 		});
+ * 		fc.assert(prop, { seed: -987654321, numRuns: 100 });
+ * 	});
+ * ```
  *
- * Rejection idiom (ADR-0007) comes from the descriptor's `rejectionIdiom`
- * field, exactly like the concrete cases read case_.expects.rejectionIdiom:
- *   "throws"  → `expect(() => <Component>.<op>({ <params> })).toThrow();`
- *   "returns" → `expect(<Component>.<op>({ <params> })).toBeNull();`
+ * Invariant-preserving — the oracle references a MANIFEST FIELD (balance), not
+ * a callback param, so the block binds the component INSTANCE inside the
+ * callback and the assertion passes the field on the bound instance:
  *
- * The call uses the legacy options-object form `<Component>.<op>({ <param>,
- * ... })` with the callback param names (the deterministic default; the
- * metadata-driven positional form is out of scope for the property path).
+ * ```ts
+ * 	// traces: "AccountService.inv0"
+ * 	it("AccountService.withdraw.property-invariant-preserving-0", () => {
+ * 		const amount = fc.integer({ min: 10, max: 100 });
+ * 		const AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;
+ * 		const AccountService_inv0 = (balance) => balance >= 0;
+ * 		const prop = fc.property(amount.filter(AccountService_withdraw_pre0), (amount) => {
+ * 			const instance = new AccountService();
+ * 			instance.withdraw(amount);
+ * 			expect(AccountService_inv0(instance.balance)).toBe(true);
+ * 		});
+ * 		fc.assert(prop, { seed: 555, numRuns: 100 });
+ * 	});
+ * ```
  *
- * fc.assert options render `{ seed: <seed literal>, numRuns: <propertyNumRuns> }`
- * with a space after the comma; seed via String(descriptor.seed) (int32, may be
- * negative), numRuns via String (default 100 when the option is absent).
+ * Rejects — NO oracle consts (the clause is not embedded as dead code), NO
+ * filter; the block asserts the descriptor's configured rejection idiom
+ * (ADR-0007): "throws" → `expect(() => <call>).toThrow()`,
+ * "returns" → `expect(<call>).toBeNull()`:
+ *
+ * ```ts
+ * 	// traces: "AccountService.withdraw.pre0"
+ * 	it("AccountService.withdraw.property-rejects-0", () => {
+ * 		const amount = fc.integer({ min: 0, max: 9 });
+ * 		const prop = fc.property(amount, (amount) => {
+ * 			expect(() => new AccountService().withdraw(amount)).toThrow();
+ * 		});
+ * 		fc.assert(prop, { seed: 42, numRuns: 100 });
+ * 	});
+ * ```
+ *
+ * ── The emitter rules these pins fix (facts the implementer needs) ──────────
+ *
+ * - Call shape (GAP 1): the property block reads methods?.[component]?.[operation]
+ *   exactly like renderCall (vitest.ts): meta.static → `<Component>.<op>(...)`,
+ *   else → `new <Component>().<op>(...)`. The positional args are the
+ *   descriptor params in order (the callback param names — descriptor.params
+ *   mirrors operation.params declared order, which the manifest metadata also
+ *   carries). With NO methods metadata (legacy) the historical options-object
+ *   call `<Component>.<op>({ <params> })` is preserved byte-identically — the
+ *   filter + oracle assertion still render (one backward-compat pin below).
+ * - Guard set (GAP 3): for a satisfies/invariant-preserving block, the FILTER
+ *   oracles are the clause oracles of EVERY satisfies + invariant-preserving
+ *   descriptor for the SAME (component, operation), in plan order — the
+ *   "satisfy invariants + all other preconditions" rule. Each callback param
+ *   referenced by a guard oracle gets `.filter(<first guard oracle referencing
+ *   it>)` on its arbitrary. The block EMBEDS exactly the guard oracles it uses
+ *   (its filters + its own asserted clause) — never a dead const. The
+ *   oracle's referenced params are its codegen'd arrow-function parameter list
+ *   (codegen.ts output is byte-pinned `(<params>) => <expr>`; split at the
+ *   first `) => `, split params on ", ").
+ * - Oracle assertion (GAP 3): `expect(<oracle>(<params>)).toBe(true)` where
+ *   each oracle parameter is passed the callback value when it is a callback
+ *   param, else `<instance>.<param>` (a manifest field) — the instance binding
+ *   (`const instance = new <Component>(); instance.<op>(...);`) is emitted when
+ *   any asserted oracle parameter is a field. Satisfies/invariant blocks render
+ *   the BARE call (no `const result =` — void-safe; the clause IS the check).
+ * - Predicate imports (GAP 2): for each component file, `import { <name> } from
+ *   "<specifier>"` for every predicate whose name appears in the component's
+ *   property clause code strings, ordered by first appearance across the
+ *   component's descriptors in plan order, placed after the component import
+ *   and before `import { fc } from "fast-check"`. Evidence from the committed
+ *   example: contracts.json predicates.isPositive.source = "OrderService.isPositive"
+ *   (a `<Module>.<function>` sourceRef) and manifests.json OrderService.sourcePath
+ *   = "src/OrderService.ts" — the predicate is CO-LOCATED with the component,
+ *   so the specifier is the component's module path (`../../src/OrderService.js`
+ *   with the default prefix; the pipeline's modulePaths override may carry the
+ *   `.ts` extension). The predicates map is a NEW optional EmitOptions field;
+ *   xunit/pytest ignore it.
+ * - Per-param arbitraries (ArbitrarySpec → fc call): kind "number" + bounds →
+ *   `fc.integer({ min, max })`; kind "number" (no bounds) → `fc.integer()`;
+ *   kind "enum" → `fc.constantFrom(<members>)`; kind "string" → `fc.string()`;
+ *   kind "boolean" → `fc.boolean()`; default present (list<X>/optional<X>) →
+ *   `fc.constant(<default>)`.
+ * - fc.assert options render `{ seed: <seed literal>, numRuns: <propertyNumRuns> }`
+ *   with a space after the comma; seed via String(descriptor.seed) (int32, may
+ *   be negative), numRuns via String (default 100 when the option is absent).
+ * - Rejection idiom (ADR-0007) comes from the descriptor's `rejectionIdiom`
+ *   field, exactly like the concrete cases read case_.expects.rejectionIdiom.
  */
 
 // ── Fixture: a concrete suite + a property plan (hand-built, mirroring what
-// planTestCases + planPropertyBlocks produce for the same contract). ─────────
+// planTestCases + planPropertyBlocks produce for the same contracts). ─────────
 
 const ACCOUNT = "AccountService";
 const CUSTOMER = "CustomerService";
+const ORDER = "OrderService";
+
+/**
+ * Manifest method metadata threaded through the emitter seam exactly like the
+ * generate handler's deriveMethods (VERSAILLES-20 F1). The committed example's
+ * addItem is an INSTANCE void method with positional params [sku, price];
+ * AccountService.withdraw is an INSTANCE void method; AccountService.setStatus
+ * is STATIC; CustomerService.upgrade is INSTANCE.
+ */
+const PBT_METHODS: EmitOptions["methods"] = {
+	[ACCOUNT]: {
+		withdraw: { static: false, params: ["amount"], returnType: "void" },
+		setStatus: {
+			static: true,
+			params: ["newStatus", "notify", "reason", "tags", "memo"],
+			returnType: "boolean",
+		},
+	},
+	[CUSTOMER]: {
+		upgrade: { static: false, params: ["newTier"], returnType: "string" },
+	},
+	[ORDER]: {
+		addItem: { static: false, params: ["sku", "price"], returnType: "void" },
+	},
+};
+
+/**
+ * The registered-predicate import table (predicate name → module import
+ * specifier) threaded through the emitter seam. Derived from contracts.json's
+ * predicates map by the generate handler: `"isPositive": { "source":
+ * "OrderService.isPositive" }` + the OrderService manifest sourcePath
+ * "src/OrderService.ts" → the predicate is co-located with the component, so
+ * the specifier is the component's module path (the default-prefix form in
+ * this fixture, since no modulePaths override is passed).
+ */
+const PBT_PREDICATES: Record<string, string> = {
+	isPositive: "../../src/OrderService.js",
+};
 
 /** A concrete PlannedSuite (the Phase-1/2 output shape, hand-built). */
 function pbtSuite(): PlannedSuite {
@@ -137,6 +268,8 @@ function pbtSuite(): PlannedSuite {
 			`${ACCOUNT}.withdraw.post0`,
 			`${ACCOUNT}.setStatus.pre0`,
 			`${CUSTOMER}.upgrade.pre0`,
+			`${ORDER}.addItem.pre0`,
+			`${ORDER}.addItem.pre1`,
 		],
 		operations: [
 			{
@@ -189,6 +322,32 @@ function pbtSuite(): PlannedSuite {
 					},
 				],
 			},
+			{
+				// The committed example's exact operation: an INSTANCE void
+				// method with positional params, two precondition clauses
+				// (`sku != ""` and the registered-predicate call
+				// `isPositive(price)`).
+				component: ORDER,
+				operation: "addItem",
+				cases: [
+					{
+						id: `${ORDER}.addItem.precondition-violation-0`,
+						kind: "precondition-violation",
+						description: `violates ${ORDER}.addItem.pre0`,
+						inputs: { sku: "", price: 1 },
+						expects: { outcome: "reject", rejectionIdiom: "throws" },
+						traces: [`${ORDER}.addItem.pre0`],
+					},
+					{
+						id: `${ORDER}.addItem.precondition-violation-1`,
+						kind: "precondition-violation",
+						description: `violates ${ORDER}.addItem.pre1 (predicate isPositive falsified via price)`,
+						inputs: { sku: "initial", price: -1 },
+						expects: { outcome: "reject", rejectionIdiom: "throws" },
+						traces: [`${ORDER}.addItem.pre1`],
+					},
+				],
+			},
 		],
 		invariantCases: [
 			{
@@ -207,16 +366,16 @@ function pbtSuite(): PlannedSuite {
  * The property plan the implementer's emitter must render. Order mirrors the
  * planner's deterministic per-operation traversal (preconditions satisfies →
  * invariants invariant-preserving → expected-rejection rejects, per operation
- * in component order): AccountService.withdraw clauses, then setStatus, then
- * CustomerService.upgrade.
+ * in component order), ending with the OrderService.addItem clauses — the two
+ * satisfies descriptors that make the committed example work (their guard set
+ * spans BOTH preconditions, so the op never receives an invalid sibling).
  */
 function pbtPlan(): PropertyPlan {
 	return {
 		descriptors: [
 			{
 				// Compound precondition `amount >= 10 and amount <= 100` → the
-				// codegen'd oracle (codegen.ts: (amount) => amount >= 10 &&
-				// amount <= 100) + compound-aware numeric bounds.
+				// codegen'd oracle + compound-aware numeric bounds.
 				id: `${ACCOUNT}.withdraw.property-satisfies-0`,
 				component: ACCOUNT,
 				operation: "withdraw",
@@ -239,10 +398,9 @@ function pbtPlan(): PropertyPlan {
 				seed: 123456789,
 			},
 			{
-				// Invariant-preserving: oracle is the codegen'd invariant. The
-				// post-call assertion semantics (asserting the oracle against
-				// post-call state) are the implementer's design space — this
-				// pin fixes the embedding + uniform non-rejects layout.
+				// Invariant-preserving: the oracle references the manifest
+				// FIELD balance (not a callback param) → the block binds the
+				// instance and asserts instance.balance via the oracle.
 				id: `${ACCOUNT}.withdraw.property-invariant-preserving-0`,
 				component: ACCOUNT,
 				operation: "withdraw",
@@ -265,7 +423,8 @@ function pbtPlan(): PropertyPlan {
 				seed: 555,
 			},
 			{
-				// Expected-rejection with the DEFAULT idiom (throws).
+				// Expected-rejection with the DEFAULT idiom (throws). The
+				// clause oracle is NOT embedded (no dead consts in rejects).
 				id: `${ACCOUNT}.withdraw.property-rejects-0`,
 				component: ACCOUNT,
 				operation: "withdraw",
@@ -290,8 +449,8 @@ function pbtPlan(): PropertyPlan {
 			},
 			{
 				// Satisfies over enum + boolean + string + list + optional
-				// params — every ArbitrarySpec kind in one block. Negative
-				// int32 seed (derivePropertySeed round-trips through seed | 0).
+				// params — every ArbitrarySpec kind in one STATIC block.
+				// Negative int32 seed.
 				id: `${ACCOUNT}.setStatus.property-satisfies-0`,
 				component: ACCOUNT,
 				operation: "setStatus",
@@ -351,10 +510,69 @@ function pbtPlan(): PropertyPlan {
 				traces: [`${CUSTOMER}.upgrade.pre0`],
 				seed: 7,
 			},
+			{
+				// The committed example's `sku != ""` clause — an INSTANCE void
+				// op with TWO precondition clauses. The guard set spans BOTH
+				// satisfies oracles (pre0 guards sku, pre1 guards price), so
+				// the block's filters keep the call inside the full valid
+				// region.
+				id: `${ORDER}.addItem.property-satisfies-0`,
+				component: ORDER,
+				operation: "addItem",
+				params: [
+					{ param: "sku", typeRef: "string", kind: "string" },
+					{ param: "price", typeRef: "number", kind: "number" },
+				],
+				clauses: [
+					{
+						clauseId: `${ORDER}.addItem.pre0`,
+						code: '(sku) => sku !== ""',
+					},
+				],
+				outcome: "satisfies",
+				traces: [`${ORDER}.addItem.pre0`],
+				seed: 101,
+			},
+			{
+				// The committed example's predicateCall clause — the predicate
+				// import at file top + the oracle asserting via the imported
+				// predicate.
+				id: `${ORDER}.addItem.property-satisfies-1`,
+				component: ORDER,
+				operation: "addItem",
+				params: [
+					{ param: "sku", typeRef: "string", kind: "string" },
+					{ param: "price", typeRef: "number", kind: "number" },
+				],
+				clauses: [
+					{
+						clauseId: `${ORDER}.addItem.pre1`,
+						code: "(price) => isPositive(price)",
+					},
+				],
+				outcome: "satisfies",
+				traces: [`${ORDER}.addItem.pre1`],
+				seed: 202,
+			},
 		],
 		strategies: {},
 		warnings: [],
 	};
+}
+
+/** The full emitSuite options the enabled=true pins pass (the pipeline shape). */
+function pbtOptions(overrides: Partial<EmitOptions> = {}): EmitOptions {
+	return {
+		methods: PBT_METHODS,
+		predicates: PBT_PREDICATES,
+		propertyPlan: pbtPlan(),
+		propertyNumRuns: 100,
+		...overrides,
+	};
+}
+
+function emitPbt(overrides: Partial<EmitOptions> = {}) {
+	return emitSuite(pbtSuite(), "vitest", pbtOptions(overrides));
 }
 
 function accountFile(files: ReturnType<typeof emitSuite>) {
@@ -363,6 +581,10 @@ function accountFile(files: ReturnType<typeof emitSuite>) {
 
 function customerFile(files: ReturnType<typeof emitSuite>) {
 	return files.find((file) => file.path.endsWith("CustomerService.test.ts"));
+}
+
+function orderFile(files: ReturnType<typeof emitSuite>) {
+	return files.find((file) => file.path.endsWith("OrderService.test.ts"));
 }
 
 describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, deterministic-generation.contract.yaml)", () => {
@@ -396,23 +618,29 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		}
 	});
 
-	it("pins the emit seam type: EmitOptions carries the property plan and numRuns", () => {
+	it("pins the emit seam type: EmitOptions carries the property plan, numRuns, methods, and the predicate import map", () => {
 		// Typecheck-only pin (mirrors V1_EMITTER_FRAMEWORKS in
 		// tests/emitters.test.ts): this const compiles only once EmitOptions
-		// gains propertyPlan + propertyNumRuns (the ir.ts seam change).
+		// gains propertyPlan + propertyNumRuns + predicates (the ir.ts seam
+		// change — predicates is the GAP-2 predicate-resolution seam).
 		const options: EmitOptions = {
 			propertyPlan: { descriptors: [], strategies: {}, warnings: [] },
 			propertyNumRuns: 100,
+			methods: PBT_METHODS,
+			predicates: PBT_PREDICATES,
 		};
 		expect(options.propertyNumRuns).toBe(100);
 		expect(options.propertyPlan?.descriptors).toEqual([]);
+		expect(options.predicates?.isPositive).toBe("../../src/OrderService.js");
+		expect(options.methods?.OrderService?.addItem).toEqual({
+			static: false,
+			params: ["sku", "price"],
+			returnType: "void",
+		});
 	});
 
 	it("enabled=true: renders the fast-check import and an fc.assert block for a compound descriptor", () => {
-		const files = emitSuite(pbtSuite(), "vitest", {
-			propertyPlan: pbtPlan(),
-			propertyNumRuns: 100,
-		});
+		const files = emitPbt();
 		const account = accountFile(files);
 		expect(account).toBeDefined();
 		// The fast-check import appears in the header, after the component import.
@@ -432,11 +660,10 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 
 	it("renders the seed literal and numRuns exactly in the fc.assert options — default 100, configured override, negative int32 seed", () => {
 		// Config override: propertyNumRuns 250 threads into every block.
-		const files = emitSuite(pbtSuite(), "vitest", {
-			propertyPlan: pbtPlan(),
-			propertyNumRuns: 250,
-		});
+		const files = emitPbt({ propertyNumRuns: 250 });
 		const account = accountFile(files);
+		const customer = customerFile(files);
+		const order = orderFile(files);
 		expect(account?.content).toContain(
 			"fc.assert(prop, { seed: 123456789, numRuns: 250 });",
 		);
@@ -449,29 +676,37 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		expect(account?.content).toContain(
 			"fc.assert(prop, { seed: -987654321, numRuns: 250 });",
 		);
+		expect(customer?.content).toContain(
+			"fc.assert(prop, { seed: 7, numRuns: 250 });",
+		);
+		expect(order?.content).toContain(
+			"fc.assert(prop, { seed: 101, numRuns: 250 });",
+		);
+		expect(order?.content).toContain(
+			"fc.assert(prop, { seed: 202, numRuns: 250 });",
+		);
 
 		// Default 100 when propertyNumRuns is absent (build-spec §9.6).
-		const defaulted = emitSuite(pbtSuite(), "vitest", {
-			propertyPlan: pbtPlan(),
-		});
+		const defaulted = emitPbt({ propertyNumRuns: undefined });
 		const accountDefaulted = accountFile(defaulted);
 		expect(accountDefaulted?.content).toContain(
 			"fc.assert(prop, { seed: 123456789, numRuns: 100 });",
 		);
 	});
 
-	it("renders per-kind arbitraries: fc.integer bounds, fc.constantFrom, fc.string, fc.boolean, fc.constant([]) list default, fc.constant(0) optional default", () => {
-		const files = emitSuite(pbtSuite(), "vitest", {
-			propertyPlan: pbtPlan(),
-			propertyNumRuns: 100,
-		});
+	it("renders per-kind arbitraries: fc.integer bounds, fc.integer() unbounded, fc.constantFrom, fc.string, fc.boolean, fc.constant([]) list default, fc.constant(0) optional default", () => {
+		const files = emitPbt();
 		const account = accountFile(files);
+		const order = orderFile(files);
 		expect(account).toBeDefined();
+		expect(order).toBeDefined();
 
 		// number with bounds → fc.integer({ min, max })
 		expect(account?.content).toContain(
 			"const amount = fc.integer({ min: 10, max: 100 });",
 		);
+		// number without bounds (the predicateCall clause's param) → fc.integer()
+		expect(order?.content).toContain("const price = fc.integer();");
 		// enum → fc.constantFrom over the members
 		expect(account?.content).toContain(
 			'const newStatus = fc.constantFrom("ACTIVE", "FROZEN");',
@@ -480,40 +715,175 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		expect(account?.content).toContain("const notify = fc.boolean();");
 		// string → fc.string()
 		expect(account?.content).toContain("const reason = fc.string();");
+		expect(order?.content).toContain("const sku = fc.string();");
 		// list<X> default [] → the deterministic constant arbitrary
 		expect(account?.content).toContain("const tags = fc.constant([]);");
 		// optional<number> default 0 → the deterministic constant arbitrary
 		expect(account?.content).toContain("const memo = fc.constant(0);");
 	});
 
-	it("embeds the codegen'd clause predicates as executable JS — the exact PropertyClause.code arrow-function source appears verbatim", () => {
-		const files = emitSuite(pbtSuite(), "vitest", {
-			propertyPlan: pbtPlan(),
-			propertyNumRuns: 100,
-		});
+	it("embeds the codegen'd clause predicates verbatim at the it-body level — the exact PropertyClause.code arrow-function source fills the const", () => {
+		const files = emitPbt();
 		const account = accountFile(files);
+		const order = orderFile(files);
 		expect(account).toBeDefined();
+		expect(order).toBeDefined();
 
-		// The exact arrow-function source from codegen.ts fills the const.
+		// Oracle consts are HOISTED to the it-body level (indent 2, one tab
+		// outside the fc.property callback) so the same const fills both the
+		// arbitrary filter and the in-callback assertion.
 		expect(account?.content).toContain(
-			"const AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;",
+			"\t\tconst AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;",
 		);
 		expect(account?.content).toContain(
-			'const AccountService_setStatus_pre0 = (newStatus) => newStatus === "ACTIVE" || newStatus === "FROZEN";',
+			'\t\tconst AccountService_setStatus_pre0 = (newStatus) => newStatus === "ACTIVE" || newStatus === "FROZEN";',
+		);
+		expect(account?.content).toContain(
+			"\t\tconst AccountService_inv0 = (balance) => balance >= 0;",
+		);
+		expect(order?.content).toContain(
+			'\t\tconst OrderService_addItem_pre0 = (sku) => sku !== "";',
+		);
+		expect(order?.content).toContain(
+			"\t\tconst OrderService_addItem_pre1 = (price) => isPositive(price);",
 		);
 		// The codegen'd source string itself appears verbatim (no mangling).
 		expect(account?.content).toContain(
 			"(amount) => amount >= 10 && amount <= 100",
 		);
+		// The oracle consts are HOISTED, never embedded inside the callback at
+		// indent 3 — the hoisting is what lets the same const fill both the
+		// arbitrary filter and the in-callback assertion.
+		expect(account?.content).not.toContain(
+			"\t\t\tconst AccountService_withdraw_pre0",
+		);
+		expect(order?.content).not.toContain(
+			"\t\t\tconst OrderService_addItem_pre1",
+		);
+	});
+
+	it("GAP-2 pin: imports every predicate a component's property clauses reference — predicate import at file top, after the component import, before the fast-check import", () => {
+		const files = emitPbt();
+		const account = accountFile(files);
+		const customer = customerFile(files);
+		const order = orderFile(files);
+		expect(order).toBeDefined();
+
+		// The predicate import lands between the component import and fc.
+		expect(order?.content).toContain(
+			'import { isPositive } from "../../src/OrderService.js";',
+		);
+		const orderImport = order?.content.indexOf(
+			'import { isPositive } from "../../src/OrderService.js";',
+		);
+		const componentImport = order?.content.indexOf(
+			'import { OrderService } from "../../src/OrderService.js";',
+		);
+		const fcImport = order?.content.indexOf('import { fc } from "fast-check";');
+		expect(componentImport).toBeGreaterThan(-1);
+		expect(fcImport).toBeGreaterThan(-1);
+		expect(orderImport).toBeGreaterThan(componentImport ?? -1);
+		expect(orderImport).toBeLessThan(fcImport ?? Number.MAX_SAFE_INTEGER);
+
+		// Components whose clauses never reference a predicate import none.
+		expect(account?.content).not.toContain("isPositive");
+		expect(customer?.content).not.toContain("isPositive");
+	});
+
+	it("GAP-1 pin: an INSTANCE operation's property call is new <Component>().<op>(<positional>) — never a static call, never an options object", () => {
+		const files = emitPbt();
+		const order = orderFile(files);
+		expect(order).toBeDefined();
+		// The instance call with positional params (the committed example).
+		expect(order?.content).toContain("new OrderService().addItem(sku, price);");
+		// No static call on the instance method in the property surface.
+		expect(order?.content).not.toContain("OrderService.addItem(sku");
+		expect(order?.content).not.toContain("OrderService.addItem({");
+		// No result binding on a void op, no toBeDefined anywhere in the
+		// property surface.
+		expect(order?.content).not.toContain(
+			"const result = new OrderService().addItem",
+		);
+		expect(order?.content).not.toContain("expect(result).toBeDefined();");
+	});
+
+	it("GAP-3 pin: the property filters to the valid region — .filter(<oracle>) on the arbitrary chain", () => {
+		const files = emitPbt();
+		const account = accountFile(files);
+		const order = orderFile(files);
+		expect(account).toBeDefined();
+		expect(order).toBeDefined();
+
+		// Compound-bounded clause: the oracle filters the bounded arbitrary
+		// (redundant with the bounds, but uniform — always emitted).
+		expect(account?.content).toContain(
+			"fc.property(amount.filter(AccountService_withdraw_pre0), (amount) => {",
+		);
+		// String `!= ""` clause: .filter on fc.string() guards sku; the sibling
+		// predicateCall oracle guards price (the full valid region).
+		expect(order?.content).toContain(
+			"fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {",
+		);
+		// The predicateCall clause's own filter uses the imported predicate.
+		expect(order?.content).toContain("price.filter(OrderService_addItem_pre1)");
+	});
+
+	it("GAP-3 pin: the property ASSERTS the oracle — expect(<oracle>(<params>)).toBe(true) after the call", () => {
+		const files = emitPbt();
+		const account = accountFile(files);
+		const order = orderFile(files);
+		expect(account).toBeDefined();
+		expect(order).toBeDefined();
+
+		// Satisfies asserts its own clause on the callback params.
+		expect(account?.content).toContain(
+			"expect(AccountService_withdraw_pre0(amount)).toBe(true);",
+		);
+		expect(order?.content).toContain(
+			"expect(OrderService_addItem_pre0(sku)).toBe(true);",
+		);
+		// The predicateCall clause asserts via the imported predicate.
+		expect(order?.content).toContain(
+			"expect(OrderService_addItem_pre1(price)).toBe(true);",
+		);
+	});
+
+	it("invariant-preserving: the field-referencing oracle asserts on the bound instance — expect(<oracle>(instance.<field>)).toBe(true)", () => {
+		const files = emitPbt();
+		const account = accountFile(files);
+		expect(account).toBeDefined();
+		expect(account?.content).toContain(
+			"expect(AccountService_inv0(instance.balance)).toBe(true);",
+		);
+		// The block binds the instance inside the callback and calls on it.
+		expect(account?.content).toContain(
+			"\t\t\tconst instance = new AccountService();",
+		);
+		expect(account?.content).toContain("\t\t\tinstance.withdraw(amount);");
+	});
+
+	it("rejects blocks embed NO dead oracle consts — the clause is never embedded unused; only the configured idiom asserts", () => {
+		const files = emitPbt();
+		const account = accountFile(files);
+		expect(account).toBeDefined();
+		// The rejects descriptor's clause code `(amount) => amount >= 10` is NOT
+		// embedded anywhere (the satisfies block embeds the compound variant
+		// `... && amount <= 100` — a different string).
+		expect(account?.content).not.toContain(
+			"const AccountService_withdraw_pre0 = (amount) => amount >= 10;",
+		);
+		// The rejects block's only assertion is the idiom.
+		expect(account?.content).toContain(
+			"expect(() => new AccountService().withdraw(amount)).toThrow();",
+		);
 	});
 
 	it("places a §9.3 traceability comment above each property block (tab-indented, JSON-stringified clause ids)", () => {
-		const files = emitSuite(pbtSuite(), "vitest", {
-			propertyPlan: pbtPlan(),
-			propertyNumRuns: 100,
-		});
+		const files = emitPbt();
 		const account = accountFile(files);
+		const order = orderFile(files);
 		expect(account).toBeDefined();
+		expect(order).toBeDefined();
 
 		// The per-block trace comment is tab-indented (inside the describe),
 		// which distinguishes it from the file-header `// traces:` line.
@@ -523,6 +893,12 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		expect(account?.content).toContain('\t// traces: "AccountService.inv0"');
 		expect(account?.content).toContain(
 			'\t// traces: "AccountService.setStatus.pre0"',
+		);
+		expect(order?.content).toContain(
+			'\t// traces: "OrderService.addItem.pre0"',
+		);
+		expect(order?.content).toContain(
+			'\t// traces: "OrderService.addItem.pre1"',
 		);
 		// The trace comment sits immediately above its property block.
 		expect(
@@ -535,26 +911,20 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 	});
 
 	it("renders a rejects descriptor's property with the configured throws idiom — expect(() => call).toThrow() (ADR-0007)", () => {
-		const files = emitSuite(pbtSuite(), "vitest", {
-			propertyPlan: pbtPlan(),
-			propertyNumRuns: 100,
-		});
+		const files = emitPbt();
 		const account = accountFile(files);
 		expect(account).toBeDefined();
 		expect(account?.content).toContain(
-			"expect(() => AccountService.withdraw({ amount })).toThrow();",
+			"expect(() => new AccountService().withdraw(amount)).toThrow();",
 		);
 	});
 
 	it("renders a rejects descriptor's property with the returns idiom — expect(call).toBeNull() (ADR-0007)", () => {
-		const files = emitSuite(pbtSuite(), "vitest", {
-			propertyPlan: pbtPlan(),
-			propertyNumRuns: 100,
-		});
+		const files = emitPbt();
 		const customer = customerFile(files);
 		expect(customer).toBeDefined();
 		expect(customer?.content).toContain(
-			"expect(CustomerService.upgrade({ newTier })).toBeNull();",
+			"expect(new CustomerService().upgrade(newTier)).toBeNull();",
 		);
 		// The returns descriptor never falls back to throws.
 		expect(customer?.content).not.toContain("toThrow");
@@ -562,11 +932,8 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		expect(customer?.content).toContain('import { fc } from "fast-check";');
 	});
 
-	it("renders the full property block layout byte-for-byte (the §9.6 contract shape)", () => {
-		const files = emitSuite(pbtSuite(), "vitest", {
-			propertyPlan: pbtPlan(),
-			propertyNumRuns: 100,
-		});
+	it("renders the full property block layout byte-for-byte — INSTANCE satisfies with positional params, filter line, oracle assertion (GAP 1 + GAP 3)", () => {
+		const files = emitPbt();
 		const account = accountFile(files);
 		expect(account).toBeDefined();
 
@@ -574,10 +941,10 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 			'\t// traces: "AccountService.withdraw.pre0"',
 			'\tit("AccountService.withdraw.property-satisfies-0", () => {',
 			"\t\tconst amount = fc.integer({ min: 10, max: 100 });",
-			"\t\tconst prop = fc.property(amount, (amount) => {",
-			"\t\t\tconst AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;",
-			"\t\t\tconst result = AccountService.withdraw({ amount });",
-			"\t\t\texpect(result).toBeDefined();",
+			"\t\tconst AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;",
+			"\t\tconst prop = fc.property(amount.filter(AccountService_withdraw_pre0), (amount) => {",
+			"\t\t\tnew AccountService().withdraw(amount);",
+			"\t\t\texpect(AccountService_withdraw_pre0(amount)).toBe(true);",
 			"\t\t});",
 			"\t\tfc.assert(prop, { seed: 123456789, numRuns: 100 });",
 			"\t});",
@@ -586,13 +953,102 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		expect(account?.content).toContain(block);
 	});
 
-	it("renders property blocks after each operation's concrete cases, in plan order, across multiple descriptors", () => {
+	it("renders the full property block layout byte-for-byte — STATIC satisfies with positional params (GAP 1)", () => {
+		const files = emitPbt();
+		const account = accountFile(files);
+		expect(account).toBeDefined();
+
+		const block = [
+			'\t// traces: "AccountService.setStatus.pre0"',
+			'\tit("AccountService.setStatus.property-satisfies-0", () => {',
+			'\t\tconst newStatus = fc.constantFrom("ACTIVE", "FROZEN");',
+			"\t\tconst notify = fc.boolean();",
+			"\t\tconst reason = fc.string();",
+			"\t\tconst tags = fc.constant([]);",
+			"\t\tconst memo = fc.constant(0);",
+			'\t\tconst AccountService_setStatus_pre0 = (newStatus) => newStatus === "ACTIVE" || newStatus === "FROZEN";',
+			"\t\tconst prop = fc.property(newStatus.filter(AccountService_setStatus_pre0), notify, reason, tags, memo, (newStatus, notify, reason, tags, memo) => {",
+			"\t\t\tAccountService.setStatus(newStatus, notify, reason, tags, memo);",
+			"\t\t\texpect(AccountService_setStatus_pre0(newStatus)).toBe(true);",
+			"\t\t});",
+			"\t\tfc.assert(prop, { seed: -987654321, numRuns: 100 });",
+			"\t});",
+			"",
+		].join("\n");
+		expect(account?.content).toContain(block);
+	});
+
+	it("renders the committed example's blocks byte-for-byte — instance void call, predicate import oracle, sibling-guarded filters", () => {
+		const files = emitPbt();
+		const order = orderFile(files);
+		expect(order).toBeDefined();
+
+		// `sku != ""` satisfies block: filters sku AND the sibling isPositive
+		// guard on price, asserts its own clause.
+		const pre0Block = [
+			'\t// traces: "OrderService.addItem.pre0"',
+			'\tit("OrderService.addItem.property-satisfies-0", () => {',
+			"\t\tconst sku = fc.string();",
+			"\t\tconst price = fc.integer();",
+			'\t\tconst OrderService_addItem_pre0 = (sku) => sku !== "";',
+			"\t\tconst OrderService_addItem_pre1 = (price) => isPositive(price);",
+			"\t\tconst prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {",
+			"\t\t\tnew OrderService().addItem(sku, price);",
+			"\t\t\texpect(OrderService_addItem_pre0(sku)).toBe(true);",
+			"\t\t});",
+			"\t\tfc.assert(prop, { seed: 101, numRuns: 100 });",
+			"\t});",
+			"",
+		].join("\n");
+		expect(order?.content).toContain(pre0Block);
+
+		// `isPositive(price)` predicateCall satisfies block: same filters,
+		// asserts its own clause via the imported predicate.
+		const pre1Block = [
+			'\t// traces: "OrderService.addItem.pre1"',
+			'\tit("OrderService.addItem.property-satisfies-1", () => {',
+			"\t\tconst sku = fc.string();",
+			"\t\tconst price = fc.integer();",
+			'\t\tconst OrderService_addItem_pre0 = (sku) => sku !== "";',
+			"\t\tconst OrderService_addItem_pre1 = (price) => isPositive(price);",
+			"\t\tconst prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {",
+			"\t\t\tnew OrderService().addItem(sku, price);",
+			"\t\t\texpect(OrderService_addItem_pre1(price)).toBe(true);",
+			"\t\t});",
+			"\t\tfc.assert(prop, { seed: 202, numRuns: 100 });",
+			"\t});",
+			"",
+		].join("\n");
+		expect(order?.content).toContain(pre1Block);
+	});
+
+	it("legacy backward-compat for the property path: no methods metadata → the block keeps the options-object static call (mirrors renderCall's meta === undefined branch)", () => {
 		const files = emitSuite(pbtSuite(), "vitest", {
 			propertyPlan: pbtPlan(),
 			propertyNumRuns: 100,
+			predicates: PBT_PREDICATES,
 		});
 		const account = accountFile(files);
+		expect(account).toBeDefined();
+		// The satisfies property still filters + asserts, but the CALL falls
+		// back to the historical static options-object form.
+		expect(account?.content).toContain(
+			"\t\t\tAccountService.withdraw({ amount });",
+		);
+		expect(account?.content).toContain(
+			"expect(AccountService_withdraw_pre0(amount)).toBe(true);",
+		);
+		// The instance call form never appears without metadata.
+		expect(account?.content).not.toContain(
+			"new AccountService().withdraw(amount);",
+		);
+	});
+
+	it("renders property blocks after each operation's concrete cases, in plan order, across multiple descriptors", () => {
+		const files = emitPbt();
+		const account = accountFile(files);
 		const content = account?.content ?? "";
+		const orderContent = orderFile(files)?.content ?? "";
 
 		// withdraw's concrete cases come before its property blocks.
 		const boundary0 = content.indexOf(
@@ -626,20 +1082,29 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		);
 		expect(setStatusBoundary).toBeGreaterThan(-1);
 		expect(setStatusProp).toBeGreaterThan(setStatusBoundary);
+
+		// The committed example: addItem's property blocks follow addItem's
+		// concrete violation cases, pre0 before pre1 (plan order).
+		const addItemViolation = orderContent.indexOf(
+			'it("OrderService.addItem.precondition-violation-1 — violates OrderService.addItem.pre1 (predicate isPositive falsified via price)"',
+		);
+		const addItemPre0 = orderContent.indexOf(
+			'it("OrderService.addItem.property-satisfies-0"',
+		);
+		const addItemPre1 = orderContent.indexOf(
+			'it("OrderService.addItem.property-satisfies-1"',
+		);
+		expect(addItemViolation).toBeGreaterThan(-1);
+		expect(addItemPre0).toBeGreaterThan(addItemViolation);
+		expect(addItemPre1).toBeGreaterThan(addItemPre0);
 	});
 
 	it("determinism: same suite + same property plan → byte-identical emitted files (ADR-0002)", () => {
 		const suite = pbtSuite();
 		const plan = pbtPlan();
 
-		const first = emitSuite(suite, "vitest", {
-			propertyPlan: plan,
-			propertyNumRuns: 100,
-		});
-		const second = emitSuite(suite, "vitest", {
-			propertyPlan: plan,
-			propertyNumRuns: 100,
-		});
+		const first = emitSuite(suite, "vitest", pbtOptions());
+		const second = emitSuite(suite, "vitest", pbtOptions());
 		expect(second).toEqual(first);
 		expect(second.map((file) => file.content)).toEqual(
 			first.map((file) => file.content),
@@ -656,13 +1121,17 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		expect(emitSuite(suite, "pytest" as never, { propertyPlan: plan })).toEqual(
 			emitSuite(suite, "pytest" as never),
 		);
-		// The PBT surface is vitest-only — no fast-check anywhere else.
+		// The PBT surface is vitest-only — no fast-check, no fc.assert, and no
+		// predicate IMPORT anywhere else (the concrete-case description text may
+		// legitimately mention a predicate name — only an import line leaks).
 		for (const framework of ["xunit", "pytest"] as const) {
 			for (const file of emitSuite(suite, framework as never, {
 				propertyPlan: plan,
+				predicates: PBT_PREDICATES,
 			})) {
 				expect(file.content).not.toContain("fast-check");
 				expect(file.content).not.toContain("fc.assert");
+				expect(file.content).not.toContain("import { isPositive }");
 			}
 		}
 	});
@@ -688,12 +1157,15 @@ describe("emitters-pbt fixture integrity", () => {
 		}
 	});
 
-	it("covers every ArbitrarySpec kind the emitter must render (number, enum, string, boolean, list default, optional default)", () => {
+	it("covers every ArbitrarySpec kind the emitter must render (number bounds, number unbounded, enum, string, boolean, list default, optional default)", () => {
 		const kinds: ArbitrarySpec[] = pbtPlan().descriptors.flatMap(
 			(descriptor) => descriptor.params,
 		);
 		expect(
 			kinds.some((spec) => spec.kind === "number" && spec.bounds !== undefined),
+		).toBe(true);
+		expect(
+			kinds.some((spec) => spec.kind === "number" && spec.bounds === undefined),
 		).toBe(true);
 		expect(
 			kinds.some(
@@ -720,6 +1192,34 @@ describe("emitters-pbt fixture integrity", () => {
 		);
 		expect(rejects.some((d) => d.rejectionIdiom === "throws")).toBe(true);
 		expect(rejects.some((d) => d.rejectionIdiom === "returns")).toBe(true);
+	});
+
+	it("the OrderService descriptors model the committed example (instance op, positional params in declared order, predicateCall clause)", () => {
+		const addItem = pbtPlan().descriptors.filter(
+			(descriptor) => descriptor.operation === "addItem",
+		);
+		expect(addItem).toHaveLength(2);
+		for (const descriptor of addItem) {
+			expect(descriptor.params.map((spec) => spec.param)).toEqual([
+				"sku",
+				"price",
+			]);
+		}
+		// The predicateCall clause's code references the registered predicate
+		// by its bare name — the emitter MUST import it (GAP 2).
+		expect(
+			addItem.some((d) => d.clauses.some((c) => c.code.includes("isPositive"))),
+		).toBe(true);
+		// The string clause's codegen'd form uses strict !== (codegen.ts).
+		expect(
+			addItem.some((d) => d.clauses.some((c) => c.code.includes('sku !== ""'))),
+		).toBe(true);
+		// The methods metadata matches the manifest (instance, positional).
+		expect(PBT_METHODS.OrderService?.addItem).toEqual({
+			static: false,
+			params: ["sku", "price"],
+			returnType: "void",
+		});
 	});
 
 	it("the concrete suite fixture carries reject + accept + invariant cases (a meaningful backward-compat baseline)", () => {

@@ -13,6 +13,7 @@ import { dirname, join, relative, sep } from "node:path";
 
 import {
 	type ManifestsFile,
+	type PredicatesFile,
 	loadWorkspace,
 } from "../../../../core/src/loader/workspace.js";
 import {
@@ -74,6 +75,18 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 			// Absent for legacy entries → the emitter keeps the options-object
 			// static call (backward compatible).
 			methods: deriveMethods(context.manifests),
+			// GAP-2 predicate resolution (ADR-0017 §9.6): derive the predicate
+			// import table (predicate name → module import specifier) from the
+			// contracts predicates registry and thread it through the emitter
+			// seam exactly like modulePaths / methods. The vitest emitter
+			// imports every predicate a component's property clauses reference;
+			// xunit/pytest ignore the field.
+			predicates: derivePredicates(
+				cwd,
+				context.config.generatedDir,
+				context.manifests,
+				context.predicates,
+			),
 			propertyPlan,
 			propertyNumRuns: context.config.propertyBased?.numRuns ?? 100,
 		});
@@ -178,4 +191,60 @@ function deriveMethods(
 		}
 	}
 	return methods;
+}
+
+/**
+ * The GAP-2 predicate import table (predicate name → module import specifier)
+ * for the emitter seam (ADR-0017, build-spec §9.6), derived from the loaded
+ * predicates registry. Mirrors the planner's predicatesImportMap resolution of
+ * contracts.json predicate `source` refs:
+ *
+ * - a `<Module>.<function>` sourceRef (e.g. "OrderService.isPositive")
+ *   resolves the `<Module>` part through the same module-path derivation the
+ *   concrete cases use — the modulePaths override (derived from manifests
+ *   sourcePath, extension preserved) when present, else the deterministic
+ *   default prefix. A predicate whose module IS the component is CO-LOCATED,
+ *   so its specifier is the component's module path (the committed example's
+ *   evidence: predicates.isPositive.source = "OrderService.isPositive" with
+ *   OrderService.sourcePath = "src/OrderService.ts" → the predicate imports
+ *   from the component's own module, "../../src/OrderService.ts").
+ * - a path-like source resolves verbatim.
+ * - an absent source falls back to the conventional "./predicates.js"
+ *   specifier (the planner's fallback).
+ *
+ * The pinned fixture (`tests/emitters-pbt.test.ts`) exercises the co-located
+ * case with the default prefix; the pipeline's modulePaths override may carry
+ * the `.ts` extension.
+ */
+function derivePredicates(
+	cwd: string,
+	generatedDir: string,
+	manifests: ManifestsFile | null,
+	predicates: PredicatesFile | null,
+): EmitOptions["predicates"] {
+	const modulePaths = deriveModulePaths(cwd, generatedDir, manifests);
+	const map: EmitOptions["predicates"] = {};
+	for (const [name, entry] of Object.entries(predicates?.predicates ?? {})) {
+		const sourceRef = entry.sourceRef;
+		if (!sourceRef) {
+			map[name] = "./predicates.js";
+			continue;
+		}
+		// `<Module>.<function>` sourceRef → resolve the module part like the
+		// concrete-case module path derivation (modulePaths override, else the
+		// emitter's deterministic default prefix).
+		const parts = sourceRef.split(".");
+		if (parts.length === 2 && parts[0].length > 0 && parts[1].length > 0) {
+			const moduleName = parts[0];
+			const override = modulePaths[moduleName];
+			map[name] =
+				typeof override === "string" && override.length > 0
+					? override
+					: `../../src/${moduleName}.js`;
+			continue;
+		}
+		// A path-like source resolves verbatim.
+		map[name] = sourceRef;
+	}
+	return map;
 }

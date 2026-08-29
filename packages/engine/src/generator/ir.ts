@@ -141,6 +141,19 @@ export type EmitOptions = {
 	 * Default 100 when absent (build-spec §9.6).
 	 */
 	propertyNumRuns?: number;
+	/**
+	 * The predicate import table (predicate name → module import specifier)
+	 * threaded through the emitter seam exactly like modulePaths / methods
+	 * (ADR-0017 GAP 2, build-spec §9.6). Derived by the generate handler from
+	 * contracts.json's `predicates` map: a `<Module>.<function>` sourceRef
+	 * resolves to the module path used for that component (co-located
+	 * predicates → the component's own import path, respecting modulePaths
+	 * overrides), a path-like source resolves verbatim. The vitest emitter
+	 * imports every predicate a component's property clauses reference, after
+	 * the component import and before the fast-check import; xunit/pytest
+	 * ignore the field entirely.
+	 */
+	predicates?: Record<string, string>;
 };
 
 /** Maps every source clause ID → the test IDs tracing it (§9.3). */
