@@ -685,8 +685,10 @@ Third-party artifacts planned to ship inside bundled packages are tracked in
 `THIRD-PARTY-NOTICES.md` (root); their license notices must travel with any bundled
 artifact when shipped.
 
-Contributions require a CLA via EasyCLA (ICLA + CCLA, Apache ICLA / Harmony templates
-unmodified). The core-license commitment — the free tier stays MIT permanently — is
+Contributions require a CLA via **CLA Assistant** (cla-assistant.io) with templates
+derived from the Apache ICLA v2.2 and Corporate CLA, adapted for Versailles per the
+ASF's reuse permission (ADR-0016). The core-license commitment — the free tier stays
+MIT permanently — is
 published in [CONTRIBUTING.md](../CONTRIBUTING.md) and enforced by the per-package
 layout above.
 
