@@ -41,12 +41,27 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  * but the compound fails (60 + 60 = 120 > 100 ✗).
  *
  * The seeded PBT property planner (planPropertyBlocks) covers exactly that
- * interaction space: the compound clause maps to strategy "property" and
- * plans an accept-side satisfies descriptor whose codegen'd oracle IS the full
- * compound predicate `(a, b) => a >= 0 && b >= 0 && a + b <= 100` — the
- * emitted property filters its arbitraries with that oracle, so the valid
- * region is precisely the interaction space the per-clause heuristic cannot
- * see.
+ * interaction space — WHEN the clause's codegen'd oracle is SINGLE-param. A
+ * 1-param compound (e.g. `amount >= 10 and amount <= 100` →
+ * `(amount) => amount >= 10 && amount <= 100`) maps to strategy "property"
+ * and plans an accept-side satisfies descriptor whose emitted property
+ * filters its arbitrary with that oracle, so the valid region is precisely
+ * the interaction space the per-clause heuristic cannot see — and the emitted
+ * block RUNS (the W1 execution gate in tests/emitters-pbt.test.ts).
+ *
+ * A 2-param coupled compound (e.g. `a >= 0 and b >= 0 and a + b <= 100` →
+ * `(a, b) => ...`) is PROPERTY_UNPLANNABLE (Center B1 fix): a multi-param
+ * oracle cannot be turned into per-param filterable arbitraries — the
+ * emitted block filters each arbitrary with the codegen'd oracle, and
+ * fast-check's filter passes ONE value, so the multi-param filter would
+ * evaluate the predicate against undefined and silently discard the whole
+ * domain. The planner surfaces the clause non-silently via the
+ * PROPERTY_UNPLANNABLE warning (same non-blocking tier as
+ * PREDICATE_UNPLANNABLE — CliResult.warnings, exit 0), skips the descriptor,
+ * and keeps the strategy record at "property" (the SELECTOR still chooses
+ * property; the PLANNER finds it unplannable). The v1 heuristic misses the
+ * same clause SILENTLY (zero cases) — PBT signals it NON-SILENTLY via the
+ * warning: never a silent zero.
  *
  * Fixture style mirrors tests/generator.test.ts / generator-planner-pbt.test.ts
  * (in-memory, fully-loaded, isValid VersaillesContext built from real parsed
@@ -227,10 +242,10 @@ describe("v1 concrete plan — the per-clause heuristic misses the compound inte
 	});
 });
 
-// ── PBT plan: the property DOES cover the interaction space ─────────────────
+// ── PBT plan: the 2-param coupled compound is PROPERTY_UNPLANNABLE ──────────
 
-describe("planPropertyBlocks — the PBT property covers the interaction space the v1 heuristic misses", () => {
-	it("plans a satisfies descriptor for the compound clause whose oracle carries the interaction", () => {
+describe("planPropertyBlocks — the 2-param coupled compound is PROPERTY_UNPLANNABLE (Center B1 fix)", () => {
+	it("marks the clause PROPERTY_UNPLANNABLE — descriptor absent, warning present, strategy stays property (never a silent zero)", () => {
 		const ctx = compoundContext();
 		const suite = planTestCases(ctx);
 		const { descriptors, strategies, warnings } = planPropertyBlocks(
@@ -238,37 +253,34 @@ describe("planPropertyBlocks — the PBT property covers the interaction space t
 			ctx,
 		);
 
-		expect(warnings).toEqual([]);
+		// The SELECTOR still maps the compound to "property" (the strategy is
+		// the open-question coverage record); the PLANNER finds it unplannable.
 		expect(strategies[COMPOUND_CLAUSE_ID]).toBe("property");
 
-		expect(descriptors).toHaveLength(1);
-		const descriptor = descriptors[0];
-		expect(descriptor).toEqual({
-			id: "OrderService.placeOrder.property-satisfies-0",
-			component: "OrderService",
-			operation: "placeOrder",
-			// Both params get full-range number arbitraries: the compound-aware
-			// extractor can only resolve the per-param lower bounds (a >= 0,
-			// b >= 0) — the COUPLED constraint `a + b <= 100` is not a
-			// per-param bound, so no bounds object is derived and the oracle
-			// carries the coupling.
-			params: [
-				{ param: "a", typeRef: "number", kind: "number" },
-				{ param: "b", typeRef: "number", kind: "number" },
-			],
-			clauses: [
-				{
-					clauseId: COMPOUND_CLAUSE_ID,
-					code: "(a, b) => a >= 0 && b >= 0 && a + b <= 100",
-				},
-			],
-			outcome: "satisfies",
-			traces: [COMPOUND_CLAUSE_ID],
-			seed: derivePropertySeed([COMPOUND_CLAUSE_ID], "1.0"),
-		});
+		// The codegen'd oracle (a, b) is a 2-param oracle — it cannot be turned
+		// into per-param filterable arbitraries (fast-check's filter passes ONE
+		// value). Same LoaderWarning channel as PREDICATE_UNPLANNABLE
+		// (CliResult.warnings, non-blocking, exit 0).
+		const warning = warnings.find((w) => w.field === COMPOUND_CLAUSE_ID);
+		expect(warning).toBeDefined();
+		expect(warning?.code).toBe("PROPERTY_UNPLANNABLE");
+		expect(warning?.detail.length).toBeGreaterThan(0);
+
+		// The 2-param clause contributes NO descriptor — the v1 heuristic
+		// misses it silently, PBT signals it non-silently: never a silent zero.
+		expect(descriptors).toEqual([]);
+		expect(descriptors.some((d) => d.traces.includes(COMPOUND_CLAUSE_ID))).toBe(
+			false,
+		);
+
+		// The coverage gap stays visible: the clause id remains in the suite's
+		// clause stream (coverage.json maps it to an empty array — the
+		// detectable zero-coverage representation, §9.3).
+		expect(suite.clauseIds).toContain(COMPOUND_CLAUSE_ID);
+		expect(coverageManifest(suite).coverage[COMPOUND_CLAUSE_ID]).toEqual([]);
 	});
 
-	it("the emitted property block filters the arbitraries with the compound oracle — the interaction region becomes the valid region", () => {
+	it("emits NO multi-param filter for the 2-param compound — the unplannable clause contributes no property block", () => {
 		const ctx = compoundContext();
 		const suite = planTestCases(ctx);
 		const plan = planPropertyBlocks(suite, ctx);
@@ -280,25 +292,123 @@ describe("planPropertyBlocks — the PBT property covers the interaction space t
 		const file = files.find((f) => f.path.endsWith("OrderService.test.ts"));
 		expect(file).toBeDefined();
 
-		// The compound oracle is embedded verbatim as the filter/assert const.
-		expect(file?.content).toContain(
-			"\t\tconst OrderService_placeOrder_pre0 = (a, b) => a >= 0 && b >= 0 && a + b <= 100;",
+		// No descriptor ⇒ no fast-check surface, no fc.property, no multi-param
+		// `.filter((a, b) => ...)` broken layout (the B1 bug shape).
+		expect(file?.content).not.toContain("fast-check");
+		expect(file?.content).not.toContain("fc.property");
+		expect(file?.content).not.toContain("a.filter(");
+		expect(file?.content).not.toContain("a + b <= 100");
+	});
+});
+
+// ── PBT plan: the SINGLE-param compound IS planned + emitted ────────────────
+// The same interaction-coverage story, but with a 1-param compound — the
+// planable form the design keeps as a runnable property. The bounds are
+// extracted from the compound's numeric sub-expressions and the emitted block
+// filters the bounded arbitrary with the single-param oracle (the W1
+// execution gate in tests/emitters-pbt.test.ts proves this layout RUNS).
+
+const SINGLE_CLAUSE_ID = "OrderService.withdraw.pre0";
+
+function singleParamCompoundContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					withdraw: {
+						id: "OrderService.withdraw",
+						params: [{ name: "amount", type: "number" }],
+						preconditions: [
+							{
+								id: SINGLE_CLAUSE_ID,
+								expr: "amount >= 10 and amount <= 100",
+							},
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "withdraw-hash",
+					},
+				},
+			},
+		},
+	};
+	return makeContext(contracts, {
+		enabled: true,
+		numRuns: 100,
+	});
+}
+
+describe("planPropertyBlocks — the SINGLE-param compound IS planned + emitted as a runnable property", () => {
+	it("plans a satisfies descriptor for the 1-param compound whose oracle carries the interaction", () => {
+		const ctx = singleParamCompoundContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
 		);
-		// Both full-range arbitraries filter through the oracle — the property
-		// samples the interaction space (a=60,b=60 is filtered out, never
-		// reaching the call).
+
+		expect(warnings).toEqual([]);
+		expect(strategies[SINGLE_CLAUSE_ID]).toBe("property");
+
+		expect(descriptors).toHaveLength(1);
+		const descriptor = descriptors[0];
+		expect(descriptor).toEqual({
+			id: "OrderService.withdraw.property-satisfies-0",
+			component: "OrderService",
+			operation: "withdraw",
+			// Integer range from the compound's numeric constraint bounds — the
+			// planner extracts bounds from the compound's numeric
+			// sub-expressions, not just top-level numeric clauses.
+			params: [
+				{
+					param: "amount",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: 10, max: 100 },
+				},
+			],
+			// The codegen'd oracle is SINGLE-param — planable and runnable.
+			clauses: [
+				{
+					clauseId: SINGLE_CLAUSE_ID,
+					code: "(amount) => amount >= 10 && amount <= 100",
+				},
+			],
+			outcome: "satisfies",
+			traces: [SINGLE_CLAUSE_ID],
+			seed: derivePropertySeed([SINGLE_CLAUSE_ID], "1.0"),
+		});
+	});
+
+	it("the emitted property block filters the arbitrary with the single-param oracle — the interaction region becomes the valid region", () => {
+		const ctx = singleParamCompoundContext();
+		const suite = planTestCases(ctx);
+		const plan = planPropertyBlocks(suite, ctx);
+
+		const files = emitSuite(suite, "vitest", {
+			propertyPlan: plan,
+			propertyNumRuns: 100,
+		});
+		const file = files.find((f) => f.path.endsWith("OrderService.test.ts"));
+		expect(file).toBeDefined();
+
+		// The single-param oracle is embedded verbatim as the filter/assert
+		// const — never a multi-param filter.
 		expect(file?.content).toContain(
-			"fc.property(a.filter(OrderService_placeOrder_pre0), b.filter(OrderService_placeOrder_pre0), (a, b) => {",
+			"\t\tconst OrderService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;",
 		);
-		// The interaction expression appears in the emitted source.
-		expect(file?.content).toContain("a + b <= 100");
+		expect(file?.content).toContain(
+			"fc.property(amount.filter(OrderService_withdraw_pre0), (amount) => {",
+		);
 		// The assertion re-checks the compound oracle on the sampled inputs.
 		expect(file?.content).toContain(
-			"expect(OrderService_placeOrder_pre0(a, b)).toBe(true);",
+			"expect(OrderService_withdraw_pre0(amount)).toBe(true);",
 		);
 		// The seeded run is pinned on the descriptor's derived seed.
 		expect(file?.content).toContain(
-			`fc.assert(prop, { seed: ${derivePropertySeed([COMPOUND_CLAUSE_ID], "1.0")}, numRuns: 100 });`,
+			`fc.assert(prop, { seed: ${derivePropertySeed([SINGLE_CLAUSE_ID], "1.0")}, numRuns: 100 });`,
 		);
 	});
 });
@@ -310,6 +420,11 @@ describe("planPropertyBlocks — the PBT property covers the interaction space t
 // (a=-1/0/1 with b=0, b=-1/0/1 with a=0) and never reach a=60/b=60, while the
 // coupled inequality (a + b <= 100) — unclassifiable per-clause ("other") —
 // gets NO concrete case at all.
+//
+// Under the Center B1 fix the coupled inequality ALSO cannot become a PBT
+// property: its codegen'd oracle `(a, b) => a + b <= 100` is a 2-param oracle
+// (it references BOTH params), so the planner marks it PROPERTY_UNPLANNABLE —
+// the same non-silent tier as the single-compound form, never a silent zero.
 const SPLIT_CLAUDE_IDS = {
 	pre0: "OrderService.placeOrder.pre0", // a >= 0
 	pre1: "OrderService.placeOrder.pre1", // b >= 0
@@ -379,7 +494,7 @@ describe("contrast — the split-clause variant: v1's per-clause boundaries neve
 		expect(coverageManifest(suite).coverage[SPLIT_CLAUDE_IDS.pre2]).toEqual([]);
 	});
 
-	it("the PBT plan covers the coupled inequality: a satisfies descriptor for pre2 with the interaction oracle", () => {
+	it("the coupled inequality's oracle is MULTI-param → PROPERTY_UNPLANNABLE: descriptor absent, warning present, strategy stays property (never a silent zero)", () => {
 		const ctx = splitContext();
 		const suite = planTestCases(ctx);
 		const { descriptors, strategies, warnings } = planPropertyBlocks(
@@ -387,32 +502,42 @@ describe("contrast — the split-clause variant: v1's per-clause boundaries neve
 			ctx,
 		);
 
-		expect(warnings).toEqual([]);
+		// Fixture clause-code verification: `a + b <= 100` codegen's to a
+		// TWO-param oracle `(a, b) => ...` — it references BOTH params, so the
+		// B1 rule counts 2 callback params and the clause cannot be turned
+		// into per-param filterable arbitraries.
+		const pre2Ast = ctx.parsedContracts[SPLIT_CLAUDE_IDS.pre2];
+		expect(pre2Ast).toBeDefined();
+		expect(renderClausePredicate(pre2Ast)).toBe("(a, b) => a + b <= 100");
 
-		// Strategy gating: the simple numeric-bound clauses stay "example"
-		// (their v1 boundary cases fully cover them); the coupled inequality —
-		// unclassifiable per-clause — becomes the property.
+		// Strategy gating is UNCHANGED: the simple numeric-bound clauses stay
+		// "example" (their v1 boundary cases fully cover them); the coupled
+		// inequality — unclassifiable per-clause — still maps to "property"
+		// (the SELECTOR's decision). The PLANNER then finds the 2-param oracle
+		// unplannable and surfaces the warning.
 		expect(strategies).toEqual({
 			[SPLIT_CLAUDE_IDS.pre0]: "example",
 			[SPLIT_CLAUDE_IDS.pre1]: "example",
 			[SPLIT_CLAUDE_IDS.pre2]: "property",
 		});
 
-		expect(descriptors).toHaveLength(1);
-		const descriptor = descriptors[0];
-		expect(descriptor.id).toBe("OrderService.placeOrder.property-satisfies-0");
-		expect(descriptor.outcome).toBe("satisfies");
-		expect(descriptor.traces).toEqual([SPLIT_CLAUDE_IDS.pre2]);
-		expect(descriptor.clauses).toEqual([
-			{
-				clauseId: SPLIT_CLAUDE_IDS.pre2,
-				// The interaction oracle: the property's valid-region filter
-				// IS the coupled constraint the v1 boundary sweep cannot see.
-				code: "(a, b) => a + b <= 100",
-			},
-		]);
-		expect(descriptor.seed).toBe(
-			derivePropertySeed([SPLIT_CLAUDE_IDS.pre2], "1.0"),
-		);
+		// The multi-param clause contributes NO descriptor — same LoaderWarning
+		// channel as PREDICATE_UNPLANNABLE (CliResult.warnings, non-blocking,
+		// exit 0). The v1 heuristic misses the clause silently; PBT signals it
+		// non-silently: never a silent zero.
+		const warning = warnings.find((w) => w.field === SPLIT_CLAUDE_IDS.pre2);
+		expect(warning).toBeDefined();
+		expect(warning?.code).toBe("PROPERTY_UNPLANNABLE");
+		expect(warning?.detail.length).toBeGreaterThan(0);
+		expect(descriptors).toEqual([]);
+		expect(
+			descriptors.some((d) => d.traces.includes(SPLIT_CLAUDE_IDS.pre2)),
+		).toBe(false);
+
+		// The coverage gap stays visible: the clause id remains in the suite's
+		// clause stream (coverage.json maps it to an empty array — the
+		// detectable zero-coverage representation, §9.3).
+		expect(suite.clauseIds).toContain(SPLIT_CLAUDE_IDS.pre2);
+		expect(coverageManifest(suite).coverage[SPLIT_CLAUDE_IDS.pre2]).toEqual([]);
 	});
 });

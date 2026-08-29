@@ -2202,6 +2202,27 @@ function predicatesImportMap(
 }
 
 /**
+ * Parses the codegen'd clause predicate's parameter list from its byte-pinned
+ * `(<params>) => <expr>` form — the SAME parsing the vitest emitter's
+ * oracleParamsOf applies to the GAP-3 guard set. codegen.ts output never
+ * mangles the head — split at the first `) => `, then the params on ", ".
+ * A guard oracle with >1 callback params can never be an arbitrary
+ * `.filter(...)` (fast-check filter passes exactly ONE value), so the planner
+ * uses this count to mark multi-param-oracle operations PROPERTY_UNPLANNABLE.
+ */
+function oracleParamsOf(code: string): string[] {
+	const arrow = code.indexOf(") => ");
+	if (arrow === -1) {
+		return [];
+	}
+	const head = code.slice(1, arrow);
+	if (head.trim() === "") {
+		return [];
+	}
+	return head.split(", ").map((param) => param.trim());
+}
+
+/**
  * Plans the property blocks for a validated context + its already-planned
  * concrete suite (ADR-0017, build-spec §9.6). Throws when context.isValid is
  * false (mirrors planTestCases — generation only runs against approved
@@ -2272,9 +2293,59 @@ export function planPropertyBlocks(
 			const bounds = numericBoundsForOperation(operation, context);
 			const paramsResult = buildArbitrarySpecs(operation, bounds);
 
+			// B1 root fix (multi-param oracles): the emitted GAP-3 guard set for
+			// an operation is the clause oracle of EVERY satisfies +
+			// invariant-preserving descriptor for the same (component, operation),
+			// in plan order. A guard oracle with >1 callback params can never be
+			// an arbitrary `.filter(...)` — fast-check's filter passes exactly
+			// ONE value, so filtering with a multi-param oracle would evaluate the
+			// predicate against undefined and silently discard the whole domain
+			// (a hanging property). Render the candidate oracles once, count the
+			// callback params of each renderable oracle, and mark the operation's
+			// satisfies/invariant-preserving blocks unplannable when ANY guard
+			// oracle is multi-param. Rejects blocks are unaffected (they have no
+			// filters). A clause whose oracle cannot render never reaches the
+			// emitted guard set — its own descriptor carries the render-failure
+			// warning (Center W5) below instead.
+			const guardCandidates: { clauseId: string; ast: Node }[] = [];
+			for (const pre of operation.preconditions ?? []) {
+				const ast = context.parsedContracts[pre.id];
+				if (strategies[pre.id] !== "example" && ast !== undefined) {
+					guardCandidates.push({ clauseId: pre.id, ast });
+				}
+			}
+			for (const post of operation.postconditions ?? []) {
+				const ast = context.parsedContracts[post.id];
+				if (strategies[post.id] !== "example" && ast !== undefined) {
+					guardCandidates.push({ clauseId: post.id, ast });
+				}
+			}
+			for (const invariant of invariants) {
+				const ast = context.parsedContracts[invariant.id];
+				if (ast !== undefined && operationOverlapsInvariant(operation, ast)) {
+					guardCandidates.push({ clauseId: invariant.id, ast });
+				}
+			}
+			const guardOracles: { clauseId: string; code: string }[] = [];
+			for (const candidate of guardCandidates) {
+				try {
+					guardOracles.push({
+						clauseId: candidate.clauseId,
+						code: renderClausePredicate(candidate.ast, { predicates }),
+					});
+				} catch {
+					// Render-failed clauses contribute no guard oracle (their own
+					// descriptor warns + skips below — never a silent zero).
+				}
+			}
+			const multiParamGuard = guardOracles.find(
+				(oracle) => oracleParamsOf(oracle.code).length > 1,
+			);
+
 			// Plans ONE descriptor for a property-strategy clause, or a
 			// non-silent PROPERTY_UNPLANNABLE warning (the PREDICATE_UNPLANNABLE
-			// tier) that skips it: unrepresentable operation params, or a
+			// tier) that skips it: unrepresentable operation params, a
+			// multi-param guard oracle in the operation's filter set (B1), or a
 			// renderClausePredicate throw for the clause (Center W5). Never
 			// silent, never a hard fail for renderer unrepresentability.
 			const planClauseDescriptor = (
@@ -2287,6 +2358,24 @@ export function planPropertyBlocks(
 						code: "PROPERTY_UNPLANNABLE",
 						field: clauseId,
 						detail: `Cannot plan a property block for ${clauseId}: operation ${componentName}.${operationName} has param ${paramsResult.unplannable} — no ArbitrarySpec kind exists for that type, so the clause's valid region cannot be turned into filterable arbitraries`,
+					});
+					return;
+				}
+				// B1: the multi-param guard-oracle gate — satisfies and
+				// invariant-preserving blocks only (rejects has no filters). The
+				// SELECTOR still records "property" for these clauses (the
+				// strategy is the open-question coverage record); the PLANNER
+				// finds the block unplannable and the coverage gap stays visible
+				// in suite.clauseIds.
+				if (
+					(outcome === "satisfies" || outcome === "invariant-preserving") &&
+					multiParamGuard !== undefined
+				) {
+					const params = oracleParamsOf(multiParamGuard.code);
+					warnings.push({
+						code: "PROPERTY_UNPLANNABLE",
+						field: clauseId,
+						detail: `Cannot plan a property block for ${clauseId}: guard oracle ${multiParamGuard.clauseId} takes ${params.length} callback params (${params.join(", ")}) — fast-check's .filter() passes one value, so no satisfies/invariant-preserving block in ${componentName}.${operationName} can filter its arbitraries to a valid region with this guard set`,
 					});
 					return;
 				}

@@ -383,6 +383,17 @@ function oracleParamsOf(code: string): string[] {
 }
 
 /**
+ * Escapes regex metacharacters in a predicate name before it is embedded in
+ * the reference-check regex (Center W4): registry keys flow into
+ * `new RegExp(\`\\b${name}\\s*(\`)`, so a hostile or unusual name like
+ * "is.positive" or "a+b" would otherwise inject a character class /
+ * quantifier and produce a wrong or throwing match.
+ */
+function escapeRegExp(name: string): string {
+	return name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
  * The predicate names a component's property clauses reference, ordered by
  * first appearance across the component's descriptors in plan order (GAP 2).
  * The codegen emits each predicate as a bare call `<name>(<args>)` — only a
@@ -404,7 +415,7 @@ function referencedPredicates(
 				if (found.includes(name)) {
 					continue;
 				}
-				if (new RegExp(`\\b${name}\\s*\\(`).test(clause.code)) {
+				if (new RegExp(`\\b${escapeRegExp(name)}\\s*\\(`).test(clause.code)) {
 					found.push(name);
 				}
 			}
@@ -536,6 +547,19 @@ function renderPropertyBlock(
 			oracle.oracleParams.includes(param),
 		);
 		if (first !== undefined) {
+			// B1 belt-and-suspenders: a multi-param guard oracle can never be a
+			// valid `.filter(...)` — fast-check's filter passes exactly ONE
+			// value, so filtering with it would evaluate the predicate against
+			// undefined and silently discard the whole domain (a hanging
+			// property). The planner gate marks such descriptors
+			// PROPERTY_UNPLANNABLE before they reach the emitter, so reaching
+			// here is an internal invariant violation — refuse loudly rather
+			// than emit a broken property.
+			if (first.oracleParams.length > 1) {
+				throw new Error(
+					`Refusing to emit: guard oracle ${first.constName} (${first.clauseId}) takes ${first.oracleParams.length} callback params — fast-check's .filter() passes one value, so property "${descriptor.id}" cannot filter its arbitrary to a valid region`,
+				);
+			}
 			filters.set(param, first.constName);
 		}
 	}

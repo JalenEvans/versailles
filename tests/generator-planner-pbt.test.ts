@@ -14,6 +14,7 @@ import type {
 // The generator core (src/generator/) is implemented; these value imports
 // resolve at runtime. The assertions below pin the generator contract the
 // implementation must satisfy.
+import { renderClausePredicate } from "../packages/engine/src/generator/codegen.js";
 import { planTestCases } from "../packages/engine/src/generator/index.js";
 import type {
 	ArbitrarySpec,
@@ -135,6 +136,31 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  *    identifier-safety class stays hard — and planTestCases' up-front
  *    assertSafeIdentifiers already refuses those names, so a validated
  *    context cannot reach codegen with an unsafe name.
+ * 10. MULTI-PARAM ORACLES (the Center B1 fix, ratified): a clause predicate
+ *    with MORE THAN ONE callback parameter cannot be turned into per-param
+ *    filterable arbitraries — the emitted block filters each arbitrary with
+ *    the codegen'd oracle (`<arb>.filter(<oracle>)`), and fast-check's filter
+ *    invokes its callback with ONE value, so a 2+-param oracle (e.g.
+ *    `(status, newStatus) => status === newStatus`, or
+ *    `(quantity, sku) => quantity >= 1 && ...`) makes the filter callback
+ *    reference an unbound sibling parameter at runtime — broken, vacuous
+ *    filters (the B1 bug). The planner therefore treats an ACCEPT-side
+ *    (satisfies / invariant-preserving) clause whose codegen'd oracle has >1
+ *    arrow-function parameter as PROPERTY_UNPLANNABLE: it pushes the same
+ *    non-silent LoaderWarning { code: "PROPERTY_UNPLANNABLE", field: <clause
+ *    id>, detail: non-empty }, SKIPS the descriptor, and keeps the strategy
+ *    record at "property" (the SELECTOR still chooses property for the
+ *    resolved shape; the PLANNER finds it unplannable). Single-param oracles
+ *    stay runnable properties. The oracle's parameter count is read from the
+ *    byte-pinned `(<params>) => <expr>` codegen output (split at the first
+ *    `) => `, params on ", " — the same parsing the vitest emitter's
+ *    oracleParamsOf uses).
+ *    SCOPE — the rejects (expected-rejection) descriptor is NOT subject to
+ *    the multi-param rule: its clauses are never embedded as filters (the
+ *    emitter renders NO oracle consts and NO filter for a rejects block), so
+ *    a preState-carrying multi-param oracle there is harmless and the
+ *    property stays runnable. The rule applies ONLY to the accept-side
+ *    filterable blocks (satisfies + invariant-preserving).
  * 7. Expected-rejection sweep replacement (contract must): when
  *    propertyBased.enabled is true the planner emits an expected-rejection
  *    PROPERTY and planTestCases must NOT emit the §9.2 bounded sweep case
@@ -192,6 +218,14 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  *   recorded only by the presence/absence of the rejects descriptor.
  * - numRuns is NOT carried on the descriptor — the emitter reads
  *   config.propertyBased.numRuns (default 100) via the Chunk 6 seam.
+ * - The multi-param oracle rule (Center B1 fix) counts the codegen'd arrow
+ *   function's TOTAL parameters — a manifest-field reference like
+ *   `(status, newStatus) => status === newStatus` is still 2 params and
+ *   unplannable, because the oracle is embedded as a filter callback that
+ *   fast-check invokes with ONE value. `preState` (old(field) resolution)
+ *   counts too — but only on accept-side blocks: a rejects descriptor never
+ *   embeds its clauses as filters, so its preState-carrying multi-param
+ *   oracles are NOT unplannable.
  */
 
 // ── Fixture helpers (mirroring tests/generator.test.ts conventions) ────────
@@ -295,6 +329,35 @@ function expectStrategyCoverage(
 	expect(Object.keys(strategies).sort()).toEqual([...suite.clauseIds].sort());
 }
 
+/**
+ * Parses a codegen'd clause predicate's callback-parameter list from its
+ * byte-pinned `(<params>) => <expr>` form — the SAME parsing the vitest
+ * emitter's oracleParamsOf and the planner's B1 gate apply. The B1 fix keys
+ * on this count: an oracle with >1 callback params can never be an arbitrary
+ * `.filter(...)` (fast-check's filter passes ONE value), so every fixture
+ * below verifies its clause's code AND its callback-param count.
+ */
+function oracleParamsOf(code: string): string[] {
+	const arrow = code.indexOf(") => ");
+	if (arrow === -1) {
+		return [];
+	}
+	const head = code.slice(1, arrow);
+	if (head.trim() === "") {
+		return [];
+	}
+	return head.split(", ").map((param) => param.trim());
+}
+
+/** Renders a fixture clause's oracle through the REAL codegen (codegen.ts). */
+function renderOracle(ctx: VersaillesContext, clauseId: string): string {
+	const ast = ctx.parsedContracts[clauseId];
+	if (ast === undefined) {
+		throw new Error(`fixture has no parsed AST for ${clauseId}`);
+	}
+	return renderClausePredicate(ast);
+}
+
 // ── Fixture: the flagship compound precondition ─────────────────────────────
 // OrderService.placeOrder(x: number) with ONE compound precondition clause.
 // The compound classifies as "property" (compound precedence over the
@@ -367,6 +430,17 @@ describe("planPropertyBlocks — flagship compound precondition → property des
 
 		expect(strategies["OrderService.placeOrder.pre0"]).toBe("property");
 		expectStrategyCoverage(ctx, strategies);
+
+		// Fixture clause-code verification (Center B1): the flagship oracle is
+		// SINGLE-param — `(x) => x >= 0 && x <= 1000` — the planable form. A
+		// multi-param oracle would be PROPERTY_UNPLANNABLE; this one stays a
+		// runnable property.
+		expect(renderOracle(ctx, "OrderService.placeOrder.pre0")).toBe(
+			"(x) => x >= 0 && x <= 1000",
+		);
+		expect(
+			oracleParamsOf(renderOracle(ctx, "OrderService.placeOrder.pre0")),
+		).toEqual(["x"]);
 	});
 });
 
@@ -569,9 +643,53 @@ function multiParamPbtContext(): VersaillesContext {
 	});
 }
 
+// ── Fixture: the SAME six arbitrary kinds under a SINGLE-param compound ─────
+// The multi-param variant above is PROPERTY_UNPLANNABLE (2-param oracle), so
+// the per-param ArbitrarySpec mapping is pinned here against a single-param
+// compound (`quantity >= 1 and quantity <= 100` → `(quantity) => ...`) — the
+// planned descriptor still carries ALL SIX operation params, so the mapping
+// coverage (number bounds, string, boolean, enum members, list/optional
+// defaults) is preserved.
+function allKindsSingleParamContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					purchase: {
+						id: "OrderService.purchase",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "quantity", type: "number" },
+							{ name: "vip", type: "boolean" },
+							{ name: "tier", type: "enum<GOLD,SILVER>" },
+							{ name: "tags", type: "list<string>" },
+							{ name: "note", type: "optional<string>" },
+						],
+						preconditions: [
+							{
+								id: "OrderService.purchase.pre0",
+								expr: "quantity >= 1 and quantity <= 100",
+							},
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "purchase-hash",
+					},
+				},
+			},
+		},
+	};
+	return makeContext(contracts, EMPTY_MANIFESTS, EMPTY_PREDICATES, {
+		enabled: true,
+		numRuns: 100,
+	});
+}
+
 describe("planPropertyBlocks — per-param arbitraries from typeRefs + bounds", () => {
 	it("maps every operation param to its ArbitrarySpec: integer bounds, string, boolean, enum members, list/optional defaults", () => {
-		const ctx = multiParamPbtContext();
+		const ctx = allKindsSingleParamContext();
 		const { descriptors, strategies } = planPropertyBlocksFor(ctx);
 
 		expect(descriptors).toHaveLength(1);
@@ -600,16 +718,71 @@ describe("planPropertyBlocks — per-param arbitraries from typeRefs + bounds", 
 			},
 		]);
 
-		// The oracle only references the clause's own fields — codegen'd in
-		// first-referenced in-order param order, byte-pinned.
+		// The oracle only references the clause's own field — codegen'd in
+		// first-referenced in-order param order, byte-pinned. The SINGLE-param
+		// compound stays planable (multi-param oracles are unplannable).
 		expect(descriptor.clauses).toEqual([
 			{
 				clauseId: "OrderService.purchase.pre0",
-				code: '(quantity, sku) => quantity >= 1 && quantity <= 100 && sku !== ""',
+				code: "(quantity) => quantity >= 1 && quantity <= 100",
 			},
 		]);
 
+		// Fixture clause-code verification: this compound omits `sku != ""`, so
+		// its oracle is SINGLE-param — the planable form (B1 fix).
+		expect(renderOracle(ctx, "OrderService.purchase.pre0")).toBe(
+			"(quantity) => quantity >= 1 && quantity <= 100",
+		);
+		expect(
+			oracleParamsOf(renderOracle(ctx, "OrderService.purchase.pre0")),
+		).toEqual(["quantity"]);
+
 		expect(strategies["OrderService.purchase.pre0"]).toBe("property");
+		expectStrategyCoverage(ctx, strategies);
+	});
+});
+
+describe("planPropertyBlocks — a multi-param oracle is PROPERTY_UNPLANNABLE (Center B1 fix)", () => {
+	it("skips the descriptor whose codegen'd oracle has >1 callback param (quantity, sku) — non-silent warning, strategy stays property", () => {
+		const ctx = multiParamPbtContext();
+		const { descriptors, strategies, warnings } = planPropertyBlocksFor(ctx);
+
+		// The compound's codegen'd oracle is (quantity, sku) => ... — 2
+		// callback params. It cannot be turned into per-param filterable
+		// arbitraries (a filter callback receives ONE value), so the planner
+		// marks it PROPERTY_UNPLANNABLE: same LoaderWarning channel as
+		// PREDICATE_UNPLANNABLE (CliResult.warnings, non-blocking, exit 0).
+		// Fixture clause-code verification: the oracle has TWO callback params
+		// even though the OPERATION has six params — the B1 rule counts the
+		// codegen'd arrow's parameters, not the operation's param count.
+		const code = renderOracle(ctx, "OrderService.purchase.pre0");
+		expect(code).toBe(
+			'(quantity, sku) => quantity >= 1 && quantity <= 100 && sku !== ""',
+		);
+		expect(oracleParamsOf(code)).toEqual(["quantity", "sku"]);
+		const warning = warnings.find(
+			(w) => w.field === "OrderService.purchase.pre0",
+		);
+		expect(warning).toBeDefined();
+		expect(warning?.code).toBe("PROPERTY_UNPLANNABLE");
+		expect(warning?.detail.length).toBeGreaterThan(0);
+
+		// The multi-param clause contributes NO descriptor — never a silent
+		// zero, never a broken filter layout.
+		expect(descriptors).toEqual([]);
+		expect(
+			descriptors.some((d) => d.traces.includes("OrderService.purchase.pre0")),
+		).toBe(false);
+
+		// The strategy record still documents the compound decision — the
+		// SELECTOR chose property; the PLANNER found it unplannable.
+		expect(strategies["OrderService.purchase.pre0"]).toBe("property");
+
+		// Coverage gap stays visible: the clause id remains in the suite's
+		// clause stream (coverage.json maps it to an empty array — the
+		// detectable zero-coverage representation, §9.3).
+		const suite = planTestCases(ctx);
+		expect(suite.clauseIds).toContain("OrderService.purchase.pre0");
 		expectStrategyCoverage(ctx, strategies);
 	});
 });
@@ -684,14 +857,17 @@ function accountPbtContext(
 }
 
 describe("planPropertyBlocks — invariant-preservation + postcondition strategy mapping", () => {
-	it("plans an invariant-preserving property for the effects-overlap invariant; literal postconditions stay example; bothSideFieldRef postconditions become property", () => {
+	it("plans an invariant-preserving property for the effects-overlap invariant; literal postconditions stay example; the bothSideFieldRef postcondition is PROPERTY_UNPLANNABLE (2-param oracle)", () => {
 		const ctx = accountPbtContext({ enabled: true, numRuns: 100 });
-		const { descriptors, strategies, warnings } = planPropertyBlocksFor(ctx);
-
-		expect(warnings).toEqual([]);
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
+		);
 
 		// Effects-overlap invariant (balance is mutated by withdraw) →
 		// invariant-preserving property, oracle = the codegen'd invariant.
+		// Its oracle (balance) => balance >= 0 is SINGLE-param → planable.
 		const invariant = descriptors.find(
 			(d) => d.id === "AccountService.withdraw.property-invariant-preserving-0",
 		);
@@ -717,33 +893,39 @@ describe("planPropertyBlocks — invariant-preservation + postcondition strategy
 			derivePropertySeed(["AccountService.inv0"], "1.0"),
 		);
 
-		// bothSideFieldRef postcondition (status == newStatus) is uncomputable
-		// for postconditionAssertions → property, oracle = the codegen'd
-		// postcondition.
+		// bothSideFieldRef postcondition (status == newStatus) codegen's to a
+		// TWO-param oracle (status, newStatus) — a multi-param oracle cannot be
+		// turned into per-param filterable arbitraries, so the clause is
+		// PROPERTY_UNPLANNABLE (Center B1 fix): the satisfies descriptor is
+		// SKIPPED and the warning is non-silent — never a broken filter.
+		// Fixture clause-code verification: the manifest-field reference is
+		// STILL a 2-param oracle — the B1 rule counts the codegen'd arrow's
+		// TOTAL parameters, manifest-field references included.
+		const postCode = renderOracle(ctx, "AccountService.setStatus.post0");
+		expect(postCode).toBe("(status, newStatus) => status === newStatus");
+		expect(oracleParamsOf(postCode)).toEqual(["status", "newStatus"]);
+
 		const post = descriptors.find(
 			(d) => d.id === "AccountService.setStatus.property-satisfies-0",
 		);
-		expect(post).toBeDefined();
-		expect(post).toMatchObject({
-			component: "AccountService",
-			operation: "setStatus",
-			outcome: "satisfies",
-			params: [{ param: "newStatus", typeRef: "string", kind: "string" }],
-			clauses: [
-				{
-					clauseId: "AccountService.setStatus.post0",
-					code: "(status, newStatus) => status === newStatus",
-				},
-			],
-			traces: ["AccountService.setStatus.post0"],
-		});
-		expect(post?.seed).toBe(
-			derivePropertySeed(["AccountService.setStatus.post0"], "1.0"),
-		);
+		expect(post).toBeUndefined();
 
-		// Per-clause strategy record — literal-computable postconditions stay
-		// example; only the invariant and the bothSideFieldRef postcondition
-		// become property.
+		const warning = warnings.find(
+			(w) => w.field === "AccountService.setStatus.post0",
+		);
+		expect(warning).toBeDefined();
+		expect(warning?.code).toBe("PROPERTY_UNPLANNABLE");
+		expect(warning?.detail.length).toBeGreaterThan(0);
+
+		// The coverage gap stays visible: the unplannable clause id remains in
+		// the suite's clause stream (coverage.json maps it to an empty array —
+		// the detectable zero-coverage representation, never a silent zero).
+		expect(suite.clauseIds).toContain("AccountService.setStatus.post0");
+
+		// Per-clause strategy record — the SELECTOR still maps the
+		// bothSideFieldRef shape to "property" (the strategy is a selector
+		// decision; the PLANNER finds the clause unplannable). Literal-
+		// computable postconditions stay example.
 		expect(strategies).toEqual({
 			"AccountService.inv0": "property",
 			"AccountService.withdraw.pre0": "example",
@@ -765,7 +947,11 @@ describe("planPropertyBlocks — expected-rejection sweep replacement (ADR-0017)
 		// The rejection property traces the sweep's deterministic first-hit
 		// set (violated invariant + satisfied postconditions), carries the
 		// configured rejection idiom, and its clauses are the codegen'd
-		// oracles of the traced conditions.
+		// oracles of the traced conditions. NOTE the multi-param rule does NOT
+		// apply here: a rejects block never embeds its clauses as per-param
+		// filters (the emitter renders NO oracle consts and NO filter for a
+		// rejects block), so the preState-carrying multi-param oracles below
+		// are harmless and the property stays runnable.
 		const rejection = descriptors.find(
 			(d) => d.id === "AccountService.withdraw.property-rejects-0",
 		);
@@ -887,12 +1073,15 @@ describe("planPropertyBlocks — seed wiring (ADR-0017)", () => {
 	});
 });
 
-// ── Fixture: unplannable compound (component-typed param) ───────────────────
+// ── Fixture: unplannable compound (component-typed param + multi-param) ─────
 // `amount >= 0 and account != null` is a valid compound precondition, but
 // `account` is component-typed — no ArbitrarySpec kind exists for component
 // types, so the clause's valid region cannot be turned into filterable
-// arbitraries. Semantically valid (see the selector-test fixture grounding:
-// both exprs validate cleanly), yet unplannable for PBT.
+// arbitraries. (The codegen'd oracle `(amount, account) => ...` is ALSO a
+// multi-param oracle — either failure is PROPERTY_UNPLANNABLE; this fixture
+// pins the component-typed-param channel.) Semantically valid (see the
+// selector-test fixture grounding: both exprs validate cleanly), yet
+// unplannable for PBT.
 function unplannableCompoundContext(): VersaillesContext {
 	const contracts: ContractsFile = {
 		version: "1.0",

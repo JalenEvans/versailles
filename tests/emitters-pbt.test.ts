@@ -1,6 +1,26 @@
+import { spawnSync } from "node:child_process";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { emitSuite } from "../packages/engine/src/generator/index.js";
+import { parseExpression } from "../packages/core/src/core/parser.js";
+import type { ClauseKind, Node } from "../packages/core/src/core/parser.js";
+import type {
+	ContractClause,
+	ContractsFile,
+	ManifestsFile,
+	PredicatesFile,
+	VersaillesContext,
+	WorkspaceConfig,
+} from "../packages/core/src/loader/workspace.js";
+import { renderClausePredicate } from "../packages/engine/src/generator/codegen.js";
+import {
+	emitSuite,
+	planPropertyBlocks,
+	planTestCases,
+} from "../packages/engine/src/generator/index.js";
 import type {
 	ArbitrarySpec,
 	EmitOptions,
@@ -10,6 +30,7 @@ import type {
 	PropertyDescriptor,
 	PropertyPlan,
 } from "../packages/engine/src/generator/index.js";
+import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
 
 /**
  * Seeded PBT emission — the vitest property-block emitter (ADR-0017 Phase 5,
@@ -1231,5 +1252,306 @@ describe("emitters-pbt fixture integrity", () => {
 		expect(all.some((c) => c.expects.outcome === "reject")).toBe(true);
 		expect(all.some((c) => c.expects.outcome === "accept")).toBe(true);
 		expect(suite.invariantCases.length).toBeGreaterThan(0);
+	});
+});
+
+// ── W1: real-runner execution gate (why B1 escaped the review) ───────────────
+// The Center's final review found B1 precisely because emitters-pbt only
+// STRING-pins the emitted layout — nothing ever EXECUTED a generated property
+// under a real runner, so a `.filter((a, b) => ...)` broken layout could pass
+// review. This gate closes that gap:
+//
+//   A) EMITS a SINGLE-param compound property block through the REAL pipeline
+//      (planTestCases → planPropertyBlocks → emitSuite) and EXECUTES it under
+//      the REAL vitest runner in a temp dir (the established emitters.test.ts
+//      harness — vitest.mjs under process.execPath; a node_modules symlink to
+//      the repo root resolves the generated file's `import fc from
+//      "fast-check"`). The runnable layout must exit 0.
+//
+//   B) The unplannable multi-param descriptor (Center B1) is never emitted as
+//      a filter: the emitted file for a PROPERTY_UNPLANNABLE clause carries NO
+//      fast-check surface, NO fc.property, NO broken multi-param `.filter`.
+//
+// Both pins re-use the fixture style of generator-planner-pbt.test.ts
+// (in-memory, fully-loaded, isValid VersaillesContext built from real parsed
+// ASTs) so the gate exercises the real generator, not a hand-built IR.
+
+const EXEC_REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+const EXEC_EMPTY_MANIFESTS: ManifestsFile = { version: "1.0", manifests: {} };
+const EXEC_EMPTY_PREDICATES: PredicatesFile = {
+	version: "1.0",
+	predicates: {},
+};
+
+function execConfig(
+	propertyBased: WorkspaceConfig["propertyBased"],
+): WorkspaceConfig {
+	return {
+		grammarVersion: "1.0",
+		schemaVersion: "1.0",
+		sourceRoots: ["src/**/*.ts"],
+		language: "typescript",
+		testFramework: "vitest",
+		generatedDir: ".versailles/generated",
+		staleness: { blockOnStale: false },
+		propertyBased,
+	};
+}
+
+/** Parses every fixture expr with the real parser (loader-shaped context). */
+function execParseAll(contracts: ContractsFile): Record<string, Node> {
+	const parsed: Record<string, Node> = {};
+	const walk = (clauses: ContractClause[], kind: ClauseKind): void => {
+		for (const clause of clauses) {
+			const result = parseExpression(clause.expr, kind, clause.id);
+			if ("errors" in result) {
+				throw new Error(
+					`fixture parse failed for ${clause.id}: ${JSON.stringify(result.errors)}`,
+				);
+			}
+			parsed[clause.id] = result.ast;
+		}
+	};
+	for (const component of Object.values(contracts.contracts)) {
+		walk(component.invariants ?? [], "invariants");
+		for (const operation of Object.values(component.operations ?? {})) {
+			walk(operation.preconditions ?? [], "preconditions");
+			walk(operation.postconditions ?? [], "postconditions");
+		}
+	}
+	return parsed;
+}
+
+function execContext(
+	contracts: ContractsFile,
+	propertyBased: WorkspaceConfig["propertyBased"],
+): VersaillesContext {
+	return {
+		config: execConfig(propertyBased),
+		contracts,
+		manifests: EXEC_EMPTY_MANIFESTS,
+		predicates: EXEC_EMPTY_PREDICATES,
+		parsedContracts: execParseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
+/** The runnable single-param compound: `x >= 0 and x <= 1000` → `(x) => ...`. */
+function execSingleParamContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					placeOrder: {
+						id: "OrderService.placeOrder",
+						params: [{ name: "x", type: "number" }],
+						preconditions: [
+							{
+								id: "OrderService.placeOrder.pre0",
+								expr: "x >= 0 and x <= 1000",
+							},
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "exec-placeorder-hash",
+					},
+				},
+			},
+		},
+	};
+	return execContext(contracts, { enabled: true, numRuns: 100 });
+}
+
+/** The unplannable multi-param compound: oracle `(a, b) => ...` (2 params). */
+function execMultiParamContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					placeOrder: {
+						id: "OrderService.placeOrder",
+						params: [
+							{ name: "a", type: "number" },
+							{ name: "b", type: "number" },
+						],
+						preconditions: [
+							{
+								id: "OrderService.placeOrder.pre0",
+								expr: "a >= 0 and b >= 0 and a + b <= 100",
+							},
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "exec-placeorder-mp-hash",
+					},
+				},
+			},
+		},
+	};
+	return execContext(contracts, { enabled: true, numRuns: 100 });
+}
+
+/** Real OrderService source for the W1 runnability pin. */
+const EXEC_ORDER_SOURCE = `export class OrderService {
+	placeOrder(x: number): number {
+		if (x < 0 || x > 1000) throw new Error("out of range");
+		return x;
+	}
+}
+`;
+
+/** The REAL vitest runner (vitest.mjs under process.execPath — the established emitters.test.ts harness). */
+function execVitestBin(): string {
+	return join(EXEC_REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
+}
+
+describe("emitted PBT — the single-param compound property RUNS under the REAL vitest runner (W1 execution gate)", () => {
+	it("executes an emitted single-param compound property — exit 0, no filter hang (Red today would be a broken/vacuous filter layout)", async () => {
+		const ctx = execSingleParamContext();
+		const suite = planTestCases(ctx);
+		const plan = planPropertyBlocks(suite, ctx);
+
+		// Planner pin: the single-param compound IS planned (no warning).
+		expect(plan.warnings).toEqual([]);
+		expect(plan.descriptors).toHaveLength(1);
+		expect(plan.descriptors[0].clauses[0].code).toBe(
+			"(x) => x >= 0 && x <= 1000",
+		);
+
+		const root = await mkdtemp(join(tmpdir(), "versailles-pbt-exec-"));
+		try {
+			// fast-check must resolve from the generated file's directory — the
+			// node_modules symlink to the repo root (same resolution the
+			// committed examples/order-service workspace gets from its own
+			// node_modules).
+			await symlink(
+				join(EXEC_REPO_ROOT, "node_modules"),
+				join(root, "node_modules"),
+				"dir",
+			);
+			await writeFile(join(root, "order.ts"), `${EXEC_ORDER_SOURCE}\n`, "utf8");
+
+			const files = emitSuite(suite, "vitest", {
+				generatedDir: ".",
+				modulePaths: { OrderService: "./order" },
+				methods: {
+					OrderService: {
+						placeOrder: {
+							static: false,
+							params: ["x"],
+							returnType: "number",
+						},
+					},
+				},
+				propertyPlan: plan,
+				propertyNumRuns: 100,
+			});
+			const order = files.find((file) =>
+				file.path.endsWith("OrderService.test.ts"),
+			);
+			expect(order).toBeDefined();
+
+			// The string pin: the SINGLE-param filter layout — the runnable
+			// form (a multi-param `.filter((a, b) => ...)` would be the B1 bug).
+			expect(order?.content).toContain(
+				"fc.property(x.filter(OrderService_placeOrder_pre0), (x) => {",
+			);
+			expect(order?.content).toContain(
+				"expect(OrderService_placeOrder_pre0(x)).toBe(true);",
+			);
+
+			await writeFile(
+				join(root, "OrderService.test.ts"),
+				order?.content ?? "",
+				"utf8",
+			);
+
+			// EXECUTE under the real vitest runner — the W1 gate that string
+			// pins alone cannot provide. The bounded arbitrary + single-param
+			// filter must run 100 seeded runs green.
+			const run = spawnSync(process.execPath, [execVitestBin(), "run"], {
+				cwd: root,
+				encoding: "utf8",
+			});
+			expect(
+				run.status,
+				`emitted single-param compound property did not run clean:\n${run.stdout}\n${run.stderr}`,
+			).toBe(0);
+			// The runner SUMMARY must independently show zero failures.
+			expect(run.stdout).not.toMatch(/\d+ failed/);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("the unplannable multi-param descriptor is NEVER emitted as a filter — its emitted file carries no fc.property surface (W1)", async () => {
+		const ctx = execMultiParamContext();
+		const suite = planTestCases(ctx);
+		const plan = planPropertyBlocks(suite, ctx);
+
+		// Planner pin: the 2-param oracle is PROPERTY_UNPLANNABLE.
+		const pre0Ast = ctx.parsedContracts["OrderService.placeOrder.pre0"];
+		expect(pre0Ast).toBeDefined();
+		expect(renderClausePredicate(pre0Ast)).toBe(
+			"(a, b) => a >= 0 && b >= 0 && a + b <= 100",
+		);
+		const warning = plan.warnings.find(
+			(w) => w.field === "OrderService.placeOrder.pre0",
+		);
+		expect(warning).toBeDefined();
+		expect(warning?.code).toBe("PROPERTY_UNPLANNABLE");
+		expect(plan.descriptors).toEqual([]);
+
+		// Emit pin: no descriptor ⇒ no fast-check surface, no fc.property, no
+		// broken multi-param `.filter((a, b) => ...)` layout (the B1 bug shape).
+		const files = emitSuite(suite, "vitest", {
+			propertyPlan: plan,
+			propertyNumRuns: 100,
+		});
+		const order = files.find((file) =>
+			file.path.endsWith("OrderService.test.ts"),
+		);
+		expect(order).toBeDefined();
+		expect(order?.content).not.toContain("fast-check");
+		expect(order?.content).not.toContain("fc.property");
+		expect(order?.content).not.toContain("a.filter(");
+		expect(order?.content).not.toContain("a + b <= 100");
+	});
+});
+
+// ── Single-param-only reality pin for the emitters-pbt fixture ───────────────
+// The B1 fix makes multi-param oracles PROPERTY_UNPLANNABLE, so every oracle
+// this file's pinned emitter layout embeds as a filter/assert must be
+// SINGLE-param. This integrity pin catches a future fixture that sneaks a
+// multi-param oracle into a satisfies/invariant-preserving descriptor.
+
+describe("emitters-pbt fixture integrity — single-param-only oracles (Center B1)", () => {
+	it("every satisfies/invariant-preserving oracle in the pinned plan has exactly ONE callback param — rejects blocks are exempt (they never embed filters)", () => {
+		for (const descriptor of pbtPlan().descriptors) {
+			if (descriptor.outcome === "rejects") {
+				continue;
+			}
+			for (const clause of descriptor.clauses) {
+				const arrow = clause.code.indexOf(") => ");
+				expect(arrow).toBeGreaterThan(-1);
+				const head = clause.code.slice(1, arrow);
+				const params =
+					head.trim() === ""
+						? []
+						: head.split(", ").map((param) => param.trim());
+				expect(
+					params.length,
+					`oracle ${clause.clauseId} must be single-param (multi-param oracles are PROPERTY_UNPLANNABLE): ${clause.code}`,
+				).toBe(1);
+			}
+		}
 	});
 });

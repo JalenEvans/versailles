@@ -613,10 +613,33 @@ reference.
 - **Expected-rejection sweep replacement** — when `propertyBased.enabled` is true, the §9.2
   expected-rejection bounded sweep (`EXPECTED_REJECTION_SWEEP_MAX`) is **replaced** by the
   expected-rejection property; the sweep remains the non-PBT fallback when disabled.
-- **Unplannable warnings** — a clause that cannot be turned into a filterable arbitrary
-  surfaces a non-silent non-blocking warning (same tier as `PREDICATE_UNPLANNABLE` — exit 0,
-  warning in `CliResult.warnings`) — never a silent zero — and its coverage gap stays
-  visible in `coverage.json` (§9.3).
+- **Plannability gate** — a property-strategy clause (the strategy table above) is planned
+  only when all three gates pass:
+  - *Param representability* — every operation param maps to an ArbitrarySpec kind (number
+    bounds from the constraints, string, boolean, enum members, list/optional inner kind). A
+    param with no kind — e.g. a component-typed param, for which no ArbitrarySpec exists —
+    means the clause's valid region cannot be turned into filterable arbitraries.
+  - *Oracle renderability* — the clause must codegen to an inline predicate
+    (`renderClausePredicate`): unregistered predicate names, unsafe identifiers, the `[]`
+    wildcard path segment, `in` with a non-literal right operand, unsupported literal types,
+    and preState-name collisions are all unrenderable.
+  - *Oracle arity* (the B1 fix) — every guard oracle used to filter a
+    satisfies/invariant-preserving block must be **single-param** (exactly one callback
+    parameter). A multi-param oracle — bothSideFieldRef postconditions such as
+    `status == newStatus`, or coupled compound preconditions over several params such as
+    `a >= 0 and b >= 0 and a + b <= 100` — cannot be applied via fast-check's `.filter()`
+    to per-param arbitraries: the 2nd+ callback params arrive `undefined`, every candidate
+    is filtered out, and the property never terminates. Multi-param oracles are therefore
+    **unplannable**, never joint-filter properties.
+  When any gate fails, the clause surfaces **`PROPERTY_UNPLANNABLE`** — a non-silent,
+  non-blocking warning (same tier as `PREDICATE_UNPLANNABLE`: exit 0, warning in
+  `CliResult.warnings`) — never a silent zero. The descriptor is skipped, the clause id
+  stays in the suite's clause stream so `coverage.json` maps it to a visible zero-coverage
+  gap (§9.3), and the strategy record still reports the selector's choice (`property`) —
+  the warning sits on top of a recorded strategy, never a hidden gap. Single-param
+  compounds (e.g. `amount >= 10 and amount <= 100`) remain planned, runnable properties.
+  This is the plan's filter-sparsity mitigation: honest signaling over broken/hanging
+  properties.
 - **Emitter rollout** — behind the ADR-0009 seam: vitest + fast-check first; pytest +
   hypothesis and xUnit + FsCheck follow. The consuming project adds the PBT library as a
   dev dependency — the tool ships the codegen, not the library.
@@ -761,6 +784,7 @@ layout above.
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-08-29 | general-manager | §9.6 plannability gate corrected (B1 fix, feat/seeded-pbt-emission): the gate is now three checks — param representability (every operation param maps to an ArbitrarySpec kind), oracle renderability (the clause codegens to an inline predicate), and the NEW oracle arity gate (a guard oracle used to filter a satisfies/invariant-preserving block must be single-param); multi-param oracles (bothSideFieldRef postconditions like `status == newStatus`, coupled compound preconditions like `a >= 0 and b >= 0 and a + b <= 100`) are **unplannable** — fast-check's `.filter()` receives `undefined` for the 2nd+ params, all candidates are filtered, and the property hangs — so the clause surfaces `PROPERTY_UNPLANNABLE` (non-silent, exit 0, `CliResult.warnings`), the descriptor is skipped, the clause id stays a visible zero-coverage gap in `coverage.json`, and the strategy record still reports the selector's `property` choice; single-param compounds (e.g. `amount >= 10 and amount <= 100`) remain planned, runnable properties — the plan's filter-sparsity mitigation, honest signaling over broken/hanging properties |
 | 2026-08-28 | general-manager | §3.1 config example gained the `propertyBased { enabled, numRuns, seed? }` block; new §9.6 Seeded PBT emission (ADR-0017): opt-in config, seed derivation (32-bit stable hash of block clause IDs + grammar version, explicit override), per-param arbitraries, clause-codegen'd oracles, strategy selection table, expected-rejection sweep replacement, unplannable warnings, emitter rollout (vitest/fast-check first) |
 | 2026-08-21 | general-manager | §9/§12 now describe both `generate` entry points — contract-first (greenfield, contracts-only) and extract-first (brownfield, manifests required) — per ADR-0011 Neutral consequence |
 | 2026-08-20 | general-manager | Corrected the overstated postcondition-satisfaction guarantee in §9.1 (Center review, PR fix/generator-postcondition-violation): satisfaction cases assert only the simple field-compare postconditions (`field op expr`) — predicate-call, both-side-fieldRef, and uncomputable clauses contribute no assertion (conservative skip; the case is still emitted and traced) — and void-returning instance operations assert instance state, not "the result"; the §9.4 canonical instance snippet now includes the captured pre-state seed line (`instance.<field> = <captured>;`) the emitter writes before the call |

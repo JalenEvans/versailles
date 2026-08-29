@@ -112,10 +112,17 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 			errors: [],
 			// Suite-level planning warnings (VERSAILLES-22 F3) ride the same
 			// non-blocking tier as loader/extractor warnings (ADR-0004): a
-			// PREDICATE_UNPLANNABLE warning surfaces here with exit 0 — the
-			// coverage gap is visible, never silent. LoaderWarning is
-			// structurally compatible with CliError ({ code, field, detail }).
-			warnings: [...contextWarnings(context), ...(suite.warnings ?? [])],
+			// PREDICATE_UNPLANNABLE / PROPERTY_UNPLANNABLE warning surfaces
+			// here with exit 0 — the coverage gap is visible, never silent.
+			// LoaderWarning is structurally compatible with CliError
+			// ({ code, field, detail }). B2: the property-plan warnings (the
+			// multi-param-oracle gate, B1) merge alongside suite.warnings so a
+			// skipped property block is never a silent zero either.
+			warnings: [
+				...contextWarnings(context),
+				...(suite.warnings ?? []),
+				...(propertyPlan.warnings ?? []),
+			],
 			exitCode: 0,
 			output: {
 				files: [...files.map((file) => file.path), coveragePath],

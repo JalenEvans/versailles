@@ -1050,6 +1050,81 @@ describe("runCli generate — non-silent UNPLANNABLE_OPERATION warnings for stag
 	});
 });
 
+describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for multi-param oracle clauses (Center B1/B2)", () => {
+	it("a multi-param oracle clause + propertyBased enabled surfaces PROPERTY_UNPLANNABLE in warnings — never a silent zero, never an emitted filter, exit 0", async () => {
+		const cwd = await freshWorkspace("g-property-unplannable");
+		await writeWorkspaceFile(cwd, "config.json", {
+			...SEEDED_CONFIG,
+			propertyBased: { enabled: true, numRuns: 100 },
+		});
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			version: "1.0",
+			contracts: {
+				OrderService: {
+					invariants: [],
+					operations: {
+						placeOrder: {
+							id: "OrderService.placeOrder",
+							// The compound references BOTH params — its codegen'd
+							// oracle `(a, b) => ...` is a 2-param oracle, which
+							// cannot be turned into per-param filterable
+							// arbitraries (fast-check's filter passes ONE value).
+							params: [
+								{ name: "a", type: "number" },
+								{ name: "b", type: "number" },
+							],
+							preconditions: [
+								{
+									id: "OrderService.placeOrder.pre0",
+									expr: "a >= 0 and b >= 0 and a + b <= 100",
+								},
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "placeorder-hash",
+						},
+					},
+				},
+			},
+		});
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			version: "1.0",
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order",
+					fields: {},
+				},
+			},
+		});
+
+		const result = await runCli(["generate"], { cwd });
+
+		// Generation still succeeds (exit 0) — the warning tier is
+		// non-blocking, exactly like PREDICATE_UNPLANNABLE (ADR-0004). B2:
+		// the property-plan warnings ride the SAME CliResult.warnings channel
+		// as suite.warnings — a skipped property block is never a silent zero.
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+		expect(result.warnings).toContainEqual(
+			expect.objectContaining({
+				code: "PROPERTY_UNPLANNABLE",
+				field: "OrderService.placeOrder.pre0",
+			}),
+		);
+
+		// The generated surface contains NO fast-check / fc.property for the
+		// unplannable clause — never a broken multi-param `.filter((a, b) => ...)`
+		// layout (the B1 bug shape).
+		const content = await readFile(
+			join(cwd, ".versailles", "generated", "OrderService.test.ts"),
+			"utf8",
+		);
+		expect(content).not.toContain("fast-check");
+		expect(content).not.toContain("fc.property");
+	});
+});
+
 // ── Machine-readable determinism (ADR-0002) ────────────────────────────────
 
 describe("runCli — machine-readable determinism (ADR-0002, build-spec §10)", () => {
