@@ -16,6 +16,7 @@
  * Emitters ignore the field entirely.
  */
 import type { LoaderWarning } from "../../../core/src/loader/workspace.js";
+import type { StrategyMap } from "./strategy.js";
 
 /** §9.1–§9.2 case kinds. */
 export type CaseKind =
@@ -125,6 +126,34 @@ export type EmitOptions = {
 		string,
 		Record<string, { static: boolean; params: string[]; returnType?: string }>
 	>;
+	/**
+	 * The property-block plan (ADR-0017, build-spec §9.6) computed by
+	 * planPropertyBlocks(suite, context) in the generate pipeline. Absent or
+	 * empty (config.propertyBased.enabled false) ⇒ the emitter renders nothing
+	 * new — byte-identical to v1 output. Only the vitest emitter reads it;
+	 * xunit/pytest ignore it (vitest + fast-check first, ADR-0017).
+	 */
+	propertyPlan?: PropertyPlan;
+	/**
+	 * config.propertyBased.numRuns threaded into every `fc.assert(prop, {
+	 * seed, numRuns })` call. PropertyPlan does not carry it (Phase 4 pinned
+	 * the plan shape), so it flows like rejection idiom / methods / modulePaths.
+	 * Default 100 when absent (build-spec §9.6).
+	 */
+	propertyNumRuns?: number;
+	/**
+	 * The predicate import table (predicate name → module import specifier)
+	 * threaded through the emitter seam exactly like modulePaths / methods
+	 * (ADR-0017 GAP 2, build-spec §9.6). Derived by the generate handler from
+	 * contracts.json's `predicates` map: a `<Module>.<function>` sourceRef
+	 * resolves to the module path used for that component (co-located
+	 * predicates → the component's own import path, respecting modulePaths
+	 * overrides), a path-like source resolves verbatim. The vitest emitter
+	 * imports every predicate a component's property clauses reference, after
+	 * the component import and before the fast-check import; xunit/pytest
+	 * ignore the field entirely.
+	 */
+	predicates?: Record<string, string>;
 };
 
 /** Maps every source clause ID → the test IDs tracing it (§9.3). */
@@ -132,3 +161,89 @@ export type CoverageManifest = { coverage: Record<string, string[]> };
 
 /** Frameworks the emitter seam can dispatch to (ADR-0008/0009). */
 export type EmitterFramework = "vitest" | "xunit" | "pytest";
+
+// ── PBT IR (ADR-0017) ────────────────────────────────────────────────────────
+//
+// The property-based test IR: everything a property block needs to plan and
+// emit, mirroring the PlannedCase conventions above (<component>.<operation>
+// ids, ADR-0007 rejectionIdiom passthrough, §9.3 traces). Like the rest of the
+// IR it is framework-agnostic — no framework strings, only the rejection idiom
+// NAME passthrough that emitters translate into real assertion syntax.
+
+/** The three planned property outcomes (ADR-0017). */
+export type PropertyOutcome = "satisfies" | "rejects" | "invariant-preserving";
+
+/**
+ * Per-param arbitrary derivation inputs. `kind` selects the fast-check
+ * arbitrary the emitter renders (number → fc.integer within `bounds` when
+ * present, enum → fc.constantFrom over `members`, ...), `typeRef` carries the
+ * raw source type reference for type-level mapping.
+ */
+export type ArbitrarySpec = {
+	/** Operation param name. */
+	param: string;
+	/** Raw typeRef from ContractOperation.params[].type. */
+	typeRef: string;
+	kind: "number" | "string" | "boolean" | "enum";
+	/** Numeric constraint bounds (planner-derived). */
+	bounds?: { min: number; max: number };
+	/** Enum members, when kind === "enum". */
+	members?: unknown[];
+	/**
+	 * Deterministic default for container-typed params (ADR-0017): `[]` for a
+	 * `list<X>` param, the inner type's default for an `optional<X>` param.
+	 * The emitter renders a constant/default arbitrary for these.
+	 */
+	default?: unknown;
+};
+
+/** A codegen'd clause predicate — the oracle — paired with its source clause id. */
+export type PropertyClause = {
+	/** Source clause id — the coverage trace key (§9.3). */
+	clauseId: string;
+	/** Codegen'd predicate text (the oracle). */
+	code: string;
+};
+
+/**
+ * A planned property block. `params` carries the per-param arbitrary
+ * derivation inputs, `clauses` the codegen'd clause predicates (the oracle),
+ * `outcome` the expected result, `rejectionIdiom` the ADR-0007 passthrough on
+ * rejects, and `traces` the clause ids for coverage mapping (§9.3).
+ */
+export type PropertyDescriptor = {
+	/** Unique id, "<component>.<operation>.property-<kind>-<n>". */
+	id: string;
+	component: string;
+	operation: string;
+	params: ArbitrarySpec[];
+	clauses: PropertyClause[];
+	outcome: PropertyOutcome;
+	/** ADR-0007 passthrough on rejects; read from config, default "throws". */
+	rejectionIdiom?: string;
+	/** Clause ids for coverage mapping (§9.3). */
+	traces: string[];
+	/**
+	 * The reproducible fast-check seed literal the emitter passes to
+	 * `fc.assert(prop, { seed, numRuns })` (ADR-0017): the explicit
+	 * config.propertyBased.seed override, or the seed derived per-block from
+	 * the descriptor's own covered clause ids + the grammar version
+	 * (derivePropertySeed). Always a signed int32 (fast-check's `seed | 0`
+	 * round-trip).
+	 */
+	seed: number;
+};
+
+/**
+ * The property-block planning output (ADR-0017 build-spec §9.6): the planned
+ * property descriptors (additive to the concrete cases — never planned when
+ * config.propertyBased.enabled is false), the per-source-clause strategy
+ * record (a total coverage map over suite.clauseIds), and the non-silent
+ * unplannable-clause warnings (the same { code, field, detail } LoaderWarning
+ * tier as PREDICATE_UNPLANNABLE, ADR-0004 — non-blocking, exit 0).
+ */
+export type PropertyPlan = {
+	descriptors: PropertyDescriptor[];
+	strategies: StrategyMap;
+	warnings: LoaderWarning[];
+};

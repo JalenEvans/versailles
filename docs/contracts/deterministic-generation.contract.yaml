@@ -18,15 +18,24 @@ owns:
   - "Emitter call-shape awareness: shape-aware invocation (instance → new <Component>().<op>(...), static → <Component>.<op>(...), void-return acceptance without return assertions, and accept/invariant assertions on void-returning operations bound to the component INSTANCE — never the void return value) driven by manifest method metadata (build-spec §9.4, VERSAILLES-26); a STATIC void operation with assertions renders the bare call without the instance.<field> assertion, since the static call never touches a constructed instance (VERSAILLES-26 follow-up)"
   - "Resolvable emitter module paths: import specifiers derived from the project-root-relative manifest sourcePath (POSIX separators) computed relative to the generated file's directory, so the emitted import resolves to the real source file; deterministic fallback when sourcePath is absent (build-spec §9.4, VERSAILLES-24)"
   - "Non-silent planning warnings for unrenderable operations: a planned operation with no matching method metadata and no resolvable source method surfaces a non-blocking UNPLANNABLE_OPERATION warning (same tier as PREDICATE_UNPLANNABLE — CliResult.warnings, exit 0) and is never emitted as an unrunnable static call (build-spec §9.1, VERSAILLES-25); the guard fires whenever the component's entry carries a methods key — empty or not — missing the planned op, and only an entry lacking the methods key entirely (a preserved legacy entry the extractor never touched) keeps the legacy default (VERSAILLES-25 follow-up)"
+  - "Seeded PBT emission (ADR-0017): opt-in property-block planning and emission (vitest + fast-check first behind the ADR-0009 seam) — per-param arbitraries derived from typeRefs + numeric constraint bounds, contract clauses codegen'd into the test as the oracle, seed literals derived from the context (a 32-bit stable hash of the block's clause IDs + grammar version) or the explicit config.propertyBased.seed override, additive to the concrete cases; the v1 default output is byte-identical when disabled"
 
 purpose: |
   deterministic-generation is the core value proposition of Versailles: a pure, deterministic
   compiler from approved contracts to test files. Given the same validated context it produces a
-  byte-identical test suite every run — no randomness, no timestamps, no LLM (ADR-0002,
-  ADR-0010). It plans a framework-agnostic test-case IR covering boundary values, equivalence
+  byte-identical test suite every run — no randomness at generation time, no timestamps, no LLM
+  (ADR-0002, re-scoped to generation-time by ADR-0017; ADR-0010). It plans a framework-agnostic
+  test-case IR covering boundary values, equivalence
   partitions, precondition-violation cases, postcondition-satisfaction cases, per-component
   invariant tests, and expected-rejection cases for the postcondition/invariant interaction bug
-  class. Predicate-call preconditions (e.g. isPositive(amount)) are planned too: at least one
+  class. Seeded property-based test (PBT) emission is an opt-in, additive capability (ADR-0017):
+  when config.propertyBased.enabled is true the generator additionally plans property blocks
+  (vitest + fast-check first behind the ADR-0009 seam) whose per-param arbitraries derive from
+  typeRefs and numeric constraint bounds, whose contract clauses are codegen'd into the test as
+  the oracle, and whose runs are pinned by a seed literal derived from the context (a 32-bit
+  stable hash of the block's clause IDs + grammar version) or an explicit override — generation
+  stays a pure function and regeneration stays byte-identical even though the emitted test
+  explores many inputs at run time. Predicate-call preconditions (e.g. isPositive(amount)) are planned too: at least one
   deterministic violation case per predicate call, or an explicit non-silent warning — never a
   silent zero — and valid-input synthesis is predicate-aware so a registered predicate guard
   never receives a value it rejects. Emitters render shape-aware calls from manifest method
@@ -39,7 +48,7 @@ purpose: |
 
 invariants:
   - "Generation runs only against a context where isValid is true; invalid contexts never produce test files."
-  - "The generator is a pure function of the context: same context in, byte-identical output out — no randomness, no timestamps, no LLM (ADR-0002)."
+  - "The generator is a pure function of the context at generation time: same context in, byte-identical output out — no randomness in the generation pipeline, no timestamps, no LLM (ADR-0002, re-scoped to generation-time by ADR-0017); run-time randomness in emitted PBT blocks is seed-pinned (ADR-0017)."
   - "Every generated test carries a traceability comment; generated/coverage.json maps every contract clause ID to its generated test IDs, leaving zero-coverage clauses detectable."
   - "The tool never invokes an LLM at generation time or anywhere in the tool (ADR-0010)."
   - "No framework-specific rendering logic lives in the core — all rendering is behind the emitter plugin seam (ADR-0008)."
@@ -49,6 +58,8 @@ invariants:
   - "Accept/invariant cases on void-returning INSTANCE operations assert component instance state — const instance = new <Component>(); instance.<field> = <captured>; instance.<op>(...); expect(instance.<field>)... — never the void return value; captured non-param inputs are seeded onto the bound instance before the call because assertion literals derive from the planner's captured pre-state, which a fresh instance does not carry (build-spec §9.4, VERSAILLES-26). A STATIC void operation with assertions renders the bare call with no instance.<field> assertion — the static call never touches a constructed instance, so asserting on one would be misleading (VERSAILLES-26 follow-up)."
   - "A planned operation with no matching method metadata and no resolvable source method surfaces a non-silent UNPLANNABLE_OPERATION warning in the suite warnings (same non-blocking tier as PREDICATE_UNPLANNABLE — CliResult.warnings, exit 0) and never emits an unrunnable static options-object call for it (build-spec §9.1, VERSAILLES-25). The guard fires whenever the component's entry carries a methods key — empty or not — missing the planned op: an empty methods map ({} on a refreshed entry) still triggers the warning for every planned op, because it is the first-class 'we know this component has zero methods' signal; only an entry lacking the methods key entirely (preserved legacy, extractor never touched) keeps the legacy default (VERSAILLES-25 follow-up)."
   - "Emitted module import specifiers derived from a manifest sourcePath resolve to the real source file from the generated file's directory — resolvability is required, not merely a matching extension or suffix (build-spec §9.4, VERSAILLES-24)."
+  - "PBT blocks are emitted only when config.propertyBased.enabled is true; with enabled false (or absent) the emitted suite is byte-identical to the v1 concrete-case output — no property blocks, no new imports (ADR-0017)."
+  - "Every emitted property block carries a seed literal derived deterministically from the context (a 32-bit stable hash of the block's clause IDs + grammar version) or the explicit config.propertyBased.seed override, so generation stays a pure function and the emitted test is reproducible run-to-run (ADR-0017)."
 
 operations:
   plan_cases:
@@ -102,6 +113,23 @@ operations:
         output: "generated/ populated with per-component/operation test files plus coverage.json"
       - input: "generate(contextIsValidFalse)"
         output: "rejected; no test files written; structured errors surfaced"
+  plan_property_blocks:
+    requires:
+      - "context is a loaded VersaillesContext with isValid true"
+      - "config.propertyBased.enabled is true — property blocks are never planned when disabled"
+    ensures:
+      - "Property blocks are planned per case kind (postcondition-satisfaction, invariant-preservation, precondition-violation, expected-rejection), additive to the concrete cases"
+      - "Per-param arbitraries derive from manifest/param typeRefs and the planner's numeric constraint bounds; in/enum params map to member constants, strings to bounded strings"
+      - "Contract clauses are codegen'd into the generated test as the oracle — inline predicate functions (pure by grammar) with predicate calls resolving to the registered predicate functions"
+      - "Every planned block carries a seed literal — a 32-bit int derived from a stable hash of the block's clause IDs + grammar version, or the explicit config.propertyBased.seed override; numRuns comes from config (default 100)"
+      - "When enabled, the expected-rejection property replaces the §9.2 bounded sweep (EXPECTED_REJECTION_SWEEP_MAX); the sweep remains the non-PBT fallback when disabled"
+      - "A clause that cannot be turned into a filterable arbitrary surfaces a non-silent non-blocking warning (same tier as PREDICATE_UNPLANNABLE — CliResult.warnings, exit 0) — never a silent zero; the skipped clause's coverage gap stays visible in coverage.json"
+      - "Rejection properties assert the configured rejection idiom (default throws, ADR-0007)"
+    examples:
+      - input: "plan_property_blocks(context with propertyBased.enabled true, operation placeOrder with precondition 'x >= 0', numRuns 100)"
+        output: "a postcondition-satisfaction property block over integer arbitraries bounded by the numeric constraints, asserting the clause via the codegen'd oracle, pinned by a derived seed literal"
+      - input: "plan_property_blocks(context with an unplannable compound precondition clause)"
+        output: "a non-silent non-blocking warning in CliResult.warnings (exit 0); no property block for that clause and its coverage gap stays visible in coverage.json"
 
 must:
   - "Plan boundary cases for every numeric comparison in preconditions: at the boundary, boundary - 1, and boundary + 1 (build-spec §9.1)."
@@ -121,6 +149,12 @@ must:
   - "Render all output through the emitter plugin selected by config.testFramework — vitest (*.test.ts), xUnit (*.Tests.cs), or pytest (test_*.py), the full ADR-0009 matrix (ADR-0008, ADR-0009)."
   - "Regenerate the generated/ directory full-file and idempotently from contracts.json; never preserve hand-edited content (build-spec §9.4)."
   - "Block generation and write no test files when context.isValid is false, surfacing the structured errors (build-spec §9)."
+  - "Emit PBT blocks only when config.propertyBased.enabled is true — with enabled false (or absent) the emitted suite is byte-identical to the v1 concrete-case output: no property blocks, no new imports (ADR-0017)."
+  - "Pin every emitted property block's run with a seed literal — fc.assert(prop, { seed, numRuns }) — derived as a 32-bit int from a stable hash of the context (the block's clause IDs + grammar version) or the explicit config.propertyBased.seed override, so the emitted file stays byte-identical on regeneration and the test is reproducible run-to-run (ADR-0017)."
+  - "Plan property blocks per case kind (postcondition-satisfaction, invariant-preservation, precondition-violation, expected-rejection), additive to the concrete cases, with per-param arbitraries derived from typeRefs and numeric constraint bounds and the contract clauses codegen'd into the test as the oracle (ADR-0017)."
+  - "When propertyBased is enabled, replace the §9.2 expected-rejection bounded sweep with the expected-rejection property; the sweep remains the non-PBT fallback when disabled (ADR-0017)."
+  - "Assert rejection in property blocks with the configured rejection idiom (default throws, ADR-0007)."
+  - "Surface a non-silent non-blocking warning (same tier as PREDICATE_UNPLANNABLE — CliResult.warnings, exit 0) for a clause that cannot be turned into a filterable arbitrary — never a silent zero; the clause's coverage gap stays visible in coverage.json (ADR-0017)."
 
 must_not:
   - "Must not run generation against a context where isValid is false — invalid contracts block generation (build-spec §9)."
@@ -129,13 +163,16 @@ must_not:
   - "Must not place framework-specific rendering logic in the core — all rendering lives behind the emitter plugin seam (ADR-0008)."
   - "Must not treat hand-edited generated/ content as source or preserve it — the directory is fully tool-owned and full-file regenerated (build-spec §9.4)."
   - "Must not emit a coverage manifest that hides gaps — every clause maps to its generated test IDs, and zero-coverage clauses remain detectable (build-spec §9.3)."
-  - "Must not be nondeterministic — same context in, byte-identical suite out; no randomness, no timestamps, no LLM (ADR-0002)."
+  - "Must not be nondeterministic at generation time — same context in, byte-identical suite out; no randomness in the generation pipeline, no timestamps, no LLM (ADR-0002, re-scoped to generation-time by ADR-0017); run-time randomness in emitted PBT blocks must be seed-pinned (ADR-0017)."
   - "Must not emit zero tests for a predicate-call precondition silently — a genuinely unplannable predicate call surfaces an explicit non-silent warning; silent gaps are forbidden (build-spec §9.1)."
   - "Must not emit a 'valid' input that a registered predicate in the operation's preconditions would reject — predicate-aware synthesis must satisfy registered predicates (build-spec §9.1)."
   - "Must not render calls that mismatch the extracted method metadata — a static call on an instance method, an options-object argument list where positional params are declared, a return-value assertion on a void operation, or an instance.<field> assertion on a STATIC void operation (the static call never touches a constructed instance) (build-spec §9.4, VERSAILLES-26 follow-up)."
   - "Must not emit the legacy static options-object call (<Component>.<op>({ ...inputs })) for a planned operation that has no matching method metadata and no resolvable source method — that is dead, unrunnable code; it must surface a non-silent UNPLANNABLE_OPERATION warning instead. The guard fires whenever the component's entry carries a methods key — empty or not — missing the planned op; only preserved legacy entries lacking the methods key entirely may keep the legacy default (build-spec §9.1, VERSAILLES-25, VERSAILLES-25 follow-up)."
   - "Must not bind a result for a void-returning operation's accept/invariant case and assert result.<field> — assertions target the component instance (const instance = new <Component>(); instance.<field> = <captured>; instance.<op>(...); expect(instance.<field>)...), never the void return value; and must not assert instance.<field> on a STATIC void operation's accept case — the static call never touches a constructed instance, so the case renders the bare call without assertions (build-spec §9.4, VERSAILLES-26, VERSAILLES-26 follow-up)."
   - "Must not emit an import specifier that fails to resolve to the real source file from the generated file's directory — resolvability is required, not merely a matching extension or suffix (build-spec §9.4, VERSAILLES-24)."
+  - "Must not emit PBT blocks when config.propertyBased.enabled is false — the v1 default output stays byte-identical (no property blocks, no new imports) (ADR-0017)."
+  - "Must not emit a property block whose run is unpinned — every PBT block carries a seed literal derived from the context (or the explicit config override) so the emitted test is reproducible run-to-run and regeneration stays byte-identical (ADR-0017)."
+  - "Must not skip an unplannable PBT clause silently — a clause that cannot become a filterable arbitrary surfaces a non-silent non-blocking warning (same tier as PREDICATE_UNPLANNABLE, exit 0) and its coverage gap stays visible in coverage.json (ADR-0017)."
 
 can:
   - "May support additional config-validated rejection idiom values (for example error-return or Result-style) beyond the default throws, as long as emitters consume the configured value."
@@ -143,6 +180,8 @@ can:
   - "May consult registry example hints for satisfying/violating predicate argument values, keeping synthesis deterministic (build-spec §9.5 keeps SMT out of v1 scope)."
   - "May record case-planning metadata (test names, covered clause IDs) in coverage.json beyond the minimal mapping."
   - "May skip emitting an unrenderable operation's cases (VERSAILLES-25) while still mapping its clause IDs in coverage.json so the coverage gap remains detectable."
+  - "May accept an explicit config.propertyBased.seed override to pin exploration across contract edits (ADR-0017)."
+  - "May emit property blocks additively alongside the concrete cases — the concrete cases remain the audit spine for coverage.json traceability (ADR-0017)."
 
 limits:
   - "No SMT-backed precise input synthesis or witness generation (v2 stretch, build-spec §9.5) — predicate planning uses deterministic heuristics over registry paramTypes + example hints only."
@@ -150,6 +189,9 @@ limits:
   - "No emitter beyond the ADR-0009 matrix — the seam dispatches the complete set (vitest *.test.ts, xUnit *.Tests.cs, pytest test_*.py); additional frameworks are future work."
   - "No semantic validation of contracts (contract-language) and no manifest derivation (manifest-extraction) — both are consumed via the context only."
   - "No hand-editing of generated/ as a supported workflow (build-spec §9.4) and no LLM involvement of any kind inside the tool (ADR-0010)."
+  - "No SMT-backed witness synthesis — seeded PBT emission is stochastic exploration, never a soundness mechanism; SMT remains out of scope for the core (ADR-0014, ADR-0017)."
+  - "No execution of generated tests, including property blocks — generation writes files only."
+  - "PBT emission requires the consuming project to add the PBT library (fast-check first behind the vitest emitter) as a dev dependency — the tool ships the codegen, not the library (ADR-0017)."
 
 asserts:
   - "assert: two generate runs on the same context produce byte-identical output under generated/."
@@ -166,12 +208,17 @@ asserts:
   - "assert: a STATIC void operation's accept case with assertions (e.g. OrderService.reset() asserting a field) renders the bare static call with NO expect(instance.<field>) assertion — the static call never touches a constructed instance, so no misleading instance binding appears (VERSAILLES-26 follow-up)."
   - "assert: rejection assertions in generated tests use the configured rejection idiom from config.json (default throws), for both violation and expected-rejection cases."
   - "assert: every generated test file contains a traceability comment referencing at least one contract clause ID."
+  - "assert: two generate runs with config.propertyBased.enabled true produce byte-identical output under generated/, including the emitted seed literals."
+  - "assert: distinct property blocks in a suite carry distinct seed literals (derived per-block from the covered clause IDs + grammar version, or the explicit config override)."
+  - "assert: with config.propertyBased.enabled false (or absent), the emitted suite is byte-identical to the v1 concrete-case output — no property blocks, no new imports (backward-compat pin)."
+  - "assert: a clause that cannot be turned into a filterable arbitrary yields a non-silent non-blocking warning in CliResult.warnings (exit 0) — never a silent zero — and its coverage gap stays visible in coverage.json."
 
 ---
 ## Changelog
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-08-28 | general-manager | PBT emission delta (ADR-0017): determinism re-scoped to generation-time only (purpose/invariant/must_not); added propertyBased capability to owns/invariants/operations (new plan_property_blocks)/must/must_not/can/limits/asserts — opt-in seeded property-block emission, seed literals derived from the context, unplannable-clause non-silent warnings, enabled=false backward-compat pin |
 | 2026-08-11 | general-manager | Initial contract from docs/specs/deterministic-generation.md; build-spec §9; ADR-0002/0007/0008/0009/0010 |
 | 2026-08-16 | general-manager | Superseded the "vitest first / no xUnit-pytest in the first milestone" limits and owns/purpose/must wording — the full ADR-0009 emitter matrix (vitest, xUnit, pytest) is now shipped (PR feat/review-ecosystem) |
 | 2026-08-17 | general-manager | Extended for pipeline runnability (PR fix/generator-emitter-runnability): predicate-call preconditions get at least one violation case or an explicit non-silent warning (never silent zero), predicate-aware valid-input synthesis via registry paramTypes + example hints, and emitter call-shape awareness (instance vs static vs void) with sourcePath-derived module paths. Backs VERSAILLES-20/22/23 |

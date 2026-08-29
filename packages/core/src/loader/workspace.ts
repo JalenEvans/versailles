@@ -48,6 +48,11 @@ export type WorkspaceConfig = {
 	generatedDir: string;
 	staleness: { blockOnStale: boolean };
 	rejection?: { idiom: "throws" | "returns" };
+	propertyBased?: {
+		enabled: boolean;
+		numRuns: number;
+		seed?: number;
+	};
 };
 
 export type ContractClause = { id: string; expr: string };

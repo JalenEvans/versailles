@@ -114,6 +114,35 @@ Set `staleness.blockOnStale: false` in `.versailles/config.json` to warn instead
 fail (exit 0). Details: [staleness-check](docs/features/staleness-check.md),
 [build-spec §8](docs/build-spec.md#8-staleness--ci-lint).
 
+### Config: `propertyBased` (seeded PBT emission)
+
+`generate` emits deterministic, concrete cases by default. Opt into seeded
+property-based test (PBT) emission in `.versailles/config.json`:
+
+```json
+{
+  "propertyBased": {
+    "enabled": false,
+    "numRuns": 100
+  }
+}
+```
+
+- `enabled` (default `false`) — when `true`, the generator additionally emits
+  seed-pinned property blocks (vitest + fast-check) alongside the concrete
+  cases; the concrete cases remain the audit spine for `coverage.json`
+  traceability.
+- `numRuns` (default `100`) — property runs per emitted block.
+- `seed` (optional) — explicit 32-bit override; when absent, each block's seed
+  is derived deterministically from the context (clause IDs + grammar version),
+  so regeneration stays byte-identical and failures reproduce run-to-run.
+
+Requires `fast-check` as a dev dependency of the consuming project (the tool
+ships the codegen, not the library). Details:
+[deterministic-generation spec](docs/specs/deterministic-generation.md),
+[build-spec §9.6](docs/build-spec.md#96-seeded-pbt-emission-opt-in-adr-0017),
+[ADR-0017](docs/decisions/0017-property-based-test-emission-mit-core.md).
+
 ## Contributing / Install from source
 
 Requires [bun](https://bun.sh) (Node ≥ 20 and npm work too — `npm install` runs the

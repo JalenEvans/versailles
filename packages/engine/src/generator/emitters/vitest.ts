@@ -26,18 +26,27 @@
  * byte-identically.
  */
 import type {
+	ArbitrarySpec,
 	AssertionDescriptor,
 	EmitOptions,
 	EmittedFile,
 	OperationCaseGroup,
 	PlannedCase,
 	PlannedSuite,
+	PropertyDescriptor,
+	PropertyPlan,
 } from "../ir.js";
+import { sanitizeId } from "./shared.js";
 
 /** Tool-owned generated output directory (config default, build-spec §9.4). */
 const DEFAULT_GENERATED_DIR = ".versailles/generated";
 /** Default module import specifier relative to a generated file. */
 const DEFAULT_MODULE_PREFIX = "../../src/";
+/**
+ * Default run count for `fc.assert(prop, { seed, numRuns })` when
+ * config.propertyBased.numRuns is absent (build-spec §9.6, ADR-0017).
+ */
+const DEFAULT_PROPERTY_NUM_RUNS = 100;
 
 type ComponentGroup = {
 	operations: OperationCaseGroup[];
@@ -67,6 +76,9 @@ export function emitVitest(
 	const generatedDir = options?.generatedDir ?? DEFAULT_GENERATED_DIR;
 	const modulePaths = options?.modulePaths ?? {};
 	const methods = options?.methods;
+	const predicates = options?.predicates;
+	const propertyPlan = options?.propertyPlan;
+	const propertyNumRuns = options?.propertyNumRuns ?? DEFAULT_PROPERTY_NUM_RUNS;
 	const groups = groupByComponent(suite);
 	const files: EmittedFile[] = [];
 	for (const component of Object.keys(groups)) {
@@ -77,6 +89,9 @@ export function emitVitest(
 			suite.clauseIds,
 			modulePaths,
 			methods,
+			predicates,
+			propertyPlan,
+			propertyNumRuns,
 		);
 		files.push({ path: `${generatedDir}/${component}.test.ts`, content });
 	}
@@ -108,6 +123,9 @@ function renderComponentFile(
 	clauseIds: string[],
 	modulePaths: Record<string, string>,
 	methods: EmitOptions["methods"],
+	predicates: EmitOptions["predicates"],
+	propertyPlan?: PropertyPlan,
+	propertyNumRuns: number = DEFAULT_PROPERTY_NUM_RUNS,
 ): string {
 	const lines: string[] = [];
 	lines.push(
@@ -133,15 +151,63 @@ function renderComponentFile(
 			? override
 			: `${DEFAULT_MODULE_PREFIX}${component}.js`;
 	lines.push(`import { ${component} } from "${modulePath}";`);
+	// ADR-0017: the fast-check import lands immediately after the component
+	// import (and after the predicate imports — GAP 2), only when the component
+	// has at least one property descriptor. Absent/empty propertyPlan renders
+	// the v1 header byte-for-byte (the enabled=false backward-compat pin).
+	const componentDescriptors = (propertyPlan?.descriptors ?? []).filter(
+		(descriptor) => descriptor.component === component,
+	);
+	if (componentDescriptors.length > 0) {
+		// GAP 2 (build-spec §9.6): every predicate the component's property
+		// clauses reference is imported after the component import, before
+		// fast-check — the codegen'd oracle calls the predicate by its bare
+		// name, so the generated test needs the import to resolve it.
+		for (const name of referencedPredicates(componentDescriptors, predicates)) {
+			const specifier = predicates?.[name];
+			if (specifier !== undefined) {
+				lines.push(`import { ${name} } from "${specifier}";`);
+			}
+		}
+		lines.push('import fc from "fast-check";');
+	}
 	lines.push("");
 
 	for (const operation of group.operations) {
 		assertIdentifier(operation.operation, "operation name");
-		if (operation.cases.length > 0) {
+		const propertyDescriptors = componentDescriptors.filter(
+			(descriptor) => descriptor.operation === operation.operation,
+		);
+		// The guard set for a property block (GAP 3): every satisfies +
+		// invariant-preserving descriptor for the same (component, operation),
+		// in plan.descriptors order. Computed once per operation because every
+		// block in that operation shares the same sibling set.
+		const guardDescriptors = propertyDescriptors.filter(
+			(descriptor) =>
+				descriptor.outcome === "satisfies" ||
+				descriptor.outcome === "invariant-preserving",
+		);
+		// V-27 empty-group pin + ADR-0017: an operation with zero concrete
+		// cases but at least one property descriptor must still render its
+		// describe — the property blocks are the only content inside.
+		if (operation.cases.length > 0 || propertyDescriptors.length > 0) {
 			lines.push(`describe("${operation.operation}", () => {`);
 			for (const case_ of operation.cases) {
 				lines.push(
 					...renderCase(case_, component, operation.operation, methods),
+				);
+			}
+			// Property blocks render AFTER the operation's concrete cases, in
+			// plan.descriptors order (the planner already traverses operations
+			// in component order, so a per-operation filter preserves it).
+			for (const descriptor of propertyDescriptors) {
+				lines.push(
+					...renderPropertyBlock(
+						descriptor,
+						propertyNumRuns,
+						methods,
+						guardDescriptors,
+					),
 				);
 			}
 			lines.push("});");
@@ -279,6 +345,347 @@ function renderCase(
 	lines.push("\t});");
 	lines.push("");
 	return lines;
+}
+
+/**
+ * One guard oracle of a property block's guard set (GAP 3, build-spec §9.6):
+ * a codegen'd clause predicate that must hold on the inputs reaching the
+ * call. `oracleParams` are the arrow function's parameter list, parsed from
+ * the byte-pinned `(<params>) => <expr>` codegen output (split at the first
+ * `) => `, params on ", "). A param that is not a callback param of the
+ * current descriptor is a manifest FIELD (e.g. the invariant `(balance) =>
+ * balance >= 0`).
+ */
+type GuardOracle = {
+	/** sanitizeId(clauseId) — the const name in the emitted block. */
+	constName: string;
+	clauseId: string;
+	/** The codegen'd arrow function, embedded verbatim. */
+	code: string;
+	oracleParams: string[];
+};
+
+/**
+ * Parses the codegen'd clause predicate's parameter list from its byte-pinned
+ * `(<params>) => <expr>` form. codegen.ts output never mangles the head —
+ * split at the first `) => `, then the params on ", ".
+ */
+function oracleParamsOf(code: string): string[] {
+	const arrow = code.indexOf(") => ");
+	if (arrow === -1) {
+		return [];
+	}
+	const head = code.slice(1, arrow);
+	if (head.trim() === "") {
+		return [];
+	}
+	return head.split(", ").map((param) => param.trim());
+}
+
+/**
+ * Escapes regex metacharacters in a predicate name before it is embedded in
+ * the reference-check regex (Center W4): registry keys flow into
+ * `new RegExp(\`\\b${name}\\s*(\`)`, so a hostile or unusual name like
+ * "is.positive" or "a+b" would otherwise inject a character class /
+ * quantifier and produce a wrong or throwing match.
+ */
+function escapeRegExp(name: string): string {
+	return name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The predicate names a component's property clauses reference, ordered by
+ * first appearance across the component's descriptors in plan order (GAP 2).
+ * The codegen emits each predicate as a bare call `<name>(<args>)` — only a
+ * real call reference (name immediately followed by `(`) counts as a
+ * reference, never a substring in a longer identifier.
+ */
+function referencedPredicates(
+	componentDescriptors: PropertyDescriptor[],
+	predicates: EmitOptions["predicates"],
+): string[] {
+	if (predicates === undefined) {
+		return [];
+	}
+	const names = Object.keys(predicates);
+	const found: string[] = [];
+	for (const descriptor of componentDescriptors) {
+		for (const clause of descriptor.clauses) {
+			for (const name of names) {
+				if (found.includes(name)) {
+					continue;
+				}
+				if (new RegExp(`\\b${escapeRegExp(name)}\\s*\\(`).test(clause.code)) {
+					found.push(name);
+				}
+			}
+		}
+	}
+	return found;
+}
+
+/**
+ * Renders one seeded property block (ADR-0017, build-spec §9.6) — a §9.3
+ * tab-indented traceability comment plus an `it` whose body builds the
+ * per-param arbitraries, embeds the codegen'd clause oracles verbatim at the
+ * it-body level, runs the operation shape-aware, and asserts the outcome.
+ *
+ * Satisfies / invariant-preserving blocks (GAP 3):
+ *
+ * - The oracle consts are HOISTED to the it-body level (indent 2) so the SAME
+ *   codegen'd arrow function fills both the arbitrary `.filter(...)` and the
+ *   in-callback assertion — never a dead const, never duplicated code.
+ * - The FILTER oracles are the clause oracles of EVERY satisfies +
+ *   invariant-preserving descriptor for the same (component, operation), in
+ *   plan order — the "satisfy invariants + all other preconditions" rule.
+ *   Each callback param referenced by a guard oracle gets
+ *   `.filter(<first guard oracle referencing it>)` on its arbitrary. The
+ *   block EMBEDS exactly the guard oracles it uses (its filters + its own
+ *   asserted clause) — never a dead const.
+ * - The call is SHAPE-AWARE (GAP 1): instance → `new <Component>().<op>(
+ *   <positional>)`, static → `<Component>.<op>(<positional>)`, with the
+ *   descriptor's callback param names in declared order; the legacy
+ *   options-object static call is preserved when no methods metadata exists.
+ *   Satisfies/invariant blocks render the BARE call (no `const result =` —
+ *   void-safe; the clause IS the check).
+ * - The assertion `expect(<oracle>(<params>)).toBe(true)` passes each oracle
+ *   parameter the callback value when it is a callback param, else
+ *   `<instance>.<param>` (a manifest field) — the instance binding
+ *   (`const instance = new <Component>(); instance.<op>(...);`) is emitted
+ *   when any asserted oracle parameter is a field.
+ *
+ * Rejects blocks embed NO oracle consts (the clause is never embedded as dead
+ * code), NO filter; the block asserts the descriptor's configured rejection
+ * idiom (ADR-0007): "throws" → `expect(() => <call>).toThrow()`, "returns" →
+ * `expect(<call>).toBeNull()`.
+ *
+ * Pinned layout (tab-indented, space after commas):
+ *
+ * ```ts
+ * 	// traces: "OrderService.addItem.pre0"
+ * 	it("OrderService.addItem.property-satisfies-0", () => {
+ * 		const sku = fc.string();
+ * 		const price = fc.integer();
+ * 		const OrderService_addItem_pre0 = (sku) => sku !== "";
+ * 		const OrderService_addItem_pre1 = (price) => isPositive(price);
+ * 		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
+ * 			new OrderService().addItem(sku, price);
+ * 			expect(OrderService_addItem_pre0(sku)).toBe(true);
+ * 		});
+ * 		fc.assert(prop, { seed: 101, numRuns: 100 });
+ * 	});
+ * ```
+ */
+function renderPropertyBlock(
+	descriptor: PropertyDescriptor,
+	propertyNumRuns: number,
+	methods: EmitOptions["methods"],
+	guardDescriptors: PropertyDescriptor[],
+): string[] {
+	const lines: string[] = [];
+	lines.push(
+		`\t// traces: ${descriptor.traces.map((id) => JSON.stringify(id)).join(", ")}`,
+	);
+	lines.push(`\tit(${JSON.stringify(descriptor.id)}, () => {`);
+	for (const spec of descriptor.params) {
+		assertIdentifier(spec.param, "param name");
+		lines.push(`\t\tconst ${spec.param} = ${renderArbitrary(spec)};`);
+	}
+	const params = descriptor.params.map((spec) => spec.param);
+	const paramNames = new Set(params);
+
+	// Rejects — NO oracle consts (the clause is never embedded as dead code),
+	// NO filter; only the descriptor's configured rejection idiom asserts
+	// (ADR-0007).
+	if (descriptor.outcome === "rejects") {
+		const call = renderPropertyCall(descriptor, methods, false);
+		lines.push(
+			`\t\tconst prop = fc.property(${params.join(", ")}, (${params.join(", ")}) => {`,
+		);
+		const idiom = descriptor.rejectionIdiom ?? "throws";
+		switch (idiom) {
+			case "throws":
+				lines.push(`\t\t\texpect(() => ${call}).toThrow();`);
+				break;
+			case "returns":
+				lines.push(`\t\t\texpect(${call}).toBeNull();`);
+				break;
+			default:
+				throw new Error(
+					`Unknown rejection idiom "${idiom}" for property "${descriptor.id}"`,
+				);
+		}
+		lines.push("\t\t});");
+		lines.push(
+			`\t\tfc.assert(prop, { seed: ${String(descriptor.seed)}, numRuns: ${String(propertyNumRuns)} });`,
+		);
+		lines.push("\t});");
+		lines.push("");
+		return lines;
+	}
+
+	// Guard set (GAP 3): the clause oracle of EVERY satisfies +
+	// invariant-preserving descriptor for the same (component, operation), in
+	// plan order. Each callback param referenced by a guard oracle gets
+	// `.filter(<first guard oracle referencing it>)` on its arbitrary — so
+	// every input reaching the call satisfies ALL sibling oracles.
+	const guardOracles: GuardOracle[] = [];
+	for (const sibling of guardDescriptors) {
+		for (const clause of sibling.clauses) {
+			guardOracles.push({
+				constName: sanitizeId(clause.clauseId),
+				clauseId: clause.clauseId,
+				code: clause.code,
+				oracleParams: oracleParamsOf(clause.code),
+			});
+		}
+	}
+
+	const filters = new Map<string, string>();
+	for (const param of params) {
+		const first = guardOracles.find((oracle) =>
+			oracle.oracleParams.includes(param),
+		);
+		if (first !== undefined) {
+			// B1 belt-and-suspenders: a multi-param guard oracle can never be a
+			// valid `.filter(...)` — fast-check's filter passes exactly ONE
+			// value, so filtering with it would evaluate the predicate against
+			// undefined and silently discard the whole domain (a hanging
+			// property). The planner gate marks such descriptors
+			// PROPERTY_UNPLANNABLE before they reach the emitter, so reaching
+			// here is an internal invariant violation — refuse loudly rather
+			// than emit a broken property.
+			if (first.oracleParams.length > 1) {
+				throw new Error(
+					`Refusing to emit: guard oracle ${first.constName} (${first.clauseId}) takes ${first.oracleParams.length} callback params — fast-check's .filter() passes one value, so property "${descriptor.id}" cannot filter its arbitrary to a valid region`,
+				);
+			}
+			filters.set(param, first.constName);
+		}
+	}
+	const filterConsts = new Set(filters.values());
+	const ownClauseIds = new Set(
+		descriptor.clauses.map((clause) => clause.clauseId),
+	);
+
+	// The block EMBEDS exactly the guard oracles it uses — its filters + its
+	// own asserted clauses — in guard order, never a dead const.
+	const embedded = guardOracles.filter(
+		(oracle) =>
+			filterConsts.has(oracle.constName) || ownClauseIds.has(oracle.clauseId),
+	);
+	for (const oracle of embedded) {
+		lines.push(`\t\tconst ${oracle.constName} = ${oracle.code};`);
+	}
+
+	const arbitraryExprs = descriptor.params.map((spec) => {
+		const filter = filters.get(spec.param);
+		return filter === undefined
+			? spec.param
+			: `${spec.param}.filter(${filter})`;
+	});
+	lines.push(
+		`\t\tconst prop = fc.property(${arbitraryExprs.join(", ")}, (${params.join(", ")}) => {`,
+	);
+
+	// Oracle assertion (GAP 3): the block's own clauses. An oracle parameter
+	// that is not a callback param is a manifest FIELD — the block binds the
+	// component instance and asserts instance.<field> through the oracle.
+	const asserted = descriptor.clauses.map((clause) => ({
+		constName: sanitizeId(clause.clauseId),
+		oracleParams: oracleParamsOf(clause.code),
+	}));
+	const instanceBound = asserted.some((a) =>
+		a.oracleParams.some((p) => !paramNames.has(p)),
+	);
+
+	const call = renderPropertyCall(descriptor, methods, instanceBound);
+	if (instanceBound) {
+		lines.push(`\t\t\tconst instance = new ${descriptor.component}();`);
+	}
+	lines.push(`\t\t\t${call};`);
+
+	for (const a of asserted) {
+		const args = a.oracleParams
+			.map((p) => (paramNames.has(p) ? p : `instance.${p}`))
+			.join(", ");
+		lines.push(`\t\t\texpect(${a.constName}(${args})).toBe(true);`);
+	}
+	lines.push("\t\t});");
+	lines.push(
+		`\t\tfc.assert(prop, { seed: ${String(descriptor.seed)}, numRuns: ${String(propertyNumRuns)} });`,
+	);
+	lines.push("\t});");
+	lines.push("");
+	return lines;
+}
+
+/**
+ * The shape-aware property call (GAP 1) — reuses renderCall's callee
+ * computation (VERSAILLES-20 F1, build-spec §9.4): instance →
+ * `new <Component>().<op>(<positional>)`, static → `<Component>.<op>(
+ * <positional>)`, with the descriptor's callback param names in declared
+ * order. With NO methods metadata (legacy) the historical static
+ * options-object call `<Component>.<op>({ <params> })` is preserved
+ * byte-identically. When the block binds the component instance (a
+ * field-referencing oracle is asserted), the call runs on the bound instance
+ * — `instance.<op>(...)` (mirrors the concrete-case VERSAILLES-26 render).
+ */
+function renderPropertyCall(
+	descriptor: PropertyDescriptor,
+	methods: EmitOptions["methods"],
+	instanceBound: boolean,
+): string {
+	const component = descriptor.component;
+	const operation = descriptor.operation;
+	const meta = methods?.[component]?.[operation];
+	const params = descriptor.params.map((spec) => spec.param);
+	if (meta === undefined) {
+		const args = `{ ${params.join(", ")} }`;
+		return instanceBound
+			? `instance.${operation}(${args})`
+			: `${component}.${operation}(${args})`;
+	}
+	const args = `(${params.join(", ")})`;
+	if (instanceBound) {
+		return `instance.${operation}${args}`;
+	}
+	const callee = meta.static
+		? `${component}.${operation}`
+		: `new ${component}().${operation}`;
+	return `${callee}${args}`;
+}
+
+/**
+ * Renders one per-param arbitrary (ArbitrarySpec → fast-check call). The
+ * deterministic `default` (list<X> → `fc.constant([])`, optional<X> →
+ * `fc.constant(<inner default>)`) wins over the kind; otherwise kind selects
+ * the arbitrary family: number with bounds → `fc.integer({ min, max })`,
+ * number without → `fc.integer()`, enum → `fc.constantFrom(<members>)`
+ * (JSON-stringified, joined ", "), string → `fc.string()`, boolean →
+ * `fc.boolean()`.
+ */
+function renderArbitrary(spec: ArbitrarySpec): string {
+	if (spec.default !== undefined) {
+		return `fc.constant(${renderValue(spec.default)})`;
+	}
+	switch (spec.kind) {
+		case "number":
+			if (spec.bounds !== undefined) {
+				return `fc.integer({ min: ${spec.bounds.min}, max: ${spec.bounds.max} })`;
+			}
+			return "fc.integer()";
+		case "enum": {
+			const members = (spec.members ?? [])
+				.map((member) => JSON.stringify(member))
+				.join(", ");
+			return `fc.constantFrom(${members})`;
+		}
+		case "string":
+			return "fc.string()";
+		case "boolean":
+			return "fc.boolean()";
+	}
 }
 
 /**
