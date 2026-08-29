@@ -16,6 +16,7 @@
  * Emitters ignore the field entirely.
  */
 import type { LoaderWarning } from "../../../core/src/loader/workspace.js";
+import type { StrategyMap } from "./strategy.js";
 
 /** §9.1–§9.2 case kinds. */
 export type CaseKind =
@@ -160,6 +161,12 @@ export type ArbitrarySpec = {
 	bounds?: { min: number; max: number };
 	/** Enum members, when kind === "enum". */
 	members?: unknown[];
+	/**
+	 * Deterministic default for container-typed params (ADR-0017): `[]` for a
+	 * `list<X>` param, the inner type's default for an `optional<X>` param.
+	 * The emitter renders a constant/default arbitrary for these.
+	 */
+	default?: unknown;
 };
 
 /** A codegen'd clause predicate — the oracle — paired with its source clause id. */
@@ -188,4 +195,27 @@ export type PropertyDescriptor = {
 	rejectionIdiom?: string;
 	/** Clause ids for coverage mapping (§9.3). */
 	traces: string[];
+	/**
+	 * The reproducible fast-check seed literal the emitter passes to
+	 * `fc.assert(prop, { seed, numRuns })` (ADR-0017): the explicit
+	 * config.propertyBased.seed override, or the seed derived per-block from
+	 * the descriptor's own covered clause ids + the grammar version
+	 * (derivePropertySeed). Always a signed int32 (fast-check's `seed | 0`
+	 * round-trip).
+	 */
+	seed: number;
+};
+
+/**
+ * The property-block planning output (ADR-0017 build-spec §9.6): the planned
+ * property descriptors (additive to the concrete cases — never planned when
+ * config.propertyBased.enabled is false), the per-source-clause strategy
+ * record (a total coverage map over suite.clauseIds), and the non-silent
+ * unplannable-clause warnings (the same { code, field, detail } LoaderWarning
+ * tier as PREDICATE_UNPLANNABLE, ADR-0004 — non-blocking, exit 0).
+ */
+export type PropertyPlan = {
+	descriptors: PropertyDescriptor[];
+	strategies: StrategyMap;
+	warnings: LoaderWarning[];
 };

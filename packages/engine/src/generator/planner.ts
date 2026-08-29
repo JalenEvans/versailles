@@ -60,14 +60,26 @@ import type {
 	VersaillesContext,
 } from "../../../core/src/loader/workspace.js";
 import type { PredicateEntry } from "../../../core/src/predicates/registry.js";
+import { renderClausePredicate } from "./codegen.js";
 import type {
+	ArbitrarySpec,
 	AssertionDescriptor,
 	CaseKind,
 	CoverageManifest,
 	OperationCaseGroup,
 	PlannedCase,
 	PlannedSuite,
+	PropertyClause,
+	PropertyDescriptor,
+	PropertyOutcome,
+	PropertyPlan,
 } from "./ir.js";
+import { derivePropertySeed } from "./seed.js";
+import type {
+	ClauseShape as StrategyClauseShape,
+	StrategyMap,
+} from "./strategy.js";
+import { selectStrategy } from "./strategy.js";
 
 type NumericOp = ">" | ">=" | "<" | "<=";
 
@@ -423,26 +435,37 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 					traces: invariantIds,
 				});
 
-				const rejection = planExpectedRejection(
-					operation,
-					preconditions,
-					postconditions,
-					invariants,
-					manifestFields,
-					context,
-				);
-				if (rejection !== null) {
-					invariantCases.push({
-						id: nextComponentId("expected-rejection", operationName),
-						kind: "expected-rejection",
-						description: `postconditions hold but invariant ${rejection.violatedInvariants.join(", ")} would be violated`,
-						inputs: rejection.inputs,
-						expects: { outcome: "reject", rejectionIdiom: idiom },
-						traces: [
-							...rejection.violatedInvariants,
-							...rejection.satisfiedPostconditions,
-						],
-					});
+				// §9.2 expected-rejection (ADR-0017): when
+				// config.propertyBased.enabled is true the seeded PBT planner
+				// emits the expected-rejection PROPERTY (planPropertyBlocks),
+				// so the §9.2 bounded sweep (EXPECTED_REJECTION_SWEEP_MAX) is
+				// REPLACED — no expected-rejection case enters
+				// suite.invariantCases. When disabled/absent the sweep remains
+				// the v1 fallback. This gating keeps the v1 default output
+				// byte-identical (backward-compat pin, ADR-0017).
+				const pbtEnabled = context.config?.propertyBased?.enabled === true;
+				if (!pbtEnabled) {
+					const rejection = planExpectedRejection(
+						operation,
+						preconditions,
+						postconditions,
+						invariants,
+						manifestFields,
+						context,
+					);
+					if (rejection !== null) {
+						invariantCases.push({
+							id: nextComponentId("expected-rejection", operationName),
+							kind: "expected-rejection",
+							description: `postconditions hold but invariant ${rejection.violatedInvariants.join(", ")} would be violated`,
+							inputs: rejection.inputs,
+							expects: { outcome: "reject", rejectionIdiom: idiom },
+							traces: [
+								...rejection.violatedInvariants,
+								...rejection.satisfiedPostconditions,
+							],
+						});
+					}
 				}
 			}
 
@@ -1756,4 +1779,657 @@ function fieldRefName(node: Node): string | null {
 
 function isNumericOp(op: string): op is NumericOp {
 	return op === ">" || op === ">=" || op === "<" || op === "<=";
+}
+
+// ── Seeded PBT emission — planPropertyBlocks (ADR-0017, build-spec §9.6) ─────
+//
+// The property-block planner: a pure function of the ALREADY-PLANNED concrete
+// suite (for the full source clause-id stream) plus the loaded context (for
+// param typeRefs, effects, enum members, parsed clause ASTs, the predicates
+// registry, and config.propertyBased). Same inputs → identical
+// descriptors/strategies/warnings (ADR-0002, re-scoped to generation-time by
+// ADR-0017).
+//
+// Per-clause strategy gating (selectStrategy, Chunk 4): "example" → NO
+// property block (the concrete §9.1/§9.2 cases fully cover it); "property"
+// and "property-with-falsifier" → an ACCEPT-side satisfies block is planned
+// (the deterministic example falsifier of a predicateCall precondition is
+// retained in the concrete suite). Effects-overlap invariants → an
+// invariant-preserving block. Expected-rejection (enabled) → a rejects block
+// tracing the §9.2 sweep's deterministic first-hit set (violated invariants +
+// satisfied postconditions) with the configured rejection idiom (ADR-0007).
+
+/** Per-clause planning metadata — which operation/component owns a clause. */
+type PropertyClauseMeta = {
+	component: string;
+	operationName: string | null;
+	operation: ContractOperation | null;
+	surface: "precondition" | "postcondition" | "invariant";
+};
+
+/** Per-param ArbitrarySpec derivation result; unplannable names the culprit. */
+type ArbitrarySpecResult = {
+	specs: ArbitrarySpec[];
+	unplannable: string | null;
+};
+
+/**
+ * Builds the per-clause metadata lookup with the same component → operation →
+ * clauses traversal planTestCases uses, so every source clause id in
+ * suite.clauseIds resolves to its surface and owning operation.
+ */
+function collectClauseMeta(
+	context: VersaillesContext,
+): Record<string, PropertyClauseMeta> {
+	const meta: Record<string, PropertyClauseMeta> = {};
+	for (const [componentName, component] of Object.entries(
+		context.contracts?.contracts ?? {},
+	)) {
+		for (const invariant of component.invariants ?? []) {
+			meta[invariant.id] = {
+				component: componentName,
+				operationName: null,
+				operation: null,
+				surface: "invariant",
+			};
+		}
+		for (const [operationName, operation] of Object.entries(
+			component.operations ?? {},
+		)) {
+			for (const pre of operation.preconditions ?? []) {
+				meta[pre.id] = {
+					component: componentName,
+					operationName,
+					operation,
+					surface: "precondition",
+				};
+			}
+			for (const post of operation.postconditions ?? []) {
+				meta[post.id] = {
+					component: componentName,
+					operationName,
+					operation,
+					surface: "postcondition",
+				};
+			}
+		}
+	}
+	return meta;
+}
+
+/**
+ * Resolves a clause's RESOLVED strategy shape (build-spec §9.6): a top-level
+ * compound wins over any numeric-bound sub-expression (compound precedence);
+ * predicateCall preconditions classify by AST type; bothSideFieldRef
+ * preconditions are the two-single-segment-fieldRef compare; postconditions
+ * split literal-computable (postconditionAssertions can derive a matcher) from
+ * uncomputable; invariants split effects-overlap (any operation in the
+ * component mutates a referenced field) from plain.
+ */
+function resolveClauseShape(
+	clauseId: string,
+	meta: Record<string, PropertyClauseMeta>,
+	context: VersaillesContext,
+): StrategyClauseShape {
+	const m = meta[clauseId];
+	const ast = context.parsedContracts[clauseId];
+	// Defensive: a validated context parses every clause in the source stream,
+	// so a missing meta/AST is unreachable. Resolve conservatively so the
+	// strategy record stays total over suite.clauseIds.
+	if (m === undefined || ast === undefined) {
+		return { surface: "precondition", kind: "other" };
+	}
+	if (m.surface === "invariant") {
+		const component = context.contracts?.contracts[m.component];
+		const overlapping = Object.values(component?.operations ?? {}).some(
+			(operation) => operationOverlapsInvariant(operation, ast),
+		);
+		return {
+			surface: "invariant",
+			kind: overlapping ? "effects-overlap" : "plain",
+		};
+	}
+	if (m.surface === "postcondition") {
+		const env =
+			m.operation === null
+				? undefined
+				: postconditionEnv(m.operation, m.component, context);
+		return {
+			surface: "postcondition",
+			kind:
+				env !== undefined && postconditionIsComputable(ast, env)
+					? "literal"
+					: "uncomputable",
+		};
+	}
+	// precondition
+	if (ast.type === "and" || ast.type === "or") {
+		return {
+			surface: "precondition",
+			kind: "compound",
+			hasNumericBound: compoundHasNumericBound(ast),
+		};
+	}
+	if (ast.type === "predicateCall") {
+		return { surface: "precondition", kind: "predicateCall" };
+	}
+	const shape = classifyClause(ast);
+	if (shape.kind === "numeric") {
+		return { surface: "precondition", kind: "numeric-bound" };
+	}
+	if (shape.kind === "in") {
+		return { surface: "precondition", kind: "in" };
+	}
+	if (ast.type === "compare") {
+		if (fieldRefName(ast.left) !== null && fieldRefName(ast.right) !== null) {
+			return { surface: "precondition", kind: "bothSideFieldRef" };
+		}
+	}
+	return { surface: "precondition", kind: "other" };
+}
+
+/** True when the operation's effects touch a field the invariant references. */
+function operationOverlapsInvariant(
+	operation: ContractOperation,
+	invariantAst: Node,
+): boolean {
+	const effectFields = new Set(
+		(operation.effects ?? []).map((effect) => effect.field),
+	);
+	const invariantFields = new Set<string>();
+	collectFieldRefs(invariantAst, invariantFields);
+	return [...effectFields].some((field) => invariantFields.has(field));
+}
+
+/**
+ * The postcondition evaluation environment postconditionAssertions would use
+ * for this operation (valid params + captured pre-state), used to decide
+ * literal-computability.
+ */
+function postconditionEnv(
+	operation: ContractOperation,
+	componentName: string,
+	context: VersaillesContext,
+): EvalEnv {
+	const preconditions = operation.preconditions ?? [];
+	const postconditions = operation.postconditions ?? [];
+	const invariants =
+		context.contracts?.contracts[componentName]?.invariants ?? [];
+	const manifestFields =
+		context.manifests?.manifests[componentName]?.fields ?? {};
+	const validParams = buildValidParams(operation, preconditions, context);
+	const preState = buildPreState(manifestFields, invariants, context, [
+		...postconditions,
+		...invariants,
+	]);
+	return { params: validParams, pre: preState, post: preState };
+}
+
+/**
+ * Mirrors postconditionAssertions' descriptor decision exactly: a
+ * `field op expr` / `expr op field` compare where exactly ONE side is a
+ * single-segment fieldRef and the other side evaluates to a defined value is
+ * literal-computable (the concrete case asserts a real matcher). Both-side
+ * fieldRef compares (e.g. `status == newStatus`) and unresolvable expressions
+ * are uncomputable → property.
+ */
+function postconditionIsComputable(ast: Node, env: EvalEnv): boolean {
+	if (ast.type !== "compare" || !SIMPLE_COMPARE_OPS.has(ast.op)) {
+		return false;
+	}
+	const leftVar = fieldRefName(ast.left);
+	const rightVar = fieldRefName(ast.right);
+	let expr: Node;
+	if (leftVar !== null && rightVar === null) {
+		expr = ast.right;
+	} else if (rightVar !== null && leftVar === null) {
+		expr = ast.left;
+	} else {
+		return false;
+	}
+	return evaluate(expr, env) !== undefined;
+}
+
+/** True when a compound AST contains a numeric comparison sub-expression. */
+function compoundHasNumericBound(node: Node): boolean {
+	if (node.type === "compare") {
+		return isNumericOp(node.op);
+	}
+	if (node.type === "and" || node.type === "or") {
+		return (
+			compoundHasNumericBound(node.left) || compoundHasNumericBound(node.right)
+		);
+	}
+	return false;
+}
+
+/**
+ * Compound-aware numeric constraint bounds over the operation's preconditions
+ * (build-spec §9.6): the existing numericConstraintBounds only sees TOP-LEVEL
+ * numeric clauses, so compound (`and`/`or`) preconditions need an extractor
+ * that recurses into their sub-compares. Bounds semantics mirror
+ * numericConstraintBounds exactly: `>=` → lower[b], `>` → lower[b+1], `<=` →
+ * upper[b], `<` → upper[b-1]. Only params with BOTH bounds resolved carry a
+ * bounds object (the ArbitrarySpec bounds shape requires min + max).
+ */
+function numericBoundsForOperation(
+	operation: ContractOperation,
+	context: VersaillesContext,
+): Record<string, { min: number; max: number }> {
+	const lower: Record<string, number> = {};
+	const upper: Record<string, number> = {};
+	for (const pre of operation.preconditions ?? []) {
+		const ast = context.parsedContracts[pre.id];
+		if (ast === undefined) {
+			continue;
+		}
+		collectNumericBounds(ast, lower, upper);
+	}
+	const out: Record<string, { min: number; max: number }> = {};
+	for (const param of operation.params ?? []) {
+		if (param.type.trim() !== "number") {
+			continue;
+		}
+		const lo = lower[param.name];
+		const hi = upper[param.name];
+		if (lo !== undefined && hi !== undefined) {
+			out[param.name] = { min: lo, max: hi };
+		}
+	}
+	return out;
+}
+
+/**
+ * Recurses an AST collecting per-variable numeric lower/upper bounds from
+ * every numeric comparison, including those nested inside `and`/`or` (the
+ * compound-aware extractor). `literal OP field` compares are normalized to
+ * `field invertedOP literal` before the bound is applied.
+ */
+function collectNumericBounds(
+	node: Node,
+	lower: Record<string, number>,
+	upper: Record<string, number>,
+): void {
+	if (node.type === "and" || node.type === "or") {
+		collectNumericBounds(node.left, lower, upper);
+		collectNumericBounds(node.right, lower, upper);
+		return;
+	}
+	if (node.type !== "compare" || !isNumericOp(node.op)) {
+		return;
+	}
+	const inverted: Record<NumericOp, NumericOp> = {
+		">": "<",
+		"<": ">",
+		">=": "<=",
+		"<=": ">=",
+	};
+	let left = node.left;
+	let right = node.right;
+	let op = node.op;
+	const leftVar = fieldRefName(left);
+	const rightVar = fieldRefName(right);
+	if (leftVar === null && rightVar !== null && isNumericOp(op)) {
+		left = right;
+		right = node.left;
+		op = inverted[op];
+	}
+	const variable = fieldRefName(left);
+	if (
+		variable === null ||
+		right.type !== "literal" ||
+		typeof right.value !== "number"
+	) {
+		return;
+	}
+	const b = right.value;
+	if (op === ">=") {
+		lower[variable] = Math.max(lower[variable] ?? Number.NEGATIVE_INFINITY, b);
+	} else if (op === ">") {
+		lower[variable] = Math.max(
+			lower[variable] ?? Number.NEGATIVE_INFINITY,
+			b + 1,
+		);
+	} else if (op === "<=") {
+		upper[variable] = Math.min(upper[variable] ?? Number.POSITIVE_INFINITY, b);
+	} else {
+		upper[variable] = Math.min(
+			upper[variable] ?? Number.POSITIVE_INFINITY,
+			b - 1,
+		);
+	}
+}
+
+/**
+ * Derives the per-param ArbitrarySpec list for an operation from its param
+ * typeRefs, enum members, and the compound-aware numeric bounds. list<X> →
+ * inner kind + default []; optional<X> → inner kind + the inner type's
+ * deterministic default. A component-typed (or otherwise unrepresentable) param
+ * has no ArbitrarySpec kind, so the whole operation's property blocks are
+ * unplannable (the clause's valid region cannot become filterable arbitraries).
+ */
+function buildArbitrarySpecs(
+	operation: ContractOperation,
+	bounds: Record<string, { min: number; max: number }>,
+): ArbitrarySpecResult {
+	const specs: ArbitrarySpec[] = [];
+	for (const param of operation.params ?? []) {
+		const spec = arbitrarySpecForType(
+			param.name,
+			param.type,
+			bounds[param.name],
+		);
+		if (spec === null) {
+			return {
+				specs: [],
+				unplannable: `"${param.name}" (type "${param.type}")`,
+			};
+		}
+		specs.push(spec);
+	}
+	return { specs, unplannable: null };
+}
+
+/**
+ * Maps one param typeRef to its ArbitrarySpec (kind = the fast-check arbitrary
+ * family the emitter renders). Returns null for typeRefs with no kind
+ * (component-typed and other unrepresentable types).
+ */
+function arbitrarySpecForType(
+	param: string,
+	typeRef: string,
+	bounds: { min: number; max: number } | undefined,
+): ArbitrarySpec | null {
+	const trimmed = typeRef.trim();
+	if (trimmed === "number") {
+		return {
+			param,
+			typeRef,
+			kind: "number",
+			...(bounds === undefined ? {} : { bounds }),
+		};
+	}
+	if (trimmed === "string") {
+		return { param, typeRef, kind: "string" };
+	}
+	if (trimmed === "boolean") {
+		return { param, typeRef, kind: "boolean" };
+	}
+	if (/^enum<(.+)>$/.test(trimmed)) {
+		return {
+			param,
+			typeRef,
+			kind: "enum",
+			members: enumMembers(trimmed) ?? [],
+		};
+	}
+	if (trimmed.startsWith("list<")) {
+		const inner = trimmed.slice("list<".length, -1);
+		const innerSpec = arbitrarySpecForType(param, inner, undefined);
+		if (innerSpec === null) {
+			return null;
+		}
+		return { ...innerSpec, typeRef, default: [] };
+	}
+	if (trimmed.startsWith("optional<")) {
+		const inner = trimmed.slice("optional<".length, -1);
+		const innerSpec = arbitrarySpecForType(param, inner, undefined);
+		if (innerSpec === null) {
+			return null;
+		}
+		return { ...innerSpec, typeRef, default: defaultValue(inner) };
+	}
+	return null;
+}
+
+/**
+ * The codegen predicates import table (predicate name → import specifier),
+ * derived from the loaded predicates registry. renderClausePredicate only uses
+ * the map to VALIDATE resolvability — the emitted call is the bare name — so
+ * the registered sourceRef (falling back to the conventional specifier) is the
+ * registry-derived value.
+ */
+function predicatesImportMap(
+	context: VersaillesContext,
+): Record<string, string> {
+	const map: Record<string, string> = {};
+	for (const [name, entry] of Object.entries(
+		context.predicates?.predicates ?? {},
+	)) {
+		map[name] = entry.sourceRef || "./predicates.js";
+	}
+	return map;
+}
+
+/**
+ * Plans the property blocks for a validated context + its already-planned
+ * concrete suite (ADR-0017, build-spec §9.6). Throws when context.isValid is
+ * false (mirrors planTestCases — generation only runs against approved
+ * contracts). Property blocks are NEVER planned when
+ * config.propertyBased.enabled is false or absent (the v1 default output stays
+ * byte-identical); the per-clause strategy record is still total over
+ * suite.clauseIds with pbtEnabled: false semantics.
+ */
+export function planPropertyBlocks(
+	suite: PlannedSuite,
+	context: VersaillesContext,
+): PropertyPlan {
+	if (!context.isValid) {
+		throw new Error(
+			"planPropertyBlocks requires a validated context (isValid: true) — generation is blocked for invalid contracts",
+		);
+	}
+	if (context.contracts === null) {
+		throw new Error(
+			"planPropertyBlocks requires a contracts store in the context",
+		);
+	}
+
+	const pbt = context.config?.propertyBased;
+	const pbtEnabled = pbt?.enabled === true;
+	const idiom = context.config?.rejection?.idiom ?? "throws";
+	const grammarVersion = context.config?.grammarVersion ?? "1.0";
+	const seedOverride = pbt?.seed;
+
+	const descriptors: PropertyDescriptor[] = [];
+	const warnings: LoaderWarning[] = [];
+	const strategies: StrategyMap = {};
+
+	const clauseMeta = collectClauseMeta(context);
+	const predicates = predicatesImportMap(context);
+
+	// Strategy record: EVERY source clause id → PbtStrategy (the total
+	// coverage record). selectStrategy is a pure table lookup over the
+	// resolved shape; pbtEnabled threads the config gate.
+	for (const clauseId of suite.clauseIds) {
+		strategies[clauseId] = selectStrategy(
+			resolveClauseShape(clauseId, clauseMeta, context),
+			{ pbtEnabled },
+		);
+	}
+
+	// Enabled gate (ADR-0017 backward-compat pin).
+	if (!pbtEnabled) {
+		return { descriptors, strategies, warnings };
+	}
+
+	for (const [componentName, component] of Object.entries(
+		context.contracts.contracts,
+	)) {
+		const invariants = component.invariants ?? [];
+		for (const [operationName, operation] of Object.entries(
+			component.operations ?? {},
+		)) {
+			// Descriptor ids: "<component>.<operation>.property-<outcome>-<n>",
+			// n a per-(operation, outcome) counter from 0.
+			const counters: Partial<Record<PropertyOutcome, number>> = {};
+			const nextId = (outcome: PropertyOutcome): string => {
+				const current = counters[outcome] ?? 0;
+				counters[outcome] = current + 1;
+				return `${componentName}.${operationName}.property-${outcome}-${current}`;
+			};
+
+			const bounds = numericBoundsForOperation(operation, context);
+			const paramsResult = buildArbitrarySpecs(operation, bounds);
+
+			// Plans ONE descriptor for a property-strategy clause, or a
+			// non-silent PROPERTY_UNPLANNABLE warning (the PREDICATE_UNPLANNABLE
+			// tier) that skips it: unrepresentable operation params, or a
+			// renderClausePredicate throw for the clause (Center W5). Never
+			// silent, never a hard fail for renderer unrepresentability.
+			const planClauseDescriptor = (
+				clauseId: string,
+				ast: Node,
+				outcome: PropertyOutcome,
+			): void => {
+				if (paramsResult.unplannable !== null) {
+					warnings.push({
+						code: "PROPERTY_UNPLANNABLE",
+						field: clauseId,
+						detail: `Cannot plan a property block for ${clauseId}: operation ${componentName}.${operationName} has param ${paramsResult.unplannable} — no ArbitrarySpec kind exists for that type, so the clause's valid region cannot be turned into filterable arbitraries`,
+					});
+					return;
+				}
+				let code: string;
+				try {
+					code = renderClausePredicate(ast, { predicates });
+				} catch (error) {
+					warnings.push({
+						code: "PROPERTY_UNPLANNABLE",
+						field: clauseId,
+						detail: `Cannot render the property oracle for ${clauseId}: ${error instanceof Error ? error.message : String(error)}`,
+					});
+					return;
+				}
+				descriptors.push({
+					id: nextId(outcome),
+					component: componentName,
+					operation: operationName,
+					params: paramsResult.specs,
+					clauses: [{ clauseId, code }],
+					outcome,
+					traces: [clauseId],
+					// Seed wiring: the explicit override wins; otherwise the
+					// per-block derived seed over the block's OWN covered
+					// clause ids + grammar version.
+					seed: seedOverride ?? derivePropertySeed([clauseId], grammarVersion),
+				});
+			};
+
+			// Preconditions: "property" (compound / bothSideFieldRef / other)
+			// and "property-with-falsifier" (predicateCall) plan an ACCEPT-side
+			// satisfies block; the deterministic example falsifier stays in
+			// the concrete suite.
+			for (const pre of operation.preconditions ?? []) {
+				if (strategies[pre.id] === "example") {
+					continue;
+				}
+				const ast = context.parsedContracts[pre.id];
+				if (ast === undefined) {
+					continue;
+				}
+				planClauseDescriptor(pre.id, ast, "satisfies");
+			}
+
+			// Postconditions: literal-computable stay example; uncomputable
+			// become satisfies properties.
+			for (const post of operation.postconditions ?? []) {
+				if (strategies[post.id] === "example") {
+					continue;
+				}
+				const ast = context.parsedContracts[post.id];
+				if (ast === undefined) {
+					continue;
+				}
+				planClauseDescriptor(post.id, ast, "satisfies");
+			}
+
+			// Invariants this operation's effects overlap → invariant-
+			// preserving block, oracle = the codegen'd invariant.
+			for (const invariant of invariants) {
+				const ast = context.parsedContracts[invariant.id];
+				if (ast === undefined) {
+					continue;
+				}
+				if (!operationOverlapsInvariant(operation, ast)) {
+					continue;
+				}
+				planClauseDescriptor(invariant.id, ast, "invariant-preserving");
+			}
+
+			// Expected-rejection (enabled): the §9.2 bounded sweep's
+			// deterministic first-hit set (violated invariants + satisfied
+			// postconditions) becomes a rejects property whose clauses are the
+			// codegen'd oracles of the traced conditions, with the configured
+			// rejection idiom (ADR-0007).
+			const rejection = planExpectedRejection(
+				operation,
+				operation.preconditions ?? [],
+				operation.postconditions ?? [],
+				invariants,
+				context.manifests?.manifests[componentName]?.fields ?? {},
+				context,
+			);
+			if (rejection === null) {
+				continue;
+			}
+			const traces = [
+				...rejection.violatedInvariants,
+				...rejection.satisfiedPostconditions,
+			];
+			if (paramsResult.unplannable !== null) {
+				warnings.push({
+					code: "PROPERTY_UNPLANNABLE",
+					field: traces[0] ?? "",
+					detail: `Cannot plan a property block for ${componentName}.${operationName}: operation has param ${paramsResult.unplannable} — no ArbitrarySpec kind exists for that type, so the expected-rejection property cannot be planned`,
+				});
+				continue;
+			}
+			const rejectionClauses: PropertyClause[] = [];
+			let rejectionError: { clauseId: string; detail: string } | null = null;
+			for (const clauseId of traces) {
+				const ast = context.parsedContracts[clauseId];
+				if (ast === undefined) {
+					rejectionError = {
+						clauseId,
+						detail: `Cannot plan a property block for ${clauseId}: missing parsed AST`,
+					};
+					break;
+				}
+				try {
+					rejectionClauses.push({
+						clauseId,
+						code: renderClausePredicate(ast, { predicates }),
+					});
+				} catch (error) {
+					rejectionError = {
+						clauseId,
+						detail: `Cannot render the property oracle for ${clauseId}: ${error instanceof Error ? error.message : String(error)}`,
+					};
+					break;
+				}
+			}
+			if (rejectionError !== null) {
+				warnings.push({
+					code: "PROPERTY_UNPLANNABLE",
+					field: rejectionError.clauseId,
+					detail: rejectionError.detail,
+				});
+				continue;
+			}
+			descriptors.push({
+				id: nextId("rejects"),
+				component: componentName,
+				operation: operationName,
+				params: paramsResult.specs,
+				clauses: rejectionClauses,
+				outcome: "rejects",
+				rejectionIdiom: idiom,
+				traces,
+				seed: seedOverride ?? derivePropertySeed(traces, grammarVersion),
+			});
+		}
+	}
+
+	return { descriptors, strategies, warnings };
 }

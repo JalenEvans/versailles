@@ -26,10 +26,19 @@ import type {
 	EmitterFramework,
 	PlannedSuite,
 } from "./ir.js";
-import { coverageManifest, planTestCases } from "./planner.js";
+import {
+	coverageManifest,
+	planPropertyBlocks,
+	planTestCases,
+} from "./planner.js";
 import { derivePropertySeed } from "./seed.js";
 
-export { planTestCases, coverageManifest, derivePropertySeed };
+export {
+	planTestCases,
+	coverageManifest,
+	planPropertyBlocks,
+	derivePropertySeed,
+};
 export { renderClausePredicate } from "./codegen.js";
 export type { CodegenContext } from "./codegen.js";
 export { selectStrategy } from "./strategy.js";
@@ -78,6 +87,7 @@ export type {
 	PropertyClause,
 	PropertyDescriptor,
 	PropertyOutcome,
+	PropertyPlan,
 } from "./ir.js";
 export type {
 	ClauseShape,

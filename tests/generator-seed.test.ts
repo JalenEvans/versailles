@@ -358,6 +358,11 @@ describe("PBT IR — PropertyDescriptor shape (ADR-0017)", () => {
 			outcome: "satisfies",
 			rejectionIdiom: "throws",
 			traces: ["AccountService.withdraw.pre0", "AccountService.withdraw.post0"],
+			// ADR-0017 Chunk 5: PropertyDescriptor carries the seed literal the
+			// emitter needs for fc.assert(prop, { seed, numRuns }) — derived
+			// per-block from the covered clause IDs + grammar version, or the
+			// explicit config.propertyBased.seed override (planner-applied).
+			seed: 12345,
 		} satisfies PropertyDescriptor;
 
 		expect(descriptor.id).toBe("AccountService.withdraw.property-satisfies-0");
@@ -410,6 +415,7 @@ describe("PBT IR — PropertyDescriptor shape (ADR-0017)", () => {
 			outcome: "rejects",
 			rejectionIdiom: "returns",
 			traces: ["AccountService.withdraw.pre0"],
+			seed: -987654,
 		} satisfies PropertyDescriptor;
 
 		expect(descriptor.outcome).toBe("rejects");
