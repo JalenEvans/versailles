@@ -1050,8 +1050,17 @@ describe("runCli generate — non-silent UNPLANNABLE_OPERATION warnings for stag
 	});
 });
 
-describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for multi-param oracle clauses (Center B1/B2)", () => {
-	it("a multi-param oracle clause + propertyBased enabled surfaces PROPERTY_UNPLANNABLE in warnings — never a silent zero, never an emitted filter, exit 0", async () => {
+// VERSAILLES-165 re-pin: the coupled-bounded compound `a >= 0 and b >= 0 and
+// a + b <= 100` is now PLANNED (record + bounded filter), so it no longer
+// surfaces PROPERTY_UNPLANNABLE — and the current emitter's belt-and-suspenders
+// still refuses multi-param guard oracles (the joint-sampling record layout
+// lands in Chunk 2), so generating THAT fixture today would hard-fail instead
+// of warning. The CLI-warning channel pin therefore uses a RETAINED-unplannable
+// multi-param shape: equality-of-sums `a + b == 100` (a thin hyperslice, not a
+// bounded region — planner.ts classifyMultiParamGuard keeps it
+// PROPERTY_UNPLANNABLE).
+describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for retained-unplannable multi-param oracle clauses (Center B1/B2)", () => {
+	it("a retained-unplannable multi-param oracle clause (equality-of-sums a + b == 100) + propertyBased enabled surfaces PROPERTY_UNPLANNABLE in warnings — never a silent zero, never an emitted filter, exit 0", async () => {
 		const cwd = await freshWorkspace("g-property-unplannable");
 		await writeWorkspaceFile(cwd, "config.json", {
 			...SEEDED_CONFIG,
@@ -1065,10 +1074,15 @@ describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for multi
 					operations: {
 						placeOrder: {
 							id: "OrderService.placeOrder",
-							// The compound references BOTH params — its codegen'd
-							// oracle `(a, b) => ...` is a 2-param oracle, which
-							// cannot be turned into per-param filterable
-							// arbitraries (fast-check's filter passes ONE value).
+							// The clause references BOTH params — its codegen'd
+							// oracle `(a, b) => ...` is a 2-param oracle. Under
+							// VERSAILLES-165 it is NOT blanket-unplannable: the
+							// planner CLASSIFIES the AST and routes equality-
+							// mirrors and bounded couplings to joint sampling.
+							// Equality-of-sums is retained-unplannable — a sum
+							// compared by `==` is neither a fieldRef equality
+							// (no mirror) nor a bounded region (measure-zero),
+							// so the clause stays PROPERTY_UNPLANNABLE.
 							params: [
 								{ name: "a", type: "number" },
 								{ name: "b", type: "number" },
@@ -1076,7 +1090,7 @@ describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for multi
 							preconditions: [
 								{
 									id: "OrderService.placeOrder.pre0",
-									expr: "a >= 0 and b >= 0 and a + b <= 100",
+									expr: "a + b == 100",
 								},
 							],
 							postconditions: [],
@@ -1103,6 +1117,8 @@ describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for multi
 		// non-blocking, exactly like PREDICATE_UNPLANNABLE (ADR-0004). B2:
 		// the property-plan warnings ride the SAME CliResult.warnings channel
 		// as suite.warnings — a skipped property block is never a silent zero.
+		// (The now-planned coupled compound would NOT warn here; this fixture
+		// exercises the retained-unplannable equality-of-sums clause instead.)
 		expect(result.ok).toBe(true);
 		expect(result.exitCode).toBe(0);
 		expect(result.errors).toEqual([]);
@@ -1115,7 +1131,10 @@ describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for multi
 
 		// The generated surface contains NO fast-check / fc.property for the
 		// unplannable clause — never a broken multi-param `.filter((a, b) => ...)`
-		// layout (the B1 bug shape).
+		// layout (the B1 bug shape). The emitter rework for the joint-sampling
+		// record layout lands in Chunk 2; today a planned multi-param descriptor
+		// would trip the emitter's belt-and-suspenders instead of rendering, so
+		// the emitted-content assertion stays pinned to the unplannable path.
 		const content = await readFile(
 			join(cwd, ".versailles", "generated", "OrderService.test.ts"),
 			"utf8",

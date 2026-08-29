@@ -2004,27 +2004,17 @@ function compoundHasNumericBound(node: Node): boolean {
 }
 
 /**
- * Compound-aware numeric constraint bounds over the operation's preconditions
- * (build-spec §9.6): the existing numericConstraintBounds only sees TOP-LEVEL
- * numeric clauses, so compound (`and`/`or`) preconditions need an extractor
- * that recurses into their sub-compares. Bounds semantics mirror
- * numericConstraintBounds exactly: `>=` → lower[b], `>` → lower[b+1], `<=` →
- * upper[b], `<` → upper[b-1]. Only params with BOTH bounds resolved carry a
- * bounds object (the ArbitrarySpec bounds shape requires min + max).
+ * Builds the per-param { min, max } bounds map from the raw per-variable
+ * lower/upper records (the shape the ArbitrarySpec bounds field requires —
+ * build-spec §9.6). Only params with BOTH bounds resolved carry a bounds
+ * object; the map is what buildArbitrarySpecs consumes AFTER cross-param
+ * propagation has extended the records (VERSAILLES-165).
  */
-function numericBoundsForOperation(
+function numericBoundsFromRecords(
 	operation: ContractOperation,
-	context: VersaillesContext,
+	lower: Record<string, number>,
+	upper: Record<string, number>,
 ): Record<string, { min: number; max: number }> {
-	const lower: Record<string, number> = {};
-	const upper: Record<string, number> = {};
-	for (const pre of operation.preconditions ?? []) {
-		const ast = context.parsedContracts[pre.id];
-		if (ast === undefined) {
-			continue;
-		}
-		collectNumericBounds(ast, lower, upper);
-	}
 	const out: Record<string, { min: number; max: number }> = {};
 	for (const param of operation.params ?? []) {
 		if (param.type.trim() !== "number") {
@@ -2182,6 +2172,292 @@ function arbitrarySpecForType(
 	return null;
 }
 
+// ── Joint sampling (VERSAILLES-165) — multi-param guard oracle routing ───────
+//
+// A guard oracle with more than one callback parameter can never be an
+// arbitrary `.filter(...)` (fast-check's filter passes exactly ONE value), so
+// the planner CLASSIFIES the multi-param guard's AST and routes it to a
+// joint-sampling strategy instead of the old blanket PROPERTY_UNPLANNABLE gate:
+//   - Equality-mirror — a bothSideFieldRef equality `p1 == p2`: the SOURCE
+//     (the left operand) is sampled from its arbitrary and the TARGET (the
+//     right operand) mirrors the value, so the oracle holds by construction
+//     (zero filter sparsity). The target's ArbitrarySpec carries mirrorOf.
+//   - Record + bounded filter — a conjunction of numeric bounds, literal
+//     inequalities, and sum/difference couplings: cross-param propagation
+//     derives per-param bounds from the coupling leaves BEFORE any filter so
+//     the sampled joint region is bounded first.
+//   - Anything else — non-mirrorable `!=`, equality-of-sums, unboundable
+//     couplings, unrenderable oracles, component-typed params — keeps the
+//     PROPERTY_UNPLANNABLE gate.
+
+/**
+ * Equality-mirror detection: a top-level `compare` with op `==` and BOTH sides
+ * single-segment fieldRefs (`p1 == p2`) routes to the equality-mirror strategy
+ * — the SOURCE (the left operand) is generated from its arbitrary and the value
+ * is mirrored to the TARGET (the right operand). Returns null for any
+ * non-mirror shape: `!=`/`!==` (mirroring would assert the OPPOSITE of what the
+ * oracle asserts), a compare with an arithmetic side, a compound, or a
+ * self-equality (`p1 == p1` — degenerate single-param, not a mirror).
+ */
+function equalityMirrorInfo(
+	ast: Node,
+): { source: string; target: string } | null {
+	if (ast.type !== "compare" || ast.op !== "==") {
+		return null;
+	}
+	const left = fieldRefName(ast.left);
+	const right = fieldRefName(ast.right);
+	if (left === null || right === null || left === right) {
+		return null;
+	}
+	return { source: left, target: right };
+}
+
+/** A normalized sum/difference coupling leaf `p1 ± p2 <op> C`. */
+type CouplingLeaf = {
+	arithOp: "+" | "-";
+	p1: string;
+	p2: string;
+	/** The compare op, normalized to arithmetic-side-left orientation. */
+	op: string;
+	C: number;
+};
+
+/**
+ * Normalizes a compare node into a coupling leaf: one side an `arithmetic`
+ * node `p1 + p2` / `p1 - p2` (both operands single-segment fieldRefs), the
+ * other side a numeric literal. Literal-left compares (`C >= p1 + p2`) are
+ * inverted to arithmetic-left. Returns null when the compare is not a
+ * two-fieldRef sum/difference against a numeric literal. `==`/`!=` couplings
+ * are still returned (op preserved) so the caller can reject them as
+ * equality-of-sums — they are never propagated (measure-zero).
+ */
+function couplingLeaf(node: Node): CouplingLeaf | null {
+	if (node.type !== "compare") {
+		return null;
+	}
+	let arithSide = node.left;
+	let litSide = node.right;
+	let op: string = node.op;
+	if (arithSide.type !== "arithmetic" && litSide.type === "arithmetic") {
+		arithSide = litSide;
+		litSide = node.left;
+		op = INVERTED_NUMERIC_OP[op] ?? op;
+	}
+	if (arithSide.type !== "arithmetic" || litSide.type !== "literal") {
+		return null;
+	}
+	if (typeof litSide.value !== "number") {
+		return null;
+	}
+	if (arithSide.op !== "+" && arithSide.op !== "-") {
+		return null;
+	}
+	const p1 = fieldRefName(arithSide.left);
+	const p2 = fieldRefName(arithSide.right);
+	if (p1 === null || p2 === null) {
+		return null;
+	}
+	return { arithOp: arithSide.op, p1, p2, op, C: litSide.value };
+}
+
+/**
+ * Cross-param bound propagation (VERSAILLES-165): for a sum/difference
+ * coupling leaf `p1 ± p2 <op> C` against the operation's KNOWN per-param
+ * bounds, derives the tightest bound the OTHER side's known bound implies:
+ *
+ *   p1 + p2 <= C  (or < C)  with L1 ≤ p1, L2 ≤ p2 → p1 ≤ C − L2, p2 ≤ C − L1
+ *   p1 + p2 >= C  (or > C)  with U1 ≥ p1, U2 ≥ p2 → p1 ≥ C − U2, p2 ≥ C − U1
+ *   p1 − p2 <= C  (or < C)  with U2 ≥ p2, L1 ≤ p1 → p1 ≤ C + U2, p2 ≥ L1 − C
+ *   p1 − p2 >= C  (or > C)  with L2 ≤ p2, U1 ≥ p1 → p1 ≥ C + L2, p2 ≤ U1 − C
+ *
+ * Strict ops follow the numericConstraintBounds convention (`< C` → the
+ * exclusive boundary C−1, `> C` → C+1). Mutates `lower`/`upper` in place;
+ * returns false when any needed operand bound is missing (the joint space is
+ * unbounded there, so the coupling is unboundable).
+ */
+function propagateCouplingBound(
+	leaf: CouplingLeaf,
+	lower: Record<string, number>,
+	upper: Record<string, number>,
+): boolean {
+	if (!isNumericOp(leaf.op)) {
+		return false;
+	}
+	let C = leaf.C;
+	if (leaf.op === "<") {
+		C -= 1;
+	} else if (leaf.op === ">") {
+		C += 1;
+	}
+	const { p1, p2, arithOp } = leaf;
+	if (arithOp === "+") {
+		if (leaf.op === "<=" || leaf.op === "<") {
+			const L1 = lower[p1];
+			const L2 = lower[p2];
+			if (L1 === undefined || L2 === undefined) {
+				return false;
+			}
+			upper[p1] = Math.min(upper[p1] ?? Number.POSITIVE_INFINITY, C - L2);
+			upper[p2] = Math.min(upper[p2] ?? Number.POSITIVE_INFINITY, C - L1);
+			return true;
+		}
+		const U1 = upper[p1];
+		const U2 = upper[p2];
+		if (U1 === undefined || U2 === undefined) {
+			return false;
+		}
+		lower[p1] = Math.max(lower[p1] ?? Number.NEGATIVE_INFINITY, C - U2);
+		lower[p2] = Math.max(lower[p2] ?? Number.NEGATIVE_INFINITY, C - U1);
+		return true;
+	}
+	// difference: p1 − p2
+	if (leaf.op === "<=" || leaf.op === "<") {
+		const U2 = upper[p2];
+		const L1 = lower[p1];
+		if (U2 === undefined || L1 === undefined) {
+			return false;
+		}
+		upper[p1] = Math.min(upper[p1] ?? Number.POSITIVE_INFINITY, C + U2);
+		lower[p2] = Math.max(lower[p2] ?? Number.NEGATIVE_INFINITY, L1 - C);
+		return true;
+	}
+	const L2 = lower[p2];
+	const U1 = upper[p1];
+	if (L2 === undefined || U1 === undefined) {
+		return false;
+	}
+	lower[p1] = Math.max(lower[p1] ?? Number.NEGATIVE_INFINITY, C + L2);
+	upper[p2] = Math.min(upper[p2] ?? Number.POSITIVE_INFINITY, U1 - C);
+	return true;
+}
+
+/**
+ * Accepts/rejects the leaves of a multi-param guard for the record + bounded
+ * filter strategy (VERSAILLES-165): a conjunction (`and`-chain) of numeric
+ * bounds (`field op literal`), literal equalities/inequalities (filterable at
+ * the record level), and sum/difference couplings (cross-param propagated).
+ * Any other leaf — `or`/`not`/predicateCall nodes, fieldRef-vs-fieldRef
+ * compares, equality-of-sums, or an unboundable coupling — makes the guard
+ * unplannable. Mutates `lower`/`upper` with the derived coupling bounds so the
+ * propagation feeds the per-param bounds BEFORE buildArbitrarySpecs consumes
+ * them. Returns null when every leaf is acceptable, else a human-readable
+ * reason.
+ */
+function recordLeafFailure(
+	node: Node,
+	lower: Record<string, number>,
+	upper: Record<string, number>,
+): string | null {
+	if (node.type === "and") {
+		return (
+			recordLeafFailure(node.left, lower, upper) ??
+			recordLeafFailure(node.right, lower, upper)
+		);
+	}
+	if (node.type !== "compare") {
+		return `contains a ${node.type} node — only conjunctions of numeric bounds, literal inequalities, and sum/difference couplings are record-samplable`;
+	}
+	const leftVar = fieldRefName(node.left);
+	const rightVar = fieldRefName(node.right);
+	if (
+		(leftVar !== null && node.right.type === "literal") ||
+		(rightVar !== null && node.left.type === "literal")
+	) {
+		// Numeric bound (contributes to collectNumericBounds) or a literal
+		// equality/inequality — filterable at the record level, no bound needed.
+		return null;
+	}
+	const coupling = couplingLeaf(node);
+	if (coupling !== null) {
+		if (!isNumericOp(coupling.op)) {
+			return `equality-of-sums compare ${coupling.p1} ${coupling.arithOp} ${coupling.p2} ${coupling.op} ${coupling.C} is a measure-zero slice, not a bounded region`;
+		}
+		if (!propagateCouplingBound(coupling, lower, upper)) {
+			return `unboundable coupling ${coupling.p1} ${coupling.arithOp} ${coupling.p2} ${coupling.op} ${coupling.C} — cross-param propagation needs bounds on both operands`;
+		}
+		return null;
+	}
+	return "multi-param compare is neither a fieldRef equality, a bounded coupling, nor a literal inequality";
+}
+
+/** The joint-sampling classification of a multi-param guard oracle's AST. */
+type MultiParamGuardClass =
+	| { kind: "mirror"; source: string; target: string }
+	| { kind: "coupled-bounded" }
+	| { kind: "unplannable"; detail: string };
+
+/**
+ * Classifies a multi-param guard oracle's AST for joint sampling
+ * (VERSAILLES-165): an equality-mirror (top-level `p1 == p2`), a record +
+ * bounded filter (a conjunction of numeric bounds / literal inequalities /
+ * boundable couplings), or unplannable. The cross-param propagation for
+ * coupled-bounded guards runs HERE — mutating the operation's lower/upper
+ * bounds — so the derived bounds land in the specs.
+ */
+function classifyMultiParamGuard(
+	ast: Node,
+	lower: Record<string, number>,
+	upper: Record<string, number>,
+): MultiParamGuardClass {
+	const mirror = equalityMirrorInfo(ast);
+	if (mirror !== null) {
+		return { kind: "mirror", source: mirror.source, target: mirror.target };
+	}
+	const failure = recordLeafFailure(ast, lower, upper);
+	if (failure === null) {
+		return { kind: "coupled-bounded" };
+	}
+	return { kind: "unplannable", detail: failure };
+}
+
+/**
+ * Builds the per-param ArbitrarySpec list for an equality-mirror descriptor
+ * (VERSAILLES-165): the mirror SOURCE's spec first (no mirrorOf — it has the
+ * independent arbitrary), then the mirror TARGET's spec carrying
+ * `mirrorOf: "<source>"` (no independent arbitrary — bounds/default stripped),
+ * then the remaining operation-param specs in order. When the source is a
+ * manifest FIELD (not an operation param) its spec is derived from the
+ * manifest field type and appended ahead of the target (source precedes target
+ * in params). Returns null when the source or target has no representable
+ * ArbitrarySpec (e.g. a component-typed field).
+ */
+function buildMirrorParams(
+	base: ArbitrarySpec[],
+	source: string,
+	target: string,
+	operation: ContractOperation,
+	manifestFields: Record<string, string>,
+): ArbitrarySpec[] | null {
+	const opParamNames = new Set(
+		(operation.params ?? []).map((param) => param.name),
+	);
+	const sourceSpec = opParamNames.has(source)
+		? (base.find((spec) => spec.param === source) ?? null)
+		: arbitrarySpecForType(source, manifestFields[source] ?? "", undefined);
+	if (sourceSpec === null) {
+		return null;
+	}
+	const targetBase = opParamNames.has(target)
+		? (base.find((spec) => spec.param === target) ?? null)
+		: arbitrarySpecForType(target, manifestFields[target] ?? "", undefined);
+	if (targetBase === null) {
+		return null;
+	}
+	// The mirror TARGET has NO independent arbitrary — bounds/default stripped.
+	const targetSpec: ArbitrarySpec = {
+		param: targetBase.param,
+		typeRef: targetBase.typeRef,
+		kind: targetBase.kind,
+		members: targetBase.members,
+		mirrorOf: source,
+	};
+	const rest = base.filter(
+		(spec) => spec.param !== source && spec.param !== target,
+	);
+	return [sourceSpec, targetSpec, ...rest];
+}
+
 /**
  * The codegen predicates import table (predicate name → import specifier),
  * derived from the loaded predicates registry. renderClausePredicate only uses
@@ -2290,23 +2566,33 @@ export function planPropertyBlocks(
 				return `${componentName}.${operationName}.property-${outcome}-${current}`;
 			};
 
-			const bounds = numericBoundsForOperation(operation, context);
-			const paramsResult = buildArbitrarySpecs(operation, bounds);
+			// Operation-wide numeric bounds: the compound-aware DIRECT bounds
+			// (collectNumericBounds over every precondition) plus the cross-param
+			// bounds propagation derives from the multi-param guard couplings
+			// below (VERSAILLES-165). Propagation mutates these records before
+			// the final { min, max } map is built, so the derived bounds land in
+			// the specs BEFORE buildArbitrarySpecs consumes them.
+			const lower: Record<string, number> = {};
+			const upper: Record<string, number> = {};
+			for (const pre of operation.preconditions ?? []) {
+				const ast = context.parsedContracts[pre.id];
+				if (ast !== undefined) {
+					collectNumericBounds(ast, lower, upper);
+				}
+			}
 
-			// B1 root fix (multi-param oracles): the emitted GAP-3 guard set for
-			// an operation is the clause oracle of EVERY satisfies +
-			// invariant-preserving descriptor for the same (component, operation),
-			// in plan order. A guard oracle with >1 callback params can never be
-			// an arbitrary `.filter(...)` — fast-check's filter passes exactly
-			// ONE value, so filtering with a multi-param oracle would evaluate the
-			// predicate against undefined and silently discard the whole domain
-			// (a hanging property). Render the candidate oracles once, count the
-			// callback params of each renderable oracle, and mark the operation's
-			// satisfies/invariant-preserving blocks unplannable when ANY guard
-			// oracle is multi-param. Rejects blocks are unaffected (they have no
-			// filters). A clause whose oracle cannot render never reaches the
-			// emitted guard set — its own descriptor carries the render-failure
-			// warning (Center W5) below instead.
+			// The emitted GAP-3 guard set for an operation is the clause oracle
+			// of EVERY satisfies + invariant-preserving descriptor for the same
+			// (component, operation), in plan order. Render the candidate
+			// oracles once, then CLASSIFY every multi-param guard oracle's AST
+			// (VERSAILLES-165) instead of blanket-unplannable: a guard oracle
+			// with >1 callback params can never be an arbitrary `.filter(...)`
+			// (fast-check's filter passes exactly ONE value, so filtering with a
+			// multi-param oracle would evaluate the predicate against undefined
+			// and silently discard the whole domain — a hanging property). A
+			// clause whose oracle cannot render never reaches the emitted guard
+			// set — its own descriptor carries the render-failure warning
+			// (Center W5) below instead.
 			const guardCandidates: { clauseId: string; ast: Node }[] = [];
 			for (const pre of operation.preconditions ?? []) {
 				const ast = context.parsedContracts[pre.id];
@@ -2338,16 +2624,55 @@ export function planPropertyBlocks(
 					// descriptor warns + skips below — never a silent zero).
 				}
 			}
-			const multiParamGuard = guardOracles.find(
-				(oracle) => oracleParamsOf(oracle.code).length > 1,
-			);
+
+			// Joint-sampling router (VERSAILLES-165): classify EVERY multi-param
+			// guard oracle's AST. An equality-mirror (`p1 == p2`) and a record +
+			// bounded filter (a conjunction of numeric bounds / literal
+			// inequalities / boundable sum-difference couplings) are
+			// joint-plannable; anything else — non-mirrorable `!=`, equality-of-
+			// sums, an unboundable coupling — keeps the PROPERTY_UNPLANNABLE
+			// gate. A multi-param guard in the operation's guard set makes EVERY
+			// satisfies/invariant-preserving descriptor of the operation need
+			// the joint treatment: if ANY multi-param guard is unplannable, the
+			// operation's satisfies/invariant descriptors are all unplannable.
+			// Rejects blocks are unaffected (they have no filters). The
+			// cross-param propagation for coupled-bounded guards runs here,
+			// feeding the operation's lower/upper records.
+			let multiParamUnplannable: { clauseId: string; detail: string } | null =
+				null;
+			for (const oracle of guardOracles) {
+				if (oracleParamsOf(oracle.code).length <= 1) {
+					continue;
+				}
+				const ast = context.parsedContracts[oracle.clauseId];
+				if (ast === undefined) {
+					continue;
+				}
+				const classification = classifyMultiParamGuard(ast, lower, upper);
+				if (classification.kind === "unplannable") {
+					multiParamUnplannable = {
+						clauseId: oracle.clauseId,
+						detail: classification.detail,
+					};
+					break;
+				}
+			}
+
+			// Final per-param bounds after propagation: only params with BOTH
+			// bounds resolved carry a bounds object (the ArbitrarySpec bounds
+			// shape requires min + max).
+			const bounds = numericBoundsFromRecords(operation, lower, upper);
+			const paramsResult = buildArbitrarySpecs(operation, bounds);
+			const manifestFields =
+				context.manifests?.manifests[componentName]?.fields ?? {};
 
 			// Plans ONE descriptor for a property-strategy clause, or a
 			// non-silent PROPERTY_UNPLANNABLE warning (the PREDICATE_UNPLANNABLE
-			// tier) that skips it: unrepresentable operation params, a
-			// multi-param guard oracle in the operation's filter set (B1), or a
-			// renderClausePredicate throw for the clause (Center W5). Never
-			// silent, never a hard fail for renderer unrepresentability.
+			// tier) that skips it: unrepresentable operation params, an
+			// unplannable multi-param guard oracle in the operation's filter set
+			// (VERSAILLES-165), or a renderClausePredicate throw for the clause
+			// (Center W5). Never silent, never a hard fail for renderer
+			// unrepresentability.
 			const planClauseDescriptor = (
 				clauseId: string,
 				ast: Node,
@@ -2361,21 +2686,22 @@ export function planPropertyBlocks(
 					});
 					return;
 				}
-				// B1: the multi-param guard-oracle gate — satisfies and
-				// invariant-preserving blocks only (rejects has no filters). The
-				// SELECTOR still records "property" for these clauses (the
-				// strategy is the open-question coverage record); the PLANNER
-				// finds the block unplannable and the coverage gap stays visible
-				// in suite.clauseIds.
+				// Joint-sampling gate — satisfies and invariant-preserving
+				// blocks only (rejects has no filters). A multi-param guard
+				// that is NEITHER mirror-able NOR bounded (record + bounded
+				// filter) makes every accept-side block of the operation
+				// unplannable. The SELECTOR still records "property" for these
+				// clauses (the strategy is the open-question coverage record);
+				// the PLANNER finds the block unplannable and the coverage gap
+				// stays visible in suite.clauseIds.
 				if (
 					(outcome === "satisfies" || outcome === "invariant-preserving") &&
-					multiParamGuard !== undefined
+					multiParamUnplannable !== null
 				) {
-					const params = oracleParamsOf(multiParamGuard.code);
 					warnings.push({
 						code: "PROPERTY_UNPLANNABLE",
 						field: clauseId,
-						detail: `Cannot plan a property block for ${clauseId}: guard oracle ${multiParamGuard.clauseId} takes ${params.length} callback params (${params.join(", ")}) — fast-check's .filter() passes one value, so no satisfies/invariant-preserving block in ${componentName}.${operationName} can filter its arbitraries to a valid region with this guard set`,
+						detail: `Cannot plan a property block for ${clauseId}: guard oracle ${multiParamUnplannable.clauseId} is a multi-param oracle that cannot be joint-sampled (${multiParamUnplannable.detail}) — fast-check's .filter() passes one value, so no satisfies/invariant-preserving block in ${componentName}.${operationName} can filter its arbitraries to a valid region with this guard set`,
 					});
 					return;
 				}
@@ -2390,11 +2716,38 @@ export function planPropertyBlocks(
 					});
 					return;
 				}
+				// Equality-mirror wiring (VERSAILLES-165): when the clause's OWN
+				// oracle is a bothSideFieldRef equality `p1 == p2`, the mirror
+				// TARGET's spec carries mirrorOf: "<source>" (no independent
+				// arbitrary) and the SOURCE's spec — prepended when it is a
+				// manifest field, not an operation param — precedes it.
+				let params = paramsResult.specs;
+				if (outcome === "satisfies" || outcome === "invariant-preserving") {
+					const mirror = equalityMirrorInfo(ast);
+					if (mirror !== null) {
+						const mirrored = buildMirrorParams(
+							paramsResult.specs,
+							mirror.source,
+							mirror.target,
+							operation,
+							manifestFields,
+						);
+						if (mirrored === null) {
+							warnings.push({
+								code: "PROPERTY_UNPLANNABLE",
+								field: clauseId,
+								detail: `Cannot plan a property block for ${clauseId}: the equality-mirror source or target (${mirror.source} / ${mirror.target}) has no representable ArbitrarySpec — the mirrored value cannot be sampled`,
+							});
+							return;
+						}
+						params = mirrored;
+					}
+				}
 				descriptors.push({
 					id: nextId(outcome),
 					component: componentName,
 					operation: operationName,
-					params: paramsResult.specs,
+					params,
 					clauses: [{ clauseId, code }],
 					outcome,
 					traces: [clauseId],
@@ -2456,7 +2809,7 @@ export function planPropertyBlocks(
 				operation.preconditions ?? [],
 				operation.postconditions ?? [],
 				invariants,
-				context.manifests?.manifests[componentName]?.fields ?? {},
+				manifestFields,
 				context,
 			);
 			if (rejection === null) {

@@ -195,6 +195,14 @@ export type ArbitrarySpec = {
 	 * The emitter renders a constant/default arbitrary for these.
 	 */
 	default?: unknown;
+	/**
+	 * Equality-mirror source param (VERSAILLES-165): present ONLY on the mirror
+	 * TARGET of a bothSideFieldRef equality `p1 == p2` — the target's value is
+	 * mirrored from the SOURCE (`const p2 = p1;`), so the target has NO
+	 * independent arbitrary (no bounds / no default). The SOURCE's spec has no
+	 * mirrorOf and precedes the target's in descriptor.params.
+	 */
+	mirrorOf?: string;
 };
 
 /** A codegen'd clause predicate — the oracle — paired with its source clause id. */

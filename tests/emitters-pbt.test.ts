@@ -1268,9 +1268,14 @@ describe("emitters-pbt fixture integrity", () => {
 //      the repo root resolves the generated file's `import fc from
 //      "fast-check"`). The runnable layout must exit 0.
 //
-//   B) The unplannable multi-param descriptor (Center B1) is never emitted as
-//      a filter: the emitted file for a PROPERTY_UNPLANNABLE clause carries NO
-//      fast-check surface, NO fc.property, NO broken multi-param `.filter`.
+//   B) A RETAINED-unplannable multi-param descriptor (VERSAILLES-165) is never
+//      emitted as a filter: the emitted file for a PROPERTY_UNPLANNABLE clause
+//      carries NO fast-check surface, NO fc.property, NO broken multi-param
+//      `.filter`. VERSAILLES-165 routes equality-mirrors (`p1 == p2`) and
+//      coupled-bounded compounds (`a >= 0 and b >= 0 and a + b <= 100`) to
+//      joint sampling, so THIS gate uses the equality-of-sums shape
+//      (`a + b == 100`) — a multi-param oracle the planner still classifies
+//      unplannable (a thin hyperslice, not a bounded region).
 //
 // Both pins re-use the fixture style of generator-planner-pbt.test.ts
 // (in-memory, fully-loaded, isValid VersaillesContext built from real parsed
@@ -1368,7 +1373,16 @@ function execSingleParamContext(): VersaillesContext {
 	return execContext(contracts, { enabled: true, numRuns: 100 });
 }
 
-/** The unplannable multi-param compound: oracle `(a, b) => ...` (2 params). */
+/**
+ * The RETAINED-unplannable multi-param compound (VERSAILLES-165): an
+ * equality-of-sums oracle `(a, b) => ...` (2 params). The planner classifies
+ * multi-param guard oracles instead of blanket-unplannable — equality-mirrors
+ * and bounded couplings route to joint sampling, but a sum compared by `==` is
+ * a thin hyperslice of the joint space, not a bounded region, so it stays
+ * PROPERTY_UNPLANNABLE. (The old coupled-bounded fixture
+ * `a >= 0 and b >= 0 and a + b <= 100` is now PLANNED — its per-param record
+ * layout lands with the Chunk 2 emitter rework.)
+ */
 function execMultiParamContext(): VersaillesContext {
 	const contracts: ContractsFile = {
 		version: "1.0",
@@ -1385,7 +1399,7 @@ function execMultiParamContext(): VersaillesContext {
 						preconditions: [
 							{
 								id: "OrderService.placeOrder.pre0",
-								expr: "a >= 0 and b >= 0 and a + b <= 100",
+								expr: "a + b == 100",
 							},
 						],
 						postconditions: [],
@@ -1492,17 +1506,17 @@ describe("emitted PBT — the single-param compound property RUNS under the REAL
 		}
 	});
 
-	it("the unplannable multi-param descriptor is NEVER emitted as a filter — its emitted file carries no fc.property surface (W1)", async () => {
+	it("the retained-unplannable multi-param descriptor is NEVER emitted as a filter — its emitted file carries no fc.property surface (W1)", async () => {
 		const ctx = execMultiParamContext();
 		const suite = planTestCases(ctx);
 		const plan = planPropertyBlocks(suite, ctx);
 
-		// Planner pin: the 2-param oracle is PROPERTY_UNPLANNABLE.
+		// Planner pin: the 2-param equality-of-sums oracle is
+		// PROPERTY_UNPLANNABLE (VERSAILLES-165 — it is not an equality-mirror
+		// and not a bounded coupling, so the joint-sampling router rejects it).
 		const pre0Ast = ctx.parsedContracts["OrderService.placeOrder.pre0"];
 		expect(pre0Ast).toBeDefined();
-		expect(renderClausePredicate(pre0Ast)).toBe(
-			"(a, b) => a >= 0 && b >= 0 && a + b <= 100",
-		);
+		expect(renderClausePredicate(pre0Ast)).toBe("(a, b) => a + b === 100");
 		const warning = plan.warnings.find(
 			(w) => w.field === "OrderService.placeOrder.pre0",
 		);
@@ -1523,15 +1537,20 @@ describe("emitted PBT — the single-param compound property RUNS under the REAL
 		expect(order?.content).not.toContain("fast-check");
 		expect(order?.content).not.toContain("fc.property");
 		expect(order?.content).not.toContain("a.filter(");
-		expect(order?.content).not.toContain("a + b <= 100");
+		expect(order?.content).not.toContain("a + b === 100");
 	});
 });
 
 // ── Single-param-only reality pin for the emitters-pbt fixture ───────────────
-// The B1 fix makes multi-param oracles PROPERTY_UNPLANNABLE, so every oracle
-// this file's pinned emitter layout embeds as a filter/assert must be
-// SINGLE-param. This integrity pin catches a future fixture that sneaks a
-// multi-param oracle into a satisfies/invariant-preserving descriptor.
+// The pinned emitted layout filters each arbitrary with a per-param oracle
+// (`.filter(<oracle>)` — fast-check's filter passes exactly ONE value), so
+// every oracle this file's hand-built plan embeds as a filter/assert must be
+// SINGLE-param. Under VERSAILLES-165 a multi-param guard oracle routes to a
+// joint-sampling strategy (equality-mirror / record + bounded filter) whose
+// record layout the emitter rework lands in Chunk 2 — the hand-built pbtPlan()
+// fixture stays single-param until then. This integrity pin catches a future
+// fixture that sneaks a multi-param oracle into a satisfies/invariant-
+// preserving descriptor.
 
 describe("emitters-pbt fixture integrity — single-param-only oracles (Center B1)", () => {
 	it("every satisfies/invariant-preserving oracle in the pinned plan has exactly ONE callback param — rejects blocks are exempt (they never embed filters)", () => {
@@ -1549,7 +1568,7 @@ describe("emitters-pbt fixture integrity — single-param-only oracles (Center B
 						: head.split(", ").map((param) => param.trim());
 				expect(
 					params.length,
-					`oracle ${clause.clauseId} must be single-param (multi-param oracles are PROPERTY_UNPLANNABLE): ${clause.code}`,
+					`oracle ${clause.clauseId} must be single-param (the pinned per-param .filter layout embeds single-param guard oracles only; multi-param oracles route to joint sampling in the Chunk 2 record layout): ${clause.code}`,
 				).toBe(1);
 			}
 		}
