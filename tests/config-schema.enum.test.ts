@@ -18,6 +18,10 @@ import configSchema from "../config.schema.json";
  * - config.schema.json (JSON Schema draft-07, imported from the repo root):
  *   the nested staleness/rejection objects reject unknown keys via
  *   additionalProperties: false.
+ * - ADR-0017 / build-spec §3.1: propertyBased is an optional top-level block
+ *   { enabled: boolean (required), numRuns: positive integer (required),
+ *   seed?: 32-bit integer (optional) }; absent propertyBased = v1 default
+ *   (enabled false, numRuns 100, no seed override).
  */
 
 const ajv = new Ajv({ allErrors: true });
@@ -183,5 +187,152 @@ describe("config.schema.json — full-shape happy path", () => {
 		});
 		expect(validateConfig(config)).toBe(true);
 		expect(validateConfig.errors).toBeNull();
+	});
+});
+
+describe("config.schema.json — propertyBased block (ADR-0017)", () => {
+	it("accepts a config WITHOUT propertyBased (v1 default, backward-compat)", () => {
+		const config = baseConfig();
+		expect(validateConfig(config)).toBe(true);
+		expect(validateConfig.errors).toBeNull();
+	});
+
+	it.each([
+		{ enabled: false, numRuns: 100 },
+		{ enabled: true, numRuns: 100 },
+	])(
+		"accepts propertyBased %j (enabled+numRuns required, no seed)",
+		(propertyBased) => {
+			const config = baseConfig({ propertyBased });
+			expect(validateConfig(config)).toBe(true);
+			expect(validateConfig.errors).toBeNull();
+		},
+	);
+
+	it("accepts propertyBased with an explicit 32-bit seed override", () => {
+		const config = baseConfig({
+			propertyBased: { enabled: true, numRuns: 100, seed: 12345 },
+		});
+		expect(validateConfig(config)).toBe(true);
+		expect(validateConfig.errors).toBeNull();
+	});
+
+	it("accepts propertyBased with the int32 upper-bound seed (2147483647)", () => {
+		const config = baseConfig({
+			propertyBased: { enabled: true, numRuns: 100, seed: 2147483647 },
+		});
+		expect(validateConfig(config)).toBe(true);
+	});
+
+	it.each(["enabled", "numRuns"])(
+		"rejects propertyBased missing the required %s field",
+		(missingField) => {
+			const propertyBased: Record<string, unknown> = {
+				enabled: true,
+				numRuns: 100,
+			};
+			delete propertyBased[missingField];
+			const config = baseConfig({ propertyBased });
+			expect(validateConfig(config)).toBe(false);
+
+			const error = errorAt("/propertyBased");
+			expect(error).toBeDefined();
+			expect(error?.keyword).toBe("required");
+			expect(error?.params?.missingProperty).toBe(missingField);
+		},
+	);
+
+	it('rejects a non-boolean propertyBased.enabled ("yes")', () => {
+		const config = baseConfig({
+			propertyBased: { enabled: "yes", numRuns: 100 },
+		});
+		expect(validateConfig(config)).toBe(false);
+
+		const error = errorAt("/propertyBased/enabled");
+		expect(error).toBeDefined();
+		expect(error?.keyword).toBe("type");
+		expect(error?.params?.type).toBe("boolean");
+	});
+
+	it('rejects a non-number propertyBased.numRuns ("many")', () => {
+		const config = baseConfig({
+			propertyBased: { enabled: true, numRuns: "many" },
+		});
+		expect(validateConfig(config)).toBe(false);
+
+		const error = errorAt("/propertyBased/numRuns");
+		expect(error).toBeDefined();
+		expect(error?.keyword).toBe("type");
+	});
+
+	it.each([0, -1])(
+		"rejects non-positive propertyBased.numRuns (%d) — runs must be >= 1",
+		(numRuns) => {
+			const config = baseConfig({
+				propertyBased: { enabled: true, numRuns },
+			});
+			expect(validateConfig(config)).toBe(false);
+
+			const error = errorAt("/propertyBased/numRuns");
+			expect(error).toBeDefined();
+			// minimum / exclusiveMinimum both enforce positivity — either is a valid fix
+			expect(error?.keyword).toMatch(/minimum/);
+		},
+	);
+
+	it("rejects a fractional propertyBased.numRuns (2.5) — runs must be an integer", () => {
+		const config = baseConfig({
+			propertyBased: { enabled: true, numRuns: 2.5 },
+		});
+		expect(validateConfig(config)).toBe(false);
+
+		const error = errorAt("/propertyBased/numRuns");
+		expect(error).toBeDefined();
+	});
+
+	it.each(["abc", 3.14])(
+		"rejects a non-32-bit-integer propertyBased.seed (%s)",
+		(seed) => {
+			const config = baseConfig({
+				propertyBased: { enabled: true, numRuns: 100, seed },
+			});
+			expect(validateConfig(config)).toBe(false);
+
+			const error = errorAt("/propertyBased/seed");
+			expect(error).toBeDefined();
+			expect(error?.keyword).toBe("type");
+		},
+	);
+
+	it("rejects an out-of-32-bit-range propertyBased.seed (2^32)", () => {
+		const config = baseConfig({
+			propertyBased: { enabled: true, numRuns: 100, seed: 4294967296 },
+		});
+		expect(validateConfig(config)).toBe(false);
+
+		const error = errorAt("/propertyBased/seed");
+		expect(error).toBeDefined();
+		expect(error?.keyword).toMatch(/max/);
+	});
+
+	it("rejects an unknown key inside propertyBased", () => {
+		const config = baseConfig({
+			propertyBased: { enabled: true, numRuns: 100, rogueKey: true },
+		});
+		expect(validateConfig(config)).toBe(false);
+
+		const error = errorAt("/propertyBased");
+		expect(error).toBeDefined();
+		expect(error?.keyword).toBe("additionalProperties");
+		expect(error?.params?.additionalProperty).toBe("rogueKey");
+	});
+
+	it("rejects a non-object propertyBased block", () => {
+		const config = baseConfig({ propertyBased: true });
+		expect(validateConfig(config)).toBe(false);
+
+		const error = errorAt("/propertyBased");
+		expect(error).toBeDefined();
+		expect(error?.keyword).toBe("type");
 	});
 });

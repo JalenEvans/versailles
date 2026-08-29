@@ -45,6 +45,25 @@
 					"enum": ["throws", "returns"]
 				}
 			}
+		},
+		"propertyBased": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": {
+					"type": "boolean"
+				},
+				"numRuns": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"seed": {
+					"type": "integer",
+					"minimum": -2147483648,
+					"maximum": 2147483647
+				}
+			},
+			"required": ["enabled", "numRuns"]
 		}
 	},
 	"required": [

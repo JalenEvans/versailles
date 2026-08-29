@@ -139,6 +139,11 @@ import { loadWorkspace } from "../packages/core/src/loader/workspace.js";
  * 7. Scoped extraction filters parseErrors/validationErrors by contractId
  *    prefix; loader-level errors (which carry no contractId) never appear in a
  *    scoped view.
+ * 8. ADR-0017 propertyBased: the loader needs no bespoke propertyBased shape
+ *    checks — config.schema.json gains the optional block and the existing
+ *    ajv pass (code CONFIG_INVALID, field = ajv instancePath) surfaces every
+ *    propertyBased shape error; a workspace without propertyBased stays valid
+ *    (v1 default).
  */
 
 // The exact SEEDED_CONFIG written by initWorkspace (src/cli/init.ts); kept
@@ -498,6 +503,156 @@ describe("loadWorkspace — config validation against the ADR-0009 matrix", () =
 		expect(context.parseErrors).toEqual([]);
 		expect(context.isValid).toBe(false);
 	});
+});
+
+/**
+ * ADR-0017 (seeded PBT emission): config.schema.json gains an optional
+ * propertyBased block { enabled (boolean, required), numRuns (positive
+ * integer, required), seed? (32-bit integer override) }. The loader validates
+ * the whole config against config.schema.json via ajv (code CONFIG_INVALID,
+ * field = ajv instancePath), so every propertyBased shape error surfaces as a
+ * structured CONFIG_INVALID — no bespoke loader checks needed. A workspace
+ * without propertyBased is the v1 default and must stay valid.
+ */
+describe("loadWorkspace — config validation against the ADR-0017 propertyBased block", () => {
+	it("loads a workspace WITHOUT propertyBased as valid (v1 default, backward-compat)", async () => {
+		const ws = await seedRichWorkspace("pb0-no-propertybased");
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.isValid).toBe(true);
+		expect(
+			context.validationErrors.filter((e) => e.code === "CONFIG_INVALID"),
+		).toEqual([]);
+	});
+
+	it("loads a workspace WITH propertyBased { enabled: true, numRuns: 100 } — no CONFIG_INVALID, block surfaced on config", async () => {
+		const ws = await seedRichWorkspace("pb1-enabled-true");
+		await writeWorkspaceFile(ws, "config.json", {
+			...SEEDED_CONFIG,
+			propertyBased: { enabled: true, numRuns: 100 },
+		});
+
+		const context = await loadWorkspace(ws);
+
+		expect(
+			context.validationErrors.filter((e) => e.code === "CONFIG_INVALID"),
+		).toEqual([]);
+		expect(context.isValid).toBe(true);
+		const propertyBased = (
+			context.config as unknown as {
+				propertyBased?: { enabled: boolean; numRuns: number; seed?: number };
+			}
+		).propertyBased;
+		expect(propertyBased).toEqual({ enabled: true, numRuns: 100 });
+	});
+
+	it("loads a workspace WITH propertyBased { enabled: true, numRuns: 100, seed: 12345 } — explicit seed override accepted", async () => {
+		const ws = await seedRichWorkspace("pb2-explicit-seed");
+		await writeWorkspaceFile(ws, "config.json", {
+			...SEEDED_CONFIG,
+			propertyBased: { enabled: true, numRuns: 100, seed: 12345 },
+		});
+
+		const context = await loadWorkspace(ws);
+
+		expect(
+			context.validationErrors.filter((e) => e.code === "CONFIG_INVALID"),
+		).toEqual([]);
+		expect(context.isValid).toBe(true);
+		const propertyBased = (
+			context.config as unknown as {
+				propertyBased?: { enabled: boolean; numRuns: number; seed?: number };
+			}
+		).propertyBased;
+		expect(propertyBased).toEqual({ enabled: true, numRuns: 100, seed: 12345 });
+	});
+
+	it.each([
+		{
+			dir: "pb3-enabled-missing",
+			label: "enabled is missing",
+			propertyBased: { numRuns: 100 },
+			field: "/propertyBased",
+		},
+		{
+			dir: "pb3-numruns-missing",
+			label: "numRuns is missing",
+			propertyBased: { enabled: true },
+			field: "/propertyBased",
+		},
+		{
+			dir: "pb3-enabled-not-boolean",
+			label: "enabled is not a boolean",
+			propertyBased: { enabled: "yes", numRuns: 100 },
+			field: "/propertyBased/enabled",
+		},
+		{
+			dir: "pb3-numruns-not-number",
+			label: "numRuns is not a number",
+			propertyBased: { enabled: true, numRuns: "many" },
+			field: "/propertyBased/numRuns",
+		},
+		{
+			dir: "pb3-numruns-zero",
+			label: "numRuns is 0 (not a positive integer)",
+			propertyBased: { enabled: true, numRuns: 0 },
+			field: "/propertyBased/numRuns",
+		},
+		{
+			dir: "pb3-numruns-negative",
+			label: "numRuns is -1",
+			propertyBased: { enabled: true, numRuns: -1 },
+			field: "/propertyBased/numRuns",
+		},
+		{
+			dir: "pb3-seed-not-number",
+			label: "seed is not a number",
+			propertyBased: { enabled: true, numRuns: 100, seed: "abc" },
+			field: "/propertyBased/seed",
+		},
+		{
+			dir: "pb3-seed-out-of-range",
+			label: "seed is out of 32-bit range (2^32)",
+			propertyBased: { enabled: true, numRuns: 100, seed: 4294967296 },
+			field: "/propertyBased/seed",
+		},
+		{
+			dir: "pb3-unknown-key",
+			label: "an unknown key is present inside propertyBased",
+			propertyBased: { enabled: true, numRuns: 100, rogueKey: true },
+			field: "/propertyBased",
+		},
+		{
+			dir: "pb3-not-object",
+			label: "propertyBased is not an object",
+			propertyBased: true,
+			field: "/propertyBased",
+		},
+	])(
+		"records a structured CONFIG_INVALID error at $field when $label — never throws",
+		async ({ dir, propertyBased, field }) => {
+			const ws = await seedWorkspace(dir);
+			await writeWorkspaceFile(ws, "config.json", {
+				...SEEDED_CONFIG,
+				propertyBased,
+			});
+			await writeWorkspaceFile(ws, "contracts.json", contractsFixture());
+			await writeWorkspaceFile(ws, "manifests.json", manifestsFixture());
+
+			const load = loadWorkspace(ws);
+			await expect(load).resolves.toBeDefined();
+			const context = await load;
+
+			expect(context.validationErrors).toContainEqual(
+				expect.objectContaining({
+					code: "CONFIG_INVALID",
+					field,
+				}),
+			);
+			expect(context.isValid).toBe(false);
+		},
+	);
 });
 
 describe("loadWorkspace — repeatability", () => {
