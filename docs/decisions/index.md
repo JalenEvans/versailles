@@ -20,5 +20,6 @@ Architecture decision records (ADRs). Immutable once accepted — a new decision
 | [0014](0014-roadmap-reconciliation.md) | Roadmap reconciliation — SMT as soundness requirement; roadmap supersedes BS§9.5/BS§13 | accepted | — |
 | [0015](0015-licensing-and-contribution-model.md) | Licensing and contribution model — MIT core, EasyCLA, open-core commitment | accepted | — |
 | [0016](0016-cla-assistant-derived-templates.md) | CLA Assistant with derived Apache templates (supersedes ADR-0015's EasyCLA choice) | accepted | ADR-0015 (CLA mechanism only) |
+| [0017](0017-property-based-test-emission-mit-core.md) | PBT emission in the MIT core; determinism scoped to generation-time | accepted | — |
 
 See also: [Contracts](../contracts/index.md) · [Specs](../specs/index.md) · [Build spec](../build-spec.md)

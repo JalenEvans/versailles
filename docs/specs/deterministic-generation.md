@@ -13,6 +13,8 @@
 
 The generator is the core value proposition of Versailles (ADR-0002): a pure, deterministic compiler from approved contracts to test files — same context in, byte-identical suite out, with no LLM invoked anywhere at generation time or anywhere in the tool (ADR-0010). It builds a framework-agnostic test-case IR covering boundary values, equivalence partitions, precondition-violation cases, postcondition-satisfaction cases, per-component invariant tests, and expected-rejection cases for the postcondition/invariant interaction bug class (build-spec §9.1–§9.2). Predicate-call preconditions (e.g. `isPositive(amount)`) are planned too: at least one deterministic violation case per predicate call, or an explicit non-silent warning — never a silent zero — and valid-input synthesis is predicate-aware, so a registered predicate guard never receives a value it rejects (build-spec §9.1). Emitters render shape-aware calls from manifest method metadata (instance → `new <Component>().<op>(...)`, static → `<Component>.<op>(...)`, void-return acceptance without return assertions — with accept/invariant cases on void-returning **instance** operations bound to the component **instance** so assertions target instance state, never the void return value; a **static** void operation with assertions renders the bare call without any `instance.<field>` assertion, since the static call never touches a constructed instance) and import components via `sourcePath`-derived module paths that resolve to the real source file from the generated file's directory (build-spec §9.4; VERSAILLES-24/26, VERSAILLES-26 follow-up). A planned operation with no matching source method is never emitted as an unrunnable static call: it surfaces a non-silent non-blocking `UNPLANNABLE_OPERATION` warning — same tier as `PREDICATE_UNPLANNABLE`, exit 0, warning in `CliResult.warnings` (build-spec §9.1; VERSAILLES-25). The guard fires whenever the component's entry carries a `methods` key — empty or not — missing the planned op: an empty map `{}` on a refreshed entry still warns for every planned op; only preserved legacy entries lacking the `methods` key entirely keep the legacy default (VERSAILLES-25 follow-up). Rejection assertions — on both §9.1 precondition-violation cases and §9.2 expected-rejection cases — use the rejection idiom configured in `config.json` (default `throws`) (ADR-0007). Every generated test carries a traceability comment, and `generated/coverage.json` maps clause IDs → test IDs so a clause with zero generated tests is detectable (build-spec §9.3). Output is rendered by per-framework emitter plugins (vitest, xUnit, pytest per ADR-0009) into the tool-owned `generated/` directory via idempotent, full-file regeneration (build-spec §9.4).
 
+Seeded property-based test (PBT) emission is an additive, opt-in capability (ADR-0017): when `config.propertyBased.enabled` is true, the generator additionally emits property blocks (vitest/fast-check first) whose per-param arbitraries derive from typeRefs and numeric constraint bounds, whose contract clauses are codegen'd into the test as the oracle, and whose runs are pinned by a seed derived deterministically from the context (clause IDs + grammar version) — so generation stays a pure function and regeneration stays byte-identical even though the emitted test explores many inputs at run time (ADR-0002 determinism re-scoped to generation-time only, ADR-0017).
+
 ## Scope
 
 **In scope:**
@@ -26,6 +28,16 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
   - Postcondition-satisfaction cases: valid inputs asserted against the simple field-compare postconditions (`field op expr`), with `old(field)` resolved against captured pre-call state; predicate-call, both-side-fieldRef, and uncomputable clauses contribute no assertion (conservative skip — the case is still emitted and every postcondition stays traced).
   - Per-component invariant tests: valid pre-state satisfying all invariants, call with valid inputs, assert every invariant post-call.
   - Expected-rejection cases: inputs that satisfy the operation's postcondition but would violate a component invariant — the operation should refuse to complete.
+- Seeded PBT emission (opt-in via `config.propertyBased.enabled`, default false; ADR-0017):
+  - Property blocks per case kind (postcondition-satisfaction, invariant-preservation, precondition-violation, expected-rejection), emitted **alongside** the concrete cases — additive; the v1 default output stays byte-identical when disabled.
+  - Per-param arbitraries derived from manifest/param typeRefs and the planner's numeric constraint bounds; `in`/enum params → member constants; strings → bounded strings.
+  - Contract clauses codegen'd into the generated test as inline predicates (the oracle); predicate calls resolve to the real registered predicate functions.
+  - `fc.assert(prop, { seed, numRuns })`-style runs with the seed derived from a stable hash of the context (clause IDs + grammar version) as a 32-bit int, or the explicit `config.propertyBased.seed` override; `numRuns` from config (default 100).
+  - Rejection properties assert the configured rejection idiom (ADR-0007).
+  - When enabled, the §9.2 expected-rejection bounded sweep is replaced by the expected-rejection property; the sweep remains the fallback when disabled.
+  - A clause that cannot be turned into a filterable arbitrary surfaces a non-silent non-blocking warning (mirroring the `PREDICATE_UNPLANNABLE` tier) — never a silent zero.
+  - Traceability comments and `coverage.json` mapping apply to property blocks as a unit (§9.3).
+  - Emitter rollout follows the ADR-0009 seam: vitest + fast-check first; pytest + hypothesis and xUnit + FsCheck follow.
 - Rejection idiom from config (default `throws`) applied to **both** the §9.1 precondition-violation surface **and** the §9.2 expected-rejection surface (ADR-0007).
 - Traceability: every generated test carries a traceability comment with the contract clause IDs it covers; `generated/coverage.json` maps clause ID → test IDs so zero-coverage clauses are detectable (build-spec §9.3).
 - The emitter plugin seam selected by `config.testFramework` — vitest (`*.test.ts`), xUnit (`*.Tests.cs`), pytest (`test_*.py`), the full ADR-0009 matrix; emitters render the framework-agnostic IR (input values, expected outcome, assertions, traceability comment) to real test syntax (build-spec §9.4, ADR-0008).
@@ -36,7 +48,7 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 - No LLM invocation at generation time or anywhere in the tool (ADR-0010).
 
 **Out of scope:**
-- SMT-backed precise input synthesis (v2 stretch, build-spec §9.5) — designed for via the frozen AST, deferred.
+- SMT-backed precise witness synthesis (build-spec §9.5, ADR-0014) — deferred; seeded PBT emission (in scope above) is stochastic exploration and never a substitute for SMT's soundness role in the L3/L4 engine.
 - Running/executing the generated tests — the generator writes files, it does not run them.
 - Emitters beyond the ADR-0009 matrix — the seam dispatches the complete set (vitest, xUnit, pytest); additional frameworks are future work.
 - Semantic validation of contracts (contract-language) and manifest derivation (manifest-extraction) — consumed via the context only.
@@ -128,6 +140,36 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 - **When** any contract clause ID is queried
 - **Then** the generated tests covering it are identifiable via traceability comments and the coverage manifest maps clause ID → test IDs, so a clause with zero generated tests is detectable (build-spec §9.3)
 
+### PBT emission is opt-in; the v1 default output is unchanged
+
+- **Given** a workspace without `config.propertyBased.enabled` (or with it `false`)
+- **When** `versailles generate` runs
+- **Then** the emitted suite is byte-identical to today's concrete-case output — no property blocks, no new imports, the backward-compat pin holds (ADR-0017)
+
+### PBT blocks are seeded deterministically from the context
+
+- **Given** `config.propertyBased.enabled: true` with no explicit `seed` override
+- **When** the generator plans property blocks
+- **Then** each property block's run is pinned by `fc.assert(prop, { seed: <literal>, numRuns })` where the seed is a 32-bit int derived from a stable hash of the context (contract clause IDs + grammar version) — `versailles generate` twice produces byte-identical files including the seed literal, and the emitted test itself is reproducible run-to-run (ADR-0002 generation-time determinism, ADR-0017)
+
+### PBT blocks use contract clauses as the oracle
+
+- **Given** a valid context and `config.propertyBased.enabled: true`
+- **When** the generator emits property blocks
+- **Then** contract clauses are codegen'd into the generated test as inline predicate functions (pure by grammar; predicate calls resolve to the registered predicate functions), per-param arbitraries derive from typeRefs and numeric constraint bounds, and the property asserts the clause holds (or rejects via the configured idiom) across the generated input space — postcondition-satisfaction and invariant-preservation properties check their clauses hold for all valid pre-state + inputs, violation and expected-rejection properties assert the configured rejection idiom for inputs falsifying a clause or violating an invariant while satisfying the others (ADR-0007, ADR-0017)
+
+### PBT emission is additive; the expected-rejection sweep is replaced only when enabled
+
+- **Given** a workspace with `config.propertyBased.enabled: true`
+- **When** the generator plans the suite
+- **Then** the concrete cases (boundary, partition, violation, satisfaction, invariant) are still emitted and still carry the 1:1 clause traceability, and the §9.2 expected-rejection bounded sweep is replaced by the expected-rejection property; with `enabled: false` the sweep remains the non-PBT fallback (ADR-0017)
+
+### Unplannable PBT clauses warn, never fail silently
+
+- **Given** a contract clause that cannot be turned into a filterable arbitrary (e.g. a compound precondition whose valid region is unrepresentable from bounds/typeRefs)
+- **When** the generator plans property blocks
+- **Then** a non-silent non-blocking warning appears in `CliResult.warnings` (same tier as `PREDICATE_UNPLANNABLE`, exit 0) — the clause's property block is skipped and its coverage gap stays visible in `coverage.json` (build-spec §9.3; ADR-0017)
+
 ## Constraints
 
 - `must_not` run generation against a context where `isValid: false` — invalid contracts block generation (build-spec §9).
@@ -136,7 +178,9 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 - `must_not` place framework-specific rendering logic in the core — all rendering lives behind the emitter plugin seam (ADR-0008).
 - `must_not` treat hand-edited `generated/` content as source or preserve it — the directory is fully tool-owned and full-file regenerated (build-spec §9.4).
 - `must_not` emit a coverage manifest that hides gaps — every clause maps to its generated test IDs; zero-coverage clauses remain detectable (build-spec §9.3).
-- The generator `must_not` be nondeterministic — same context in, byte-identical suite out, no randomness, no timestamps, no LLM (ADR-0002).
+- The generator `must_not` be nondeterministic **at generation time** — same context in, byte-identical suite out, no randomness in the generation pipeline, no timestamps, no LLM (ADR-0002, re-scoped to generation-time by ADR-0017).
+- Run-time randomness in emitted PBT blocks `must_not` be unpinned — every property block `must` carry a seed literal derived from the context (or the explicit config override) so the emitted test is reproducible run-to-run and the file stays byte-identical on regeneration (ADR-0017).
+- The generator `must_not` emit PBT blocks when `config.propertyBased.enabled` is false — the v1 default output stays byte-identical (ADR-0017).
 - The generator `must_not` emit zero tests for a predicate-call precondition silently — a genuinely unplannable predicate call surfaces an explicit non-silent warning (build-spec §9.1).
 - The generator `must_not` emit a "valid" input that a registered predicate in the operation's preconditions would reject — predicate-aware synthesis must satisfy registered predicates (build-spec §9.1).
 - The generator `must_not` render calls that mismatch the extracted method metadata — static calls on instance methods, options-object argument lists where positional params are declared, return-value assertions on void operations, or `instance.<field>` assertions on static void operations (build-spec §9.4; VERSAILLES-26 follow-up).
@@ -146,7 +190,7 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 
 ## Non-Goals
 
-- No SMT-backed witness synthesis for compound boolean preconditions or predicate calls (v2, build-spec §9.5) — v1 predicate planning uses deterministic heuristics over registry `paramTypes` + example hints.
+- No SMT-backed witness synthesis for compound boolean preconditions or predicate calls (build-spec §9.5, ADR-0014) — seeded PBT emission is stochastic exploration, never a soundness mechanism; SMT remains required for the L3/L4 engine's guarantees.
 - No test execution or CI running of generated tests — generation writes files only.
 - No framework-specific emitters in the core — all rendering lives behind the emitter seam (ADR-0008), and no emitters beyond the ADR-0009 matrix (vitest, xUnit, pytest).
 - No LLM involvement of any kind inside the tool (ADR-0010).
@@ -166,3 +210,4 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 | 2026-08-18 | general-manager | Mirrored the review-warning contract follow-ups (fix/generator-emitter-runnability): (W3/VERSAILLES-25) the UNPLANNABLE_OPERATION guard fires whenever the component's entry carries a methods key — empty or not — missing the planned op, so a refreshed zero-method component's methods: {} is never treated as a legacy entry; (W1/VERSAILLES-26) a static void operation with assertions renders the bare call with no instance.<field> assertion — instance-state assertions stay reserved for instance void operations |
 | 2026-08-20 | general-manager | Corrected the overstated postcondition-satisfaction guarantee (Center review, PR fix/generator-postcondition-violation): satisfaction cases derive real assertions ONLY from simple field-compare postconditions (`field op expr`) — predicate-call, both-side-fieldRef, and uncomputable clauses contribute no assertion (conservative skip; the case is still emitted and traced) — and void-returning instance operations assert instance state, not "the result"; canonical emitted-shape snippets now include the captured pre-state seed line (`instance.<field> = <captured>;`) the vitest emitter writes before the call |
 | 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
+| 2026-08-28 | associate-head-coach | Added seeded PBT emission per ADR-0017 (opt-in via `config.propertyBased.enabled`, seed derived from context, contract clauses codegen'd as oracle, additive emission, expected-rejection sweep replaced when enabled); determinism re-scoped to generation-time only |
