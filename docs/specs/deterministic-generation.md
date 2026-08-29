@@ -36,6 +36,7 @@ Seeded property-based test (PBT) emission is an additive, opt-in capability (ADR
   - Rejection properties assert the configured rejection idiom (ADR-0007).
   - When enabled, the §9.2 expected-rejection bounded sweep is replaced by the expected-rejection property; the sweep remains the fallback when disabled.
   - A clause that cannot be turned into a filterable arbitrary surfaces a non-silent non-blocking warning (mirroring the `PREDICATE_UNPLANNABLE` tier) — never a silent zero.
+  - Joint sampling for multi-param guard oracles (VERSAILLES-165): equality-mirror — a guard oracle `p1 == p2` / `p1 === p2` (bothSideFieldRef) generates `p1` from its arbitrary and mirrors the value to `p2` (the emitted callback contains `const p2 = p1;` — no filter, zero filter sparsity); record-based coupled sampling — coupled numeric compounds over multiple params (e.g. `a >= 0 and b >= 0 and a + b <= 100`) derive per-param bounds including cross-param propagation from sum/difference leaves before any filter, then sample the bounded joint region via `fc.record({ a: ..., b: ... }).filter(({ a, b }) => <oracle>(a, b))` — healthy valid region, never a hang; `PROPERTY_UNPLANNABLE` is retained only for genuinely unrepresentable shapes (non-mirrorable equality `!=`/`!==` and equality-of-sums `a + b == C`, unboundable couplings, unrenderable oracles, component-typed params).
   - Traceability comments and `coverage.json` mapping apply to property blocks as a unit (§9.3).
   - Emitter rollout follows the ADR-0009 seam: vitest + fast-check first; pytest + hypothesis and xUnit + FsCheck follow.
 - Rejection idiom from config (default `throws`) applied to **both** the §9.1 precondition-violation surface **and** the §9.2 expected-rejection surface (ADR-0007).
@@ -166,9 +167,27 @@ Seeded property-based test (PBT) emission is an additive, opt-in capability (ADR
 
 ### Unplannable PBT clauses warn, never fail silently
 
-- **Given** a contract clause that cannot be turned into a filterable arbitrary (e.g. a compound precondition whose valid region is unrepresentable from bounds/typeRefs)
+- **Given** a contract clause that cannot be routed to a runnable sampling strategy — a genuinely unrepresentable shape (e.g. a compound precondition whose valid region is unrepresentable from bounds/typeRefs, a non-mirrorable equality, or an unboundable coupling)
 - **When** the generator plans property blocks
 - **Then** a non-silent non-blocking warning appears in `CliResult.warnings` (same tier as `PREDICATE_UNPLANNABLE`, exit 0) — the clause's property block is skipped and its coverage gap stays visible in `coverage.json` (build-spec §9.3; ADR-0017)
+
+### Multi-param equality oracles sample jointly via the mirror
+
+- **Given** a guard oracle of the form `p1 == p2` / `p1 === p2` (a bothSideFieldRef clause, e.g. a postcondition `status == newStatus`) and `config.propertyBased.enabled: true`
+- **When** the generator plans property blocks
+- **Then** the property samples `p1` from its arbitrary and mirrors the value to `p2` — the emitted callback contains `const p2 = p1;` — the oracle holds by construction, so no `.filter` is emitted and filter sparsity is zero; the block is runnable (VERSAILLES-165)
+
+### Coupled numeric compounds sample the bounded joint region
+
+- **Given** a coupled compound guard oracle over multiple numeric params (e.g. `a >= 0 and b >= 0 and a + b <= 100`) and `config.propertyBased.enabled: true`
+- **When** the generator plans property blocks
+- **Then** the planner derives per-param bounds including cross-param propagation from sum/difference leaves (`p1 + p2 <= C` with lower bounds L1, L2 → `p1 <= C − L2`, `p2 <= C − L1`; mirrored for `>=`/`>` with upper bounds), and the emitter samples the joint region via `fc.record({ a: ..., b: ... }).filter(({ a, b }) => <oracle>(a, b))` — the space is bounded first so the valid region stays healthy (~≥50%), never filter-sparse, never a hang, never a "too many pre-conditions" failure (VERSAILLES-165)
+
+### Unrepresentable multi-param shapes still warn non-silently
+
+- **Given** a multi-param oracle of an unsupported shape — non-mirrorable equality (`!=`/`!==`, equality-of-sums `a + b == C`), an unboundable coupling, an unrenderable oracle, or a component-typed param
+- **When** the generator plans property blocks
+- **Then** the clause surfaces a non-silent non-blocking `PROPERTY_UNPLANNABLE` warning in `CliResult.warnings` (exit 0 — same tier as `PREDICATE_UNPLANNABLE`), the property block is skipped, and the clause's coverage gap stays visible in `coverage.json` (VERSAILLES-165)
 
 ## Constraints
 
@@ -210,4 +229,5 @@ Seeded property-based test (PBT) emission is an additive, opt-in capability (ADR
 | 2026-08-18 | general-manager | Mirrored the review-warning contract follow-ups (fix/generator-emitter-runnability): (W3/VERSAILLES-25) the UNPLANNABLE_OPERATION guard fires whenever the component's entry carries a methods key — empty or not — missing the planned op, so a refreshed zero-method component's methods: {} is never treated as a legacy entry; (W1/VERSAILLES-26) a static void operation with assertions renders the bare call with no instance.<field> assertion — instance-state assertions stay reserved for instance void operations |
 | 2026-08-20 | general-manager | Corrected the overstated postcondition-satisfaction guarantee (Center review, PR fix/generator-postcondition-violation): satisfaction cases derive real assertions ONLY from simple field-compare postconditions (`field op expr`) — predicate-call, both-side-fieldRef, and uncomputable clauses contribute no assertion (conservative skip; the case is still emitted and traced) — and void-returning instance operations assert instance state, not "the result"; canonical emitted-shape snippets now include the captured pre-state seed line (`instance.<field> = <captured>;`) the vitest emitter writes before the call |
 | 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
+| 2026-08-29 | general-manager | Mirrored the joint-sampling contract delta (VERSAILLES-165): multi-param guard oracles now plan as runnable property blocks — equality-mirror (`p1 == p2` / `p1 === p2` → emitted callback contains `const p2 = p1;`, zero filter sparsity) and record-based coupled sampling with cross-param bounds derived from sum/difference leaves before any filter (healthy valid region, no hang, no "too many pre-conditions"); `PROPERTY_UNPLANNABLE` retained only for genuinely unrepresentable shapes (non-mirrorable equality, unboundable couplings, unrenderable oracles, component-typed params) — still a non-silent warning, never a silent zero |
 | 2026-08-28 | associate-head-coach | Added seeded PBT emission per ADR-0017 (opt-in via `config.propertyBased.enabled`, seed derived from context, contract clauses codegen'd as oracle, additive emission, expected-rejection sweep replaced when enabled); determinism re-scoped to generation-time only |
