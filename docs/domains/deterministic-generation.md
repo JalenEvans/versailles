@@ -29,7 +29,7 @@ This context is **language-agnostic** — the test-case IR and case-generation l
 
 ## Ubiquitous language
 
-Uses from [glossary](../glossary.md): *generated test, test-case IR, emitter plugin, boundary value, equivalence partition, precondition-violation case, postcondition-satisfaction case, invariant test, rejection idiom, coverage manifest, traceability comment, approved contract*. "A test checker" is an *emitter*; "case categories" are the *TestCaseKind* values; "drift in coverage" is a *clause with zero generated tests*.
+Uses from [glossary](../glossary.md): *generated test, test-case IR, emitter plugin, boundary value, equivalence partition, precondition-violation case, postcondition-satisfaction case, invariant test, rejection idiom, coverage manifest, traceability comment, approved contract, joint sampling, equality-mirror, record sampling, cross-param propagation*. "A test checker" is an *emitter*; "case categories" are the *TestCaseKind* values; "drift in coverage" is a *clause with zero generated tests*.
 
 ## Domain events
 
