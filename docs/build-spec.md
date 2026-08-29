@@ -93,6 +93,10 @@ drifts from what is committed.
   },
   "rejection": {
     "idiom": "throws"
+  },
+  "propertyBased": {
+    "enabled": false,
+    "numRuns": 100
   }
 }
 ```
@@ -107,6 +111,13 @@ drifts from what is committed.
 - `rejection.idiom`: how the generator's precondition-violation emitter asserts rejection —
   `throws` expects the operation to throw (`toThrow`-style assertion), `returns` expects an
   error return value; default `throws` (ADR-0007).
+- `propertyBased.enabled`: opt-in seeded PBT emission (ADR-0017) — `false` (default) keeps
+  the v1 concrete-case output byte-identical (no property blocks, no new imports); `true`
+  additionally emits seed-pinned property blocks alongside the concrete cases.
+- `propertyBased.numRuns`: property runs per emitted block (default 100).
+- `propertyBased.seed`: optional explicit seed override; when absent, each block's seed is
+  derived as a 32-bit int from a stable hash of the context (the block's clause IDs +
+  grammar version).
 
 ### 3.2 `contracts.json`
 
@@ -560,6 +571,58 @@ requirement, sequenced after v1" per the roadmap phase sequence (ADR-0014 / road
   shape is a deliberate design-for-it decision that keeps the SMT-LIB translation
   mechanical when the L3/L4 engine phases begin.
 
+### 9.6 Seeded PBT emission (opt-in, ADR-0017)
+
+Seeded property-based test (PBT) emission is an opt-in, additive generator capability
+(ADR-0017) that mitigates the v1 "vacuous interaction case" defect for compound boolean
+preconditions until SMT-sound synthesis ships (§9.5). Behavioral intent lives in
+[SPEC-dg](specs/deterministic-generation.md); this subsection is the implementation
+reference.
+
+- **Opt-in config** — `config.propertyBased.enabled` (default `false`). When `false` or
+  absent, the emitted suite is byte-identical to the v1 concrete-case output: no property
+  blocks, no new imports (backward-compat pin). When `true`, property blocks are emitted
+  **additively** alongside the concrete cases — the concrete cases remain the audit spine
+  for `coverage.json` traceability.
+- **Seed derivation** — every property block's run is pinned via
+  `fc.assert(prop, { seed, numRuns })`. The seed is a 32-bit int derived from a stable hash
+  of the context — the block's clause IDs + grammar version — unless
+  `config.propertyBased.seed` overrides it explicitly. Because the seed is a literal derived
+  at generation time, `versailles generate` twice on the same context still produces
+  byte-identical files (ADR-0002, re-scoped to generation-time by ADR-0017), while the
+  emitted test itself is reproducible run-to-run. `numRuns` defaults to 100.
+- **Per-param arbitraries** — derive from manifest/param typeRefs and the planner's numeric
+  constraint bounds: numeric params → bounded integer/float ranges from the constraints
+  (`fc.integer({ min, max })`-style), `in`/enum params → member constants, strings →
+  bounded strings. A clause whose valid region is unrepresentable from bounds/typeRefs is
+  unplannable (see warnings below).
+- **Clause-codegen'd oracles** — the contract clauses are codegen'd into the generated test
+  as inline predicate functions (pure by grammar); predicate calls resolve to the real
+  registered predicate functions. The property asserts the clause holds (postcondition-
+  satisfaction, invariant-preservation) or rejects via the configured idiom
+  (precondition-violation, expected-rejection, ADR-0007).
+- **Strategy selection summary** — property blocks are planned per case kind:
+
+  | Case kind | Arbitrary strategy | Oracle |
+  |---|---|---|
+  | Postcondition-satisfaction | valid pre-state + per-param arbitraries | postcondition clauses |
+  | Invariant-preservation | valid pre-state + per-param arbitraries | invariant clauses |
+  | Precondition-violation | arbitrary per param falsifying one clause, satisfying the others | configured rejection idiom |
+  | Expected-rejection | inputs satisfying postconditions but violating an invariant | configured rejection idiom |
+
+- **Expected-rejection sweep replacement** — when `propertyBased.enabled` is true, the §9.2
+  expected-rejection bounded sweep (`EXPECTED_REJECTION_SWEEP_MAX`) is **replaced** by the
+  expected-rejection property; the sweep remains the non-PBT fallback when disabled.
+- **Unplannable warnings** — a clause that cannot be turned into a filterable arbitrary
+  surfaces a non-silent non-blocking warning (same tier as `PREDICATE_UNPLANNABLE` — exit 0,
+  warning in `CliResult.warnings`) — never a silent zero — and its coverage gap stays
+  visible in `coverage.json` (§9.3).
+- **Emitter rollout** — behind the ADR-0009 seam: vitest + fast-check first; pytest +
+  hypothesis and xUnit + FsCheck follow. The consuming project adds the PBT library as a
+  dev dependency — the tool ships the codegen, not the library.
+- **Traceability** — property blocks carry traceability comments (§9.3) and are mapped as a
+  unit in `coverage.json`.
+
 ---
 
 ## 10. Machine-readable CLI surface
@@ -698,5 +761,6 @@ layout above.
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-08-28 | general-manager | §3.1 config example gained the `propertyBased { enabled, numRuns, seed? }` block; new §9.6 Seeded PBT emission (ADR-0017): opt-in config, seed derivation (32-bit stable hash of block clause IDs + grammar version, explicit override), per-param arbitraries, clause-codegen'd oracles, strategy selection table, expected-rejection sweep replacement, unplannable warnings, emitter rollout (vitest/fast-check first) |
 | 2026-08-21 | general-manager | §9/§12 now describe both `generate` entry points — contract-first (greenfield, contracts-only) and extract-first (brownfield, manifests required) — per ADR-0011 Neutral consequence |
 | 2026-08-20 | general-manager | Corrected the overstated postcondition-satisfaction guarantee in §9.1 (Center review, PR fix/generator-postcondition-violation): satisfaction cases assert only the simple field-compare postconditions (`field op expr`) — predicate-call, both-side-fieldRef, and uncomputable clauses contribute no assertion (conservative skip; the case is still emitted and traced) — and void-returning instance operations assert instance state, not "the result"; the §9.4 canonical instance snippet now includes the captured pre-state seed line (`instance.<field> = <captured>;`) the emitter writes before the call |
