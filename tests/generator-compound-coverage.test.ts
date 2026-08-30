@@ -50,18 +50,27 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  * block RUNS (the W1 execution gate in tests/emitters-pbt.test.ts).
  *
  * A 2-param coupled compound (e.g. `a >= 0 and b >= 0 and a + b <= 100` →
- * `(a, b) => ...`) is PROPERTY_UNPLANNABLE (Center B1 fix): a multi-param
- * oracle cannot be turned into per-param filterable arbitraries — the
- * emitted block filters each arbitrary with the codegen'd oracle, and
- * fast-check's filter passes ONE value, so the multi-param filter would
- * evaluate the predicate against undefined and silently discard the whole
- * domain. The planner surfaces the clause non-silently via the
- * PROPERTY_UNPLANNABLE warning (same non-blocking tier as
- * PREDICATE_UNPLANNABLE — CliResult.warnings, exit 0), skips the descriptor,
- * and keeps the strategy record at "property" (the SELECTOR still chooses
- * property; the PLANNER finds it unplannable). The v1 heuristic misses the
- * same clause SILENTLY (zero cases) — PBT signals it NON-SILENTLY via the
- * warning: never a silent zero.
+ * `(a, b) => ...`) is PLANNED under VERSAILLES-165 via the **record +
+ * bounded filter** joint-sampling strategy: the planner derives per-param
+ * bounds INCLUDING cross-param propagation from the sum leaf BEFORE any
+ * filter (`a + b <= 100` with lower bounds L_a = 0, L_b = 0 → `a <= 100`,
+ * `b <= 100`), so the sampled joint region is bounded first and the valid
+ * region stays healthy (~>=50%) — never filter-sparse, never a hang. The
+ * clause's descriptor carries the derived bounds (`a: { min: 0, max: 100 }`,
+ * `b: { min: 0, max: 100 }`) and NO `PROPERTY_UNPLANNABLE` warning — the
+ * multi-param oracle is never emitted as a per-param `.filter` (fast-check's
+ * filter passes ONE value, so a per-param filter would evaluate the predicate
+ * against undefined and hang). Only genuinely unrepresentable shapes — an
+ * unboundable coupling (no derivable cross-param bounds), a coupling whose
+ * propagation yields INVERTED bounds (min > max — an unsatisfiable region,
+ * Center W1), a coupling referencing a manifest-FIELD operand (Center B2),
+ * non-mirrorable equality, equality-of-sums, an `or`-clause whose bounds are
+ * excluded from propagation (Center W4), unrenderable oracles, component-typed
+ * params — stay `PROPERTY_UNPLANNABLE` (same non-blocking tier as
+ * `PREDICATE_UNPLANNABLE` — `CliResult.warnings`, exit 0), descriptor skipped,
+ * strategy record kept at "property" (the SELECTOR still chooses property; the
+ * PLANNER finds it unplannable). The v1 heuristic misses the clause SILENTLY
+ * (zero cases) — PBT plans it non-silently (VERSAILLES-165).
  *
  * Fixture style mirrors tests/generator.test.ts / generator-planner-pbt.test.ts
  * (in-memory, fully-loaded, isValid VersaillesContext built from real parsed
@@ -124,11 +133,12 @@ function parseAll(contracts: ContractsFile): Record<string, Node> {
 function makeContext(
 	contracts: ContractsFile,
 	propertyBased?: WorkspaceConfig["propertyBased"],
+	manifests: ManifestsFile = EMPTY_MANIFESTS,
 ): VersaillesContext {
 	return {
 		config: makeConfig(propertyBased),
 		contracts,
-		manifests: EMPTY_MANIFESTS,
+		manifests,
 		predicates: EMPTY_PREDICATES,
 		parsedContracts: parseAll(contracts),
 		parseErrors: [],
@@ -242,10 +252,10 @@ describe("v1 concrete plan — the per-clause heuristic misses the compound inte
 	});
 });
 
-// ── PBT plan: the 2-param coupled compound is PROPERTY_UNPLANNABLE ──────────
+// ── PBT plan: the 2-param coupled compound is PLANNED via record + bounded filter ──
 
-describe("planPropertyBlocks — the 2-param coupled compound is PROPERTY_UNPLANNABLE (Center B1 fix)", () => {
-	it("marks the clause PROPERTY_UNPLANNABLE — descriptor absent, warning present, strategy stays property (never a silent zero)", () => {
+describe("planPropertyBlocks — the 2-param coupled compound is PLANNED via record + bounded filter (VERSAILLES-165)", () => {
+	it("plans the coupled compound — cross-param bounds derived from the sum leaf, NO warning, descriptor present, strategy stays property", () => {
 		const ctx = compoundContext();
 		const suite = planTestCases(ctx);
 		const { descriptors, strategies, warnings } = planPropertyBlocks(
@@ -254,50 +264,93 @@ describe("planPropertyBlocks — the 2-param coupled compound is PROPERTY_UNPLAN
 		);
 
 		// The SELECTOR still maps the compound to "property" (the strategy is
-		// the open-question coverage record); the PLANNER finds it unplannable.
+		// the open-question coverage record); the PLANNER now plans it.
 		expect(strategies[COMPOUND_CLAUSE_ID]).toBe("property");
 
-		// The codegen'd oracle (a, b) is a 2-param oracle — it cannot be turned
-		// into per-param filterable arbitraries (fast-check's filter passes ONE
-		// value). Same LoaderWarning channel as PREDICATE_UNPLANNABLE
-		// (CliResult.warnings, non-blocking, exit 0).
-		const warning = warnings.find((w) => w.field === COMPOUND_CLAUSE_ID);
-		expect(warning).toBeDefined();
-		expect(warning?.code).toBe("PROPERTY_UNPLANNABLE");
-		expect(warning?.detail.length).toBeGreaterThan(0);
-
-		// The 2-param clause contributes NO descriptor — the v1 heuristic
-		// misses it silently, PBT signals it non-silently: never a silent zero.
-		expect(descriptors).toEqual([]);
-		expect(descriptors.some((d) => d.traces.includes(COMPOUND_CLAUSE_ID))).toBe(
-			false,
+		// The codegen'd oracle (a, b) is a 2-param oracle. Under VERSAILLES-165
+		// this is NOT blanket-unplannable: it routes to record + bounded
+		// filter. The planner derives the cross-param bounds from the sum leaf
+		// `a + b <= 100` with the operation's known lower bounds L_a = 0
+		// (`a >= 0`), L_b = 0 (`b >= 0`) → a <= 100 - L_b = 100,
+		// b <= 100 - L_a = 100. NO PROPERTY_UNPLANNABLE warning.
+		const code = renderClausePredicate(
+			ctx.parsedContracts[COMPOUND_CLAUSE_ID] as Node,
 		);
+		expect(code).toBe("(a, b) => a >= 0 && b >= 0 && a + b <= 100");
 
-		// The coverage gap stays visible: the clause id remains in the suite's
-		// clause stream (coverage.json maps it to an empty array — the
-		// detectable zero-coverage representation, §9.3).
+		expect(warnings).toEqual([]);
+		expect(descriptors).toHaveLength(1);
+		expect(descriptors[0]).toEqual({
+			id: "OrderService.placeOrder.property-satisfies-0",
+			component: "OrderService",
+			operation: "placeOrder",
+			// Derived cross-param bounds: each param is bounded by the sum leaf
+			// (≤ 100 − the sibling's lower bound = 100) AND its own lower bound.
+			params: [
+				{
+					param: "a",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: 0, max: 100 },
+				},
+				{
+					param: "b",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: 0, max: 100 },
+				},
+			],
+			clauses: [
+				{
+					clauseId: COMPOUND_CLAUSE_ID,
+					code: "(a, b) => a >= 0 && b >= 0 && a + b <= 100",
+				},
+			],
+			outcome: "satisfies",
+			traces: [COMPOUND_CLAUSE_ID],
+			seed: derivePropertySeed([COMPOUND_CLAUSE_ID], "1.0"),
+		});
+
+		// The clause id remains in the suite's clause stream — mapped to the
+		// planned descriptor, not an empty coverage array.
 		expect(suite.clauseIds).toContain(COMPOUND_CLAUSE_ID);
-		expect(coverageManifest(suite).coverage[COMPOUND_CLAUSE_ID]).toEqual([]);
 	});
 
-	it("emits NO multi-param filter for the 2-param compound — the unplannable clause contributes no property block", () => {
+	it("the coupled clause is no longer a zero-coverage gap — the descriptor traces it and no warning surfaces", () => {
 		const ctx = compoundContext();
 		const suite = planTestCases(ctx);
 		const plan = planPropertyBlocks(suite, ctx);
 
-		const files = emitSuite(suite, "vitest", {
-			propertyPlan: plan,
-			propertyNumRuns: 100,
-		});
-		const file = files.find((f) => f.path.endsWith("OrderService.test.ts"));
-		expect(file).toBeDefined();
+		expect(plan.warnings).toEqual([]);
+		const descriptor = plan.descriptors.find((d) =>
+			d.traces.includes(COMPOUND_CLAUSE_ID),
+		);
+		expect(descriptor).toBeDefined();
 
-		// No descriptor ⇒ no fast-check surface, no fc.property, no multi-param
-		// `.filter((a, b) => ...)` broken layout (the B1 bug shape).
-		expect(file?.content).not.toContain("fast-check");
-		expect(file?.content).not.toContain("fc.property");
-		expect(file?.content).not.toContain("a.filter(");
-		expect(file?.content).not.toContain("a + b <= 100");
+		// The emitter renders the record + bounded filter layout
+		// (`fc.record({ a: ..., b: ... }).filter(({ a, b }) => <oracle>)`)
+		// over the bounded joint region — the byte-pinned emitter contract
+		// lives in tests/emitters-pbt-joint.test.ts. The planner's contract
+		// here is the descriptor with derived bounds.
+		expect(descriptor?.params).toEqual([
+			{
+				param: "a",
+				typeRef: "number",
+				kind: "number",
+				bounds: { min: 0, max: 100 },
+			},
+			{
+				param: "b",
+				typeRef: "number",
+				kind: "number",
+				bounds: { min: 0, max: 100 },
+			},
+		]);
+		// No mirrorOf — this is the record + bounded filter strategy.
+		expect(descriptor?.params.some((spec) => spec.mirrorOf !== undefined)).toBe(
+			false,
+		);
+		expect(suite.clauseIds).toContain(COMPOUND_CLAUSE_ID);
 	});
 });
 
@@ -421,10 +474,12 @@ describe("planPropertyBlocks — the SINGLE-param compound IS planned + emitted 
 // coupled inequality (a + b <= 100) — unclassifiable per-clause ("other") —
 // gets NO concrete case at all.
 //
-// Under the Center B1 fix the coupled inequality ALSO cannot become a PBT
-// property: its codegen'd oracle `(a, b) => a + b <= 100` is a 2-param oracle
-// (it references BOTH params), so the planner marks it PROPERTY_UNPLANNABLE —
-// the same non-silent tier as the single-compound form, never a silent zero.
+// Under VERSAILLES-165 the coupled inequality IS planned as a PBT property:
+// its codegen'd oracle `(a, b) => a + b <= 100` is a 2-param oracle, but the
+// sum-leaf cross-param propagation uses the OPERATION-WIDE numeric bounds —
+// the sibling clauses pre0 (`a >= 0`) and pre1 (`b >= 0`) provide the lower
+// bounds, so the coupling is boundable (a <= 100, b <= 100) and routes to
+// record + bounded filter — never a silent zero, never a per-param filter.
 const SPLIT_CLAUDE_IDS = {
 	pre0: "OrderService.placeOrder.pre0", // a >= 0
 	pre1: "OrderService.placeOrder.pre1", // b >= 0
@@ -494,7 +549,7 @@ describe("contrast — the split-clause variant: v1's per-clause boundaries neve
 		expect(coverageManifest(suite).coverage[SPLIT_CLAUDE_IDS.pre2]).toEqual([]);
 	});
 
-	it("the coupled inequality's oracle is MULTI-param → PROPERTY_UNPLANNABLE: descriptor absent, warning present, strategy stays property (never a silent zero)", () => {
+	it("the coupled inequality is PLANNED via cross-param propagation from the sibling clauses' lower bounds (VERSAILLES-165)", () => {
 		const ctx = splitContext();
 		const suite = planTestCases(ctx);
 		const { descriptors, strategies, warnings } = planPropertyBlocks(
@@ -503,9 +558,12 @@ describe("contrast — the split-clause variant: v1's per-clause boundaries neve
 		);
 
 		// Fixture clause-code verification: `a + b <= 100` codegen's to a
-		// TWO-param oracle `(a, b) => ...` — it references BOTH params, so the
-		// B1 rule counts 2 callback params and the clause cannot be turned
-		// into per-param filterable arbitraries.
+		// TWO-param oracle `(a, b) => ...` — it references BOTH params. Under
+		// VERSAILLES-165 this is NOT blanket-unplannable: the sum leaf's
+		// cross-param propagation uses the OPERATION-WIDE numeric bounds — the
+		// sibling clauses pre0 (`a >= 0` → L_a = 0) and pre1 (`b >= 0` → L_b =
+		// 0) provide the lower bounds, so `a + b <= 100` derives a <= 100 - L_b
+		// = 100, b <= 100 - L_a = 100. The coupling IS boundable → PLANNED.
 		const pre2Ast = ctx.parsedContracts[SPLIT_CLAUDE_IDS.pre2];
 		expect(pre2Ast).toBeDefined();
 		expect(renderClausePredicate(pre2Ast)).toBe("(a, b) => a + b <= 100");
@@ -513,31 +571,532 @@ describe("contrast — the split-clause variant: v1's per-clause boundaries neve
 		// Strategy gating is UNCHANGED: the simple numeric-bound clauses stay
 		// "example" (their v1 boundary cases fully cover them); the coupled
 		// inequality — unclassifiable per-clause — still maps to "property"
-		// (the SELECTOR's decision). The PLANNER then finds the 2-param oracle
-		// unplannable and surfaces the warning.
+		// (the SELECTOR's decision). The PLANNER then plans the boundable
+		// coupling.
 		expect(strategies).toEqual({
 			[SPLIT_CLAUDE_IDS.pre0]: "example",
 			[SPLIT_CLAUDE_IDS.pre1]: "example",
 			[SPLIT_CLAUDE_IDS.pre2]: "property",
 		});
 
-		// The multi-param clause contributes NO descriptor — same LoaderWarning
-		// channel as PREDICATE_UNPLANNABLE (CliResult.warnings, non-blocking,
-		// exit 0). The v1 heuristic misses the clause silently; PBT signals it
-		// non-silently: never a silent zero.
-		const warning = warnings.find((w) => w.field === SPLIT_CLAUDE_IDS.pre2);
+		// NO PROPERTY_UNPLANNABLE warning — the clause is planned.
+		expect(warnings).toEqual([]);
+
+		// The descriptor is planned for the coupled inequality, its params
+		// carrying the derived cross-param bounds (own lower bound 0 from the
+		// sibling clause + the propagated upper bound 100 from the sum leaf).
+		expect(descriptors).toHaveLength(1);
+		expect(descriptors[0]).toEqual({
+			id: "OrderService.placeOrder.property-satisfies-0",
+			component: "OrderService",
+			operation: "placeOrder",
+			params: [
+				{
+					param: "a",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: 0, max: 100 },
+				},
+				{
+					param: "b",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: 0, max: 100 },
+				},
+			],
+			clauses: [
+				{
+					clauseId: SPLIT_CLAUDE_IDS.pre2,
+					code: "(a, b) => a + b <= 100",
+				},
+			],
+			outcome: "satisfies",
+			traces: [SPLIT_CLAUDE_IDS.pre2],
+			seed: derivePropertySeed([SPLIT_CLAUDE_IDS.pre2], "1.0"),
+		});
+
+		// The clause id stays in the suite's clause stream — mapped to the
+		// planned descriptor, never a silent zero.
+		expect(suite.clauseIds).toContain(SPLIT_CLAUDE_IDS.pre2);
+	});
+});
+
+// ── B2: a coupled leaf referencing a manifest FIELD is NOT plannable ─────────
+// Center B2: a sum/difference coupling whose operand is a manifest FIELD (not
+// an op param) can never be joint-sampled — the field is instance state, never
+// a record key, never a sampled arbitrary, never a destructured filter param.
+// Even with sound bounds on BOTH sides (balance >= 0 below gives the field a
+// lower bound), the coupling is PROPERTY_UNPLANNABLE: descriptor absent,
+// warning present, strategy stays "property".
+const FIELD_COUPLING_CLAUSE_ID = "OrderService.purchase.pre2";
+
+function fieldOperandCouplingContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					purchase: {
+						id: "OrderService.purchase",
+						params: [{ name: "amount", type: "number" }],
+						preconditions: [
+							{
+								id: "OrderService.purchase.pre0",
+								expr: "amount >= 0",
+							},
+							{
+								id: "OrderService.purchase.pre1",
+								expr: "balance >= 0",
+							},
+							{
+								id: FIELD_COUPLING_CLAUSE_ID,
+								expr: "amount + balance <= 100",
+							},
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "field-coupling-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		version: "1.0",
+		manifests: {
+			OrderService: {
+				sourceHash: "man-field-coupling",
+				fields: { balance: "number" },
+			},
+		},
+	};
+	return makeContext(contracts, { enabled: true, numRuns: 100 }, manifests);
+}
+
+describe("planPropertyBlocks — a coupling referencing a manifest-FIELD operand is PROPERTY_UNPLANNABLE (Center B2)", () => {
+	it("`amount + balance <= 100` with balance a manifest field is NOT plannable — descriptor absent, warning present, strategy stays property", () => {
+		const ctx = fieldOperandCouplingContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
+		);
+
+		// Fixture clause-code verification: the coupling oracle references the
+		// field balance — a TWO-param oracle `(amount, balance) => ...`.
+		const code = renderClausePredicate(
+			ctx.parsedContracts[FIELD_COUPLING_CLAUSE_ID] as Node,
+		);
+		expect(code).toBe("(amount, balance) => amount + balance <= 100");
+
+		// Bounds exist on both sides (amount >= 0, balance >= 0), so a naive
+		// propagation WOULD derive upper[amount] = 100 — but the field operand
+		// is never sampleable/destructureable, so the coupling is NOT planned.
+		const warning = warnings.find((w) => w.field === FIELD_COUPLING_CLAUSE_ID);
 		expect(warning).toBeDefined();
 		expect(warning?.code).toBe("PROPERTY_UNPLANNABLE");
 		expect(warning?.detail.length).toBeGreaterThan(0);
-		expect(descriptors).toEqual([]);
-		expect(
-			descriptors.some((d) => d.traces.includes(SPLIT_CLAUDE_IDS.pre2)),
-		).toBe(false);
 
-		// The coverage gap stays visible: the clause id remains in the suite's
-		// clause stream (coverage.json maps it to an empty array — the
-		// detectable zero-coverage representation, §9.3).
-		expect(suite.clauseIds).toContain(SPLIT_CLAUDE_IDS.pre2);
-		expect(coverageManifest(suite).coverage[SPLIT_CLAUDE_IDS.pre2]).toEqual([]);
+		// No descriptor carries the coupling — and no descriptor's params
+		// reference the field (a field can never be a sampled arbitrary).
+		expect(
+			descriptors.some((d) => d.traces.includes(FIELD_COUPLING_CLAUSE_ID)),
+		).toBe(false);
+		expect(
+			descriptors.flatMap((d) => d.params.map((spec) => spec.param)),
+		).not.toContain("balance");
+
+		// The SELECTOR still records property; the PLANNER finds it unplannable.
+		expect(strategies[FIELD_COUPLING_CLAUSE_ID]).toBe("property");
+		expect(strategies["OrderService.purchase.pre0"]).toBe("example");
+		expect(strategies["OrderService.purchase.pre1"]).toBe("example");
+
+		// The coverage gap stays visible.
+		expect(suite.clauseIds).toContain(FIELD_COUPLING_CLAUSE_ID);
+	});
+});
+
+// ── W1: propagation yielding INVERTED bounds is NOT plannable ────────────────
+// Center W1: `a >= 0 and b >= 200 and a + b <= 100` — the sum leaf derives
+// upper[a] = 100 − 200 = −100 < lower[a] = 0 (and upper[b] = 100 < lower[b] =
+// 200): the propagated joint region is EMPTY/unsatisfiable. An empty region is
+// never a valid fast-check box (fc.integer({ min, max }) with min > max throws
+// at runtime), so the clause is PROPERTY_UNPLANNABLE — descriptor absent,
+// warning present, strategy stays "property".
+const INVERTED_BOUNDS_CLAUSE_ID = "OrderService.balanceOrder.pre0";
+
+function invertedBoundsContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					balanceOrder: {
+						id: "OrderService.balanceOrder",
+						params: [
+							{ name: "a", type: "number" },
+							{ name: "b", type: "number" },
+						],
+						preconditions: [
+							{
+								id: INVERTED_BOUNDS_CLAUSE_ID,
+								expr: "a >= 0 and b >= 200 and a + b <= 100",
+							},
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "inverted-bounds-hash",
+					},
+				},
+			},
+		},
+	};
+	return makeContext(contracts, { enabled: true, numRuns: 100 });
+}
+
+describe("planPropertyBlocks — inverted derived bounds are PROPERTY_UNPLANNABLE (Center W1)", () => {
+	it("`a >= 0 and b >= 200 and a + b <= 100` (empty region) is NOT plannable — descriptor absent, warning present, no inverted bounds anywhere", () => {
+		const ctx = invertedBoundsContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
+		);
+
+		const code = renderClausePredicate(
+			ctx.parsedContracts[INVERTED_BOUNDS_CLAUSE_ID] as Node,
+		);
+		expect(code).toBe("(a, b) => a >= 0 && b >= 200 && a + b <= 100");
+
+		const warning = warnings.find((w) => w.field === INVERTED_BOUNDS_CLAUSE_ID);
+		expect(warning).toBeDefined();
+		expect(warning?.code).toBe("PROPERTY_UNPLANNABLE");
+		expect(warning?.detail.length).toBeGreaterThan(0);
+
+		// No descriptor is planned — and none may carry an inverted
+		// (min > max) bound: a valid joint box must be non-empty.
+		expect(descriptors).toHaveLength(0);
+		for (const descriptor of descriptors) {
+			for (const spec of descriptor.params) {
+				if (spec.bounds !== undefined) {
+					expect(spec.bounds.min).toBeLessThanOrEqual(spec.bounds.max);
+				}
+			}
+		}
+
+		expect(strategies[INVERTED_BOUNDS_CLAUSE_ID]).toBe("property");
+		expect(suite.clauseIds).toContain(INVERTED_BOUNDS_CLAUSE_ID);
+	});
+});
+
+// ── W3: propagation-direction pins (the under-tested corners of the
+// cross-param rules the planner ships with) ──────────────────────────────────
+// Difference coupling: `p1 − p2 <= C` with U2 (b ≤ 100) and L1 (a ≥ 0) →
+// p1 ≤ C + U2 (a ≤ 150), p2 ≥ L1 − C (b ≥ −50).
+const DIFF_CLAUSE_ID = "OrderService.planOrder.pre2";
+
+function differenceCouplingContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					planOrder: {
+						id: "OrderService.planOrder",
+						params: [
+							{ name: "a", type: "number" },
+							{ name: "b", type: "number" },
+						],
+						preconditions: [
+							{ id: "OrderService.planOrder.pre0", expr: "a >= 0" },
+							{ id: "OrderService.planOrder.pre1", expr: "b <= 100" },
+							{ id: DIFF_CLAUSE_ID, expr: "a - b <= 50" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "diff-coupling-hash",
+					},
+				},
+			},
+		},
+	};
+	return makeContext(contracts, { enabled: true, numRuns: 100 });
+}
+
+// Lower-bound direction: `p1 + p2 >= C` with U1 (a ≤ 100), U2 (b ≤ 100) →
+// p1 ≥ C − U2 (a ≥ −50), p2 ≥ C − U1 (b ≥ −50).
+const LOWER_COUPLING_CLAUSE_ID = "OrderService.stockOrder.pre2";
+
+function lowerBoundCouplingContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					stockOrder: {
+						id: "OrderService.stockOrder",
+						params: [
+							{ name: "a", type: "number" },
+							{ name: "b", type: "number" },
+						],
+						preconditions: [
+							{
+								id: "OrderService.stockOrder.pre0",
+								expr: "a <= 100",
+							},
+							{
+								id: "OrderService.stockOrder.pre1",
+								expr: "b <= 100",
+							},
+							{ id: LOWER_COUPLING_CLAUSE_ID, expr: "a + b >= 50" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "lower-coupling-hash",
+					},
+				},
+			},
+		},
+	};
+	return makeContext(contracts, { enabled: true, numRuns: 100 });
+}
+
+// Strict-op handling: `p1 + p2 > C` follows the numericConstraintBounds
+// convention (`> C` → the exclusive boundary C+1), so `a + b > 50` propagates
+// with C+1 = 51 → a ≥ 51 − 100 = −49.
+const STRICT_CLAUSE_ID = "OrderService.strictOrder.pre2";
+
+function strictCouplingContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					strictOrder: {
+						id: "OrderService.strictOrder",
+						params: [
+							{ name: "a", type: "number" },
+							{ name: "b", type: "number" },
+						],
+						preconditions: [
+							{
+								id: "OrderService.strictOrder.pre0",
+								expr: "a <= 100",
+							},
+							{
+								id: "OrderService.strictOrder.pre1",
+								expr: "b <= 100",
+							},
+							{ id: STRICT_CLAUSE_ID, expr: "a + b > 50" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "strict-coupling-hash",
+					},
+				},
+			},
+		},
+	};
+	return makeContext(contracts, { enabled: true, numRuns: 100 });
+}
+
+describe("planPropertyBlocks — propagation-direction pins (W3)", () => {
+	it("difference coupling `a - b <= 50` with a >= 0, b <= 100 derives a {0, 150}, b {-50, 100}", () => {
+		const ctx = differenceCouplingContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, warnings } = planPropertyBlocks(suite, ctx);
+
+		expect(warnings).toEqual([]);
+		expect(descriptors).toHaveLength(1);
+		expect(descriptors[0]).toEqual({
+			id: "OrderService.planOrder.property-satisfies-0",
+			component: "OrderService",
+			operation: "planOrder",
+			params: [
+				{
+					param: "a",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: 0, max: 150 },
+				},
+				{
+					param: "b",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: -50, max: 100 },
+				},
+			],
+			clauses: [{ clauseId: DIFF_CLAUSE_ID, code: "(a, b) => a - b <= 50" }],
+			outcome: "satisfies",
+			traces: [DIFF_CLAUSE_ID],
+			seed: derivePropertySeed([DIFF_CLAUSE_ID], "1.0"),
+		});
+		expect(suite.clauseIds).toContain(DIFF_CLAUSE_ID);
+	});
+
+	it("lower-bound direction `a + b >= 50` with a <= 100, b <= 100 derives a {-50, 100}, b {-50, 100}", () => {
+		const ctx = lowerBoundCouplingContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, warnings } = planPropertyBlocks(suite, ctx);
+
+		expect(warnings).toEqual([]);
+		expect(descriptors).toHaveLength(1);
+		expect(descriptors[0]).toEqual({
+			id: "OrderService.stockOrder.property-satisfies-0",
+			component: "OrderService",
+			operation: "stockOrder",
+			params: [
+				{
+					param: "a",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: -50, max: 100 },
+				},
+				{
+					param: "b",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: -50, max: 100 },
+				},
+			],
+			clauses: [
+				{
+					clauseId: LOWER_COUPLING_CLAUSE_ID,
+					code: "(a, b) => a + b >= 50",
+				},
+			],
+			outcome: "satisfies",
+			traces: [LOWER_COUPLING_CLAUSE_ID],
+			seed: derivePropertySeed([LOWER_COUPLING_CLAUSE_ID], "1.0"),
+		});
+		expect(suite.clauseIds).toContain(LOWER_COUPLING_CLAUSE_ID);
+	});
+
+	it("strict-op handling `a + b > 50` follows the C+1 convention — derives a {-49, 100}, b {-49, 100}", () => {
+		const ctx = strictCouplingContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, warnings } = planPropertyBlocks(suite, ctx);
+
+		expect(warnings).toEqual([]);
+		expect(descriptors).toHaveLength(1);
+		expect(descriptors[0]).toEqual({
+			id: "OrderService.strictOrder.property-satisfies-0",
+			component: "OrderService",
+			operation: "strictOrder",
+			params: [
+				{
+					param: "a",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: -49, max: 100 },
+				},
+				{
+					param: "b",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: -49, max: 100 },
+				},
+			],
+			clauses: [{ clauseId: STRICT_CLAUSE_ID, code: "(a, b) => a + b > 50" }],
+			outcome: "satisfies",
+			traces: [STRICT_CLAUSE_ID],
+			seed: derivePropertySeed([STRICT_CLAUSE_ID], "1.0"),
+		});
+		expect(suite.clauseIds).toContain(STRICT_CLAUSE_ID);
+	});
+});
+
+// ── W4: `or`-derived bounds are EXCLUDED from propagation ───────────────────
+// Center W4: `a <= 10 or a >= 100` claims bounds on a from BOTH disjuncts
+// (upper 10 AND lower 100) — a union of intervals, NOT a sound single bound,
+// so those bounds must never feed a sibling coupling's cross-param
+// propagation. With the or-bounds excluded, the coupling `a + b <= 50` has no
+// lower bound on a → unboundable → PROPERTY_UNPLANNABLE (never a descriptor
+// carrying unsound/inverted bounds derived from the disjuncts).
+const OR_CLAUSE_ID = "OrderService.mixOrder.pre0";
+const OR_COUPLING_CLAUSE_ID = "OrderService.mixOrder.pre2";
+
+function orDerivedBoundsContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		version: "1.0",
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					mixOrder: {
+						id: "OrderService.mixOrder",
+						params: [
+							{ name: "a", type: "number" },
+							{ name: "b", type: "number" },
+						],
+						preconditions: [
+							{ id: OR_CLAUSE_ID, expr: "a <= 10 or a >= 100" },
+							{ id: "OrderService.mixOrder.pre1", expr: "b >= 0" },
+							{ id: OR_COUPLING_CLAUSE_ID, expr: "a + b <= 50" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "or-bounds-hash",
+					},
+				},
+			},
+		},
+	};
+	return makeContext(contracts, { enabled: true, numRuns: 100 });
+}
+
+describe("planPropertyBlocks — `or`-derived bounds never feed propagation (Center W4)", () => {
+	it("a coupling that would rely on an or-clause's bounds becomes PROPERTY_UNPLANNABLE — no descriptor with unsound/inverted bounds", () => {
+		const ctx = orDerivedBoundsContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
+		);
+
+		// Fixture clause-code verification: the or-clause is a single-param
+		// oracle, the coupling a 2-param oracle.
+		const orCode = renderClausePredicate(
+			ctx.parsedContracts[OR_CLAUSE_ID] as Node,
+		);
+		expect(orCode).toBe("(a) => a <= 10 || a >= 100");
+		const couplingCode = renderClausePredicate(
+			ctx.parsedContracts[OR_COUPLING_CLAUSE_ID] as Node,
+		);
+		expect(couplingCode).toBe("(a, b) => a + b <= 50");
+
+		// The coupling is unplannable (the or-bounds on a are excluded, so no
+		// lower bound exists for the sum leaf).
+		const couplingWarning = warnings.find(
+			(w) => w.field === OR_COUPLING_CLAUSE_ID,
+		);
+		expect(couplingWarning).toBeDefined();
+		expect(couplingWarning?.code).toBe("PROPERTY_UNPLANNABLE");
+
+		// No descriptor is planned — and none may carry inverted (min > max)
+		// bounds derived from the or-clause's conflicting disjuncts.
+		expect(descriptors).toHaveLength(0);
+		for (const descriptor of descriptors) {
+			for (const spec of descriptor.params) {
+				if (spec.bounds !== undefined) {
+					expect(spec.bounds.min).toBeLessThanOrEqual(spec.bounds.max);
+				}
+			}
+		}
+
+		// The SELECTOR keeps the compound clauses at property; the PLANNER
+		// finds the operation's accept-side blocks unplannable.
+		expect(strategies[OR_CLAUSE_ID]).toBe("property");
+		expect(strategies["OrderService.mixOrder.pre1"]).toBe("example");
+		expect(strategies[OR_COUPLING_CLAUSE_ID]).toBe("property");
+
+		// The coverage gaps stay visible.
+		expect(suite.clauseIds).toContain(OR_CLAUSE_ID);
+		expect(suite.clauseIds).toContain(OR_COUPLING_CLAUSE_ID);
 	});
 });

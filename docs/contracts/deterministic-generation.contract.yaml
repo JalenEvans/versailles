@@ -19,6 +19,7 @@ owns:
   - "Resolvable emitter module paths: import specifiers derived from the project-root-relative manifest sourcePath (POSIX separators) computed relative to the generated file's directory, so the emitted import resolves to the real source file; deterministic fallback when sourcePath is absent (build-spec §9.4, VERSAILLES-24)"
   - "Non-silent planning warnings for unrenderable operations: a planned operation with no matching method metadata and no resolvable source method surfaces a non-blocking UNPLANNABLE_OPERATION warning (same tier as PREDICATE_UNPLANNABLE — CliResult.warnings, exit 0) and is never emitted as an unrunnable static call (build-spec §9.1, VERSAILLES-25); the guard fires whenever the component's entry carries a methods key — empty or not — missing the planned op, and only an entry lacking the methods key entirely (a preserved legacy entry the extractor never touched) keeps the legacy default (VERSAILLES-25 follow-up)"
   - "Seeded PBT emission (ADR-0017): opt-in property-block planning and emission (vitest + fast-check first behind the ADR-0009 seam) — per-param arbitraries derived from typeRefs + numeric constraint bounds, contract clauses codegen'd into the test as the oracle, seed literals derived from the context (a 32-bit stable hash of the block's clause IDs + grammar version) or the explicit config.propertyBased.seed override, additive to the concrete cases; the v1 default output is byte-identical when disabled"
+  - "Joint sampling for multi-param guard oracles (VERSAILLES-165): equality-mirror — a guard oracle p1 == p2 / p1 === p2 (bothSideFieldRef, both operands operation params) generates p1 from its arbitrary and mirrors the value to p2 (the emitted callback contains `const p2 = p1;`), no filter, zero filter sparsity — and record-based coupled sampling — coupled numeric compounds over multiple params (e.g. `a >= 0 and b >= 0 and a + b <= 100`) derive per-param bounds including cross-param propagation from sum/difference leaves, then sample a bounded joint region via `fc.record({ a: ..., b: ... }).filter(({ a, b }) => <oracle>(a, b))`; a bothSideFieldRef equality with a manifest-FIELD operand (e.g. `status == newStatus`) routes to the emitter's FIELD-BOUND layout (Center B1) — op-params only, the component instance bound, the field mapped to `instance.<field>` in the assertion, no mirror/record/filter; `PROPERTY_UNPLANNABLE` is retained only for genuinely unrepresentable shapes (non-mirrorable equality, equality-of-sums, field-operand couplings, inverted derived bounds, zero-param field-field equalities, unboundable couplings, unrenderable oracles, component-typed params)"
 
 purpose: |
   deterministic-generation is the core value proposition of Versailles: a pure, deterministic
@@ -35,7 +36,18 @@ purpose: |
   the oracle, and whose runs are pinned by a seed literal derived from the context (a 32-bit
   stable hash of the block's clause IDs + grammar version) or an explicit override — generation
   stays a pure function and regeneration stays byte-identical even though the emitted test
-  explores many inputs at run time. Predicate-call preconditions (e.g. isPositive(amount)) are planned too: at least one
+  explores many inputs at run time. Multi-param guard oracles (e.g. `p1 == p2`, or coupled
+  numeric compounds like `a >= 0 and b >= 0 and a + b <= 100`) are planned with joint sampling
+  (VERSAILLES-165): the equality-mirror strategy emits `const p2 = p1;` so both params derive
+  from one arbitrary with zero filter sparsity, record-based coupled sampling derives
+  cross-param bounds from sum/difference leaves then filters a bounded joint region, and a
+  bothSideFieldRef equality with a manifest-FIELD operand (e.g. `status == newStatus`) uses
+  the FIELD-BOUND layout — op-params only, the component instance bound, the field mapped to
+  `instance.<field>` in the assertion (Center B1) — the valid region stays healthy, never
+  filter-sparse, never a hang; only genuinely unrepresentable shapes (non-mirrorable
+  equality, equality-of-sums, field-operand couplings, inverted derived bounds, zero-param
+  field-field equalities, unboundable couplings, unrenderable oracles, component-typed
+  params) surface `PROPERTY_UNPLANNABLE`. Predicate-call preconditions (e.g. isPositive(amount)) are planned too: at least one
   deterministic violation case per predicate call, or an explicit non-silent warning — never a
   silent zero — and valid-input synthesis is predicate-aware so a registered predicate guard
   never receives a value it rejects. Emitters render shape-aware calls from manifest method
@@ -60,6 +72,7 @@ invariants:
   - "Emitted module import specifiers derived from a manifest sourcePath resolve to the real source file from the generated file's directory — resolvability is required, not merely a matching extension or suffix (build-spec §9.4, VERSAILLES-24)."
   - "PBT blocks are emitted only when config.propertyBased.enabled is true; with enabled false (or absent) the emitted suite is byte-identical to the v1 concrete-case output — no property blocks, no new imports (ADR-0017)."
   - "Every emitted property block carries a seed literal derived deterministically from the context (a 32-bit stable hash of the block's clause IDs + grammar version) or the explicit config.propertyBased.seed override, so generation stays a pure function and the emitted test is reproducible run-to-run (ADR-0017)."
+  - "A multi-param guard oracle of a documented joint-sampling shape (equality-mirror `p1 == p2` / `p1 === p2`, a bothSideFieldRef equality with a manifest-FIELD operand via the FIELD-BOUND layout, or a numeric sum/difference coupling) always produces a runnable property block — never a per-param .filter over a multi-param predicate, never a hanging property; PROPERTY_UNPLANNABLE is reserved for genuinely unrepresentable shapes (VERSAILLES-165)."
 
 operations:
   plan_cases:
@@ -125,11 +138,19 @@ operations:
       - "When enabled, the expected-rejection property replaces the §9.2 bounded sweep (EXPECTED_REJECTION_SWEEP_MAX); the sweep remains the non-PBT fallback when disabled"
       - "A clause that cannot be turned into a filterable arbitrary surfaces a non-silent non-blocking warning (same tier as PREDICATE_UNPLANNABLE — CliResult.warnings, exit 0) — never a silent zero; the skipped clause's coverage gap stays visible in coverage.json"
       - "Rejection properties assert the configured rejection idiom (default throws, ADR-0007)"
+      - "Multi-param guard oracles are planned with joint sampling, never a per-param .filter over a multi-param predicate: an equality oracle p1 == p2 / p1 === p2 (bothSideFieldRef, both operands operation params) generates p1 from its arbitrary and mirrors the value to p2 — the emitted callback contains `const p2 = p1;`, no filter, zero filter sparsity; a bothSideFieldRef equality with a manifest-FIELD operand (e.g. `status == newStatus`) renders the FIELD-BOUND layout (Center B1) — op-params only, the component instance bound, the field mapped to `instance.<field>` in the assertion, no mirror/record/filter; a coupled numeric compound over multiple params (e.g. `a >= 0 and b >= 0 and a + b <= 100`) derives per-param bounds including cross-param propagation from sum/difference leaves (`p1 + p2 <= C` with lower bounds L1, L2 → `p1 <= C - L2`, `p2 <= C - L1`; mirrored for `>=`/`>` with upper bounds) and emits `fc.record({ a: ..., b: ... }).filter(({ a, b }) => <oracle>(a, b))` over the bounded joint region — bounded space first so the valid region is healthy (~>=50%), never filter-sparse, never a hang (VERSAILLES-165)"
+      - "A multi-param oracle of an unsupported shape — non-mirrorable equality (`!=`/`!==`), equality-of-sums (`a + b == C`), a coupling referencing a manifest-field operand, a coupling whose propagation yields inverted bounds (unsatisfiable region), a zero-param field-field equality (`f1 == f2`), an unboundable coupling, an unrenderable oracle, or a component-typed param — surfaces a non-silent non-blocking PROPERTY_UNPLANNABLE warning (CliResult.warnings, exit 0) — never a silent zero, never a hanging property (VERSAILLES-165)"
     examples:
       - input: "plan_property_blocks(context with propertyBased.enabled true, operation placeOrder with precondition 'x >= 0', numRuns 100)"
         output: "a postcondition-satisfaction property block over integer arbitraries bounded by the numeric constraints, asserting the clause via the codegen'd oracle, pinned by a derived seed literal"
       - input: "plan_property_blocks(context with an unplannable compound precondition clause)"
         output: "a non-silent non-blocking warning in CliResult.warnings (exit 0); no property block for that clause and its coverage gap stays visible in coverage.json"
+      - input: "plan_property_blocks(context, operation placeOrder with precondition 'x >= 0 and y >= 0 and x + y <= 100')"
+        output: "a runnable property block over fc.record({ x: ..., y: ... }).filter(({ x, y }) => <oracle>) — cross-param bounds x <= 100 - L_y, y <= 100 - L_x derived from the sum leaf before any filter so the valid region stays healthy (~>=50%), never filter-sparse, never a hang (VERSAILLES-165)"
+      - input: "plan_property_blocks(context, operation transfer with postcondition 'fromBalance == toBalance' — a bothSideFieldRef equality oracle)"
+        output: "a runnable property block sampling fromBalance from its arbitrary and emitting `const toBalance = fromBalance;` in the callback — no .filter, zero filter sparsity; the mirror guarantees the oracle holds (VERSAILLES-165)"
+      - input: "plan_property_blocks(context, operation setStatus with postcondition 'status == newStatus' — a bothSideFieldRef equality with a manifest-FIELD operand)"
+        output: "a runnable property block in the FIELD-BOUND layout (Center B1): only the op-param arbitrary (newStatus) is sampled, the component instance is bound, the call passes the sampled params, and the assertion maps the field to instance.status — no mirror const, no record, no filter (VERSAILLES-165)"
 
 must:
   - "Plan boundary cases for every numeric comparison in preconditions: at the boundary, boundary - 1, and boundary + 1 (build-spec §9.1)."
@@ -155,6 +176,10 @@ must:
   - "When propertyBased is enabled, replace the §9.2 expected-rejection bounded sweep with the expected-rejection property; the sweep remains the non-PBT fallback when disabled (ADR-0017)."
   - "Assert rejection in property blocks with the configured rejection idiom (default throws, ADR-0007)."
   - "Surface a non-silent non-blocking warning (same tier as PREDICATE_UNPLANNABLE — CliResult.warnings, exit 0) for a clause that cannot be turned into a filterable arbitrary — never a silent zero; the clause's coverage gap stays visible in coverage.json (ADR-0017)."
+  - "Derive cross-param bounds for coupled numeric compounds BEFORE emitting any filter — sum/difference leaves with known per-param lower bounds propagate upper bounds across params (`p1 + p2 <= C` with L1, L2 → `p1 <= C - L2`, `p2 <= C - L1`; `>=`/`>` mirrors with upper bounds) so the sampled joint region is bounded first and the valid region stays healthy (~>=50%) — this is the filter-sparsity mitigation for multi-param oracles (VERSAILLES-165)."
+  - "Mirror equality-oracle params jointly: for a guard `p1 == p2` / `p1 === p2` with both operands operation params, sample p1 from its arbitrary and emit `const p2 = p1;` in the callback — the mirror params are never independently sampled (VERSAILLES-165)."
+  - "Render a bothSideFieldRef equality with a manifest-FIELD operand (`f == p`, e.g. `status == newStatus`) via the FIELD-BOUND layout (Center B1): sample ONLY the op-param arbitraries, bind the component instance, call with the sampled params positionally, and assert the oracle with the field mapped to `instance.<field>` — never a mirror const, never a record, never a filter on the field; a field-referencing multi-param guard in the operation's guard set makes every OTHER satisfies/invariant-preserving descriptor of the operation PROPERTY_UNPLANNABLE (the mirror/record layouts cannot filter with a field-referencing sibling), while a zero-param field-field equality (`f1 == f2`) is PROPERTY_UNPLANNABLE because the FIELD-BOUND layout has no arbitrary to sample (VERSAILLES-165)."
+  - "Route every multi-param guard oracle to a joint-sampling strategy (equality-mirror, FIELD-BOUND, or record-based coupled sampling) or, when the shape is unsupported, surface PROPERTY_UNPLANNABLE — a multi-param predicate is never emitted as a per-param .filter (VERSAILLES-165)."
 
 must_not:
   - "Must not run generation against a context where isValid is false — invalid contracts block generation (build-spec §9)."
@@ -173,6 +198,9 @@ must_not:
   - "Must not emit PBT blocks when config.propertyBased.enabled is false — the v1 default output stays byte-identical (no property blocks, no new imports) (ADR-0017)."
   - "Must not emit a property block whose run is unpinned — every PBT block carries a seed literal derived from the context (or the explicit config override) so the emitted test is reproducible run-to-run and regeneration stays byte-identical (ADR-0017)."
   - "Must not skip an unplannable PBT clause silently — a clause that cannot become a filterable arbitrary surfaces a non-silent non-blocking warning (same tier as PREDICATE_UNPLANNABLE, exit 0) and its coverage gap stays visible in coverage.json (ADR-0017)."
+  - "Must not emit a per-param .filter for a multi-param oracle — fast-check's .filter() over independently sampled per-param arbitraries receives undefined for the 2nd+ params, filters every candidate, and the property hangs; multi-param oracles must use a joint-sampling strategy (equality-mirror, FIELD-BOUND, record-based coupled sampling) or surface PROPERTY_UNPLANNABLE (VERSAILLES-165)."
+  - "Must not independently sample the two params of an equality-mirror oracle (`p1 == p2`) — independent sampling would make the oracle vanish under filter sparsity; the mirror emits `const p2 = p1;` (VERSAILLES-165)."
+  - "Must not emit a filter for a coupled compound whose bounds were not derived — filtering an unbounded joint region is a hang; cross-param bounds must be derived before any filter or the clause surfaces PROPERTY_UNPLANNABLE (VERSAILLES-165)."
 
 can:
   - "May support additional config-validated rejection idiom values (for example error-return or Result-style) beyond the default throws, as long as emitters consume the configured value."
@@ -182,6 +210,7 @@ can:
   - "May skip emitting an unrenderable operation's cases (VERSAILLES-25) while still mapping its clause IDs in coverage.json so the coverage gap remains detectable."
   - "May accept an explicit config.propertyBased.seed override to pin exploration across contract edits (ADR-0017)."
   - "May emit property blocks additively alongside the concrete cases — the concrete cases remain the audit spine for coverage.json traceability (ADR-0017)."
+  - "May apply the record-based coupled sampling strategy to any conjunction of numeric comparisons and sum/difference couplings whose per-param bounds are derivable — not just the canonical `a + b <= C` shape — as long as the derived joint region stays bounded (VERSAILLES-165)."
 
 limits:
   - "No SMT-backed precise input synthesis or witness generation (v2 stretch, build-spec §9.5) — predicate planning uses deterministic heuristics over registry paramTypes + example hints only."
@@ -192,6 +221,8 @@ limits:
   - "No SMT-backed witness synthesis — seeded PBT emission is stochastic exploration, never a soundness mechanism; SMT remains out of scope for the core (ADR-0014, ADR-0017)."
   - "No execution of generated tests, including property blocks — generation writes files only."
   - "PBT emission requires the consuming project to add the PBT library (fast-check first behind the vitest emitter) as a dev dependency — the tool ships the codegen, not the library (ADR-0017)."
+  - "Joint sampling supports only the documented shapes: equality-mirror (`p1 == p2` / `p1 === p2`, bothSideFieldRef with both operands operation params), the FIELD-BOUND layout (a bothSideFieldRef equality with a manifest-FIELD operand), and numeric sum/difference couplings over multiple params — no general constraint solving, no SMT, no arbitrary multi-param oracles (VERSAILLES-165)."
+  - "Equality-of-sums (`a + b == C`), non-mirrorable equality (`!=` / `!==`), field-operand couplings (a coupling referencing a manifest-field operand), couplings whose propagation yields inverted bounds (unsatisfiable region), zero-param field-field equalities (`f1 == f2`), and unboundable couplings (no derivable cross-param bounds) remain PROPERTY_UNPLANNABLE — they are not joint-sampled (VERSAILLES-165)."
 
 asserts:
   - "assert: two generate runs on the same context produce byte-identical output under generated/."
@@ -212,12 +243,18 @@ asserts:
   - "assert: distinct property blocks in a suite carry distinct seed literals (derived per-block from the covered clause IDs + grammar version, or the explicit config override)."
   - "assert: with config.propertyBased.enabled false (or absent), the emitted suite is byte-identical to the v1 concrete-case output — no property blocks, no new imports (backward-compat pin)."
   - "assert: a clause that cannot be turned into a filterable arbitrary yields a non-silent non-blocking warning in CliResult.warnings (exit 0) — never a silent zero — and its coverage gap stays visible in coverage.json."
+  - "assert: an equality oracle's property block (e.g. a postcondition `fromBalance == toBalance` — both operands operation params) samples both params via the mirror — the emitted callback contains `const p2 = p1;` — and the block runs with no .filter and no filter sparsity (VERSAILLES-165)."
+  - "assert: a field-source equality's property block (e.g. a postcondition `status == newStatus` where status is a manifest field) renders the FIELD-BOUND layout (Center B1) — only the op-param arbitrary is sampled, the component instance is bound, and the assertion maps the field to instance.status; no mirror const, no record, no filter, no PROPERTY_UNPLANNABLE warning (VERSAILLES-165)."
+  - "assert: a coupled compound's property block (e.g. `a >= 0 and b >= 0 and a + b <= 100`) derives cross-param bounds (`a <= 100 - L_b`, `b <= 100 - L_a`) before emitting `fc.record({...}).filter(({ a, b }) => <oracle>)` — the run terminates with no 'too many pre-conditions' failure, no hang, healthy valid region (VERSAILLES-165)."
+  - "assert: an unrepresentable multi-param shape (equality-of-sums, non-mirrorable equality, field-operand coupling, inverted derived bounds, zero-param field-field equality, unboundable coupling, component-typed param, unrenderable oracle) still yields a non-silent PROPERTY_UNPLANNABLE warning in CliResult.warnings (exit 0) and its coverage gap stays visible in coverage.json (VERSAILLES-165)."
 
 ---
 ## Changelog
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-08-29 | general-manager | FIELD-BOUND round (VERSAILLES-165 final implementation, Center B1/B2 + W1 + Fix-1/Fix-2): a bothSideFieldRef equality with a manifest-FIELD operand (`f == p`, e.g. `status == newStatus`) is PLANNED via the emitter's FIELD-BOUND layout — op-params only, the component instance bound, the field mapped to `instance.<field>` in the assertion, no mirror/record/filter; a field-referencing multi-param guard in the guard set makes only the descriptor whose OWN clause is the field-bound equality plannable (siblings PROPERTY_UNPLANNABLE); `PROPERTY_UNPLANNABLE` extended to field-operand couplings (Center B2), couplings whose propagation yields inverted bounds (unsatisfiable region), and zero-param field-field equalities (`f1 == f2`) alongside non-mirrorable equality, equality-of-sums, unboundable couplings, unrenderable oracles, component-typed params; mirror examples corrected to param-param (`fromBalance == toBalance`) — field-source equality is no longer cited as the mirror |
+| 2026-08-29 | general-manager | Joint-sampling delta (VERSAILLES-165): multi-param guard oracles now produce runnable property blocks — equality-mirror (`p1 == p2` / `p1 === p2` → the emitted callback contains `const p2 = p1;`, zero filter sparsity) and record-based coupled sampling (`fc.record({...}).filter(({...}) => <oracle>)` over a bounded joint region with cross-param bounds derived from sum/difference leaves before any filter: `p1 + p2 <= C` with L1, L2 → `p1 <= C - L2`, `p2 <= C - L1`; mirrored for `>=`/`>` with upper bounds); `PROPERTY_UNPLANNABLE` retained only for genuinely unrepresentable shapes (non-mirrorable equality `!=`/`!==` and equality-of-sums `a + b == C`, unboundable couplings, unrenderable oracles, component-typed params); multi-param oracles are never emitted as per-param .filter |
 | 2026-08-28 | general-manager | PBT emission delta (ADR-0017): determinism re-scoped to generation-time only (purpose/invariant/must_not); added propertyBased capability to owns/invariants/operations (new plan_property_blocks)/must/must_not/can/limits/asserts — opt-in seeded property-block emission, seed literals derived from the context, unplannable-clause non-silent warnings, enabled=false backward-compat pin |
 | 2026-08-11 | general-manager | Initial contract from docs/specs/deterministic-generation.md; build-spec §9; ADR-0002/0007/0008/0009/0010 |
 | 2026-08-16 | general-manager | Superseded the "vitest first / no xUnit-pytest in the first milestone" limits and owns/purpose/must wording — the full ADR-0009 emitter matrix (vitest, xUnit, pytest) is now shipped (PR feat/review-ecosystem) |

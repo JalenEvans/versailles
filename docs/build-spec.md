@@ -614,32 +614,63 @@ reference.
   expected-rejection bounded sweep (`EXPECTED_REJECTION_SWEEP_MAX`) is **replaced** by the
   expected-rejection property; the sweep remains the non-PBT fallback when disabled.
 - **Plannability gate** — a property-strategy clause (the strategy table above) is planned
-  only when all three gates pass:
+  only when all gates pass:
   - *Param representability* — every operation param maps to an ArbitrarySpec kind (number
     bounds from the constraints, string, boolean, enum members, list/optional inner kind). A
     param with no kind — e.g. a component-typed param, for which no ArbitrarySpec exists —
-    means the clause's valid region cannot be turned into filterable arbitraries.
+    means the clause cannot be represented as arbitraries at all.
   - *Oracle renderability* — the clause must codegen to an inline predicate
     (`renderClausePredicate`): unregistered predicate names, unsafe identifiers, the `[]`
     wildcard path segment, `in` with a non-literal right operand, unsupported literal types,
     and preState-name collisions are all unrenderable.
-  - *Oracle arity* (the B1 fix) — every guard oracle used to filter a
-    satisfies/invariant-preserving block must be **single-param** (exactly one callback
-    parameter). A multi-param oracle — bothSideFieldRef postconditions such as
-    `status == newStatus`, or coupled compound preconditions over several params such as
-    `a >= 0 and b >= 0 and a + b <= 100` — cannot be applied via fast-check's `.filter()`
-    to per-param arbitraries: the 2nd+ callback params arrive `undefined`, every candidate
-    is filtered out, and the property never terminates. Multi-param oracles are therefore
-    **unplannable**, never joint-filter properties.
-  When any gate fails, the clause surfaces **`PROPERTY_UNPLANNABLE`** — a non-silent,
-  non-blocking warning (same tier as `PREDICATE_UNPLANNABLE`: exit 0, warning in
-  `CliResult.warnings`) — never a silent zero. The descriptor is skipped, the clause id
-  stays in the suite's clause stream so `coverage.json` maps it to a visible zero-coverage
-  gap (§9.3), and the strategy record still reports the selector's choice (`property`) —
-  the warning sits on top of a recorded strategy, never a hidden gap. Single-param
-  compounds (e.g. `amount >= 10 and amount <= 100`) remain planned, runnable properties.
-  This is the plan's filter-sparsity mitigation: honest signaling over broken/hanging
-  properties.
+  - *Sampling strategy* (supersedes the B1 oracle-arity gate) — every guard oracle must
+    route to a runnable sampling strategy. Single-param oracles keep the per-param
+    arbitrary + `.filter` shape. Multi-param oracles — more than one callback parameter —
+    route to one of **three joint-sampling strategies** (VERSAILLES-165, Center B1):
+    - **Equality-mirror** — a guard oracle of the form `p1 == p2` / `p1 === p2`
+      (bothSideFieldRef) with BOTH operands operation params: the planner generates `p1`
+      from its arbitrary and mirrors the value to `p2` — the emitted callback contains
+      `const p2 = p1;`. No filter is needed (the mirror guarantees the oracle), so filter
+      sparsity is zero. `!=`/`!==` and equality-of-sums (`a + b == C`) are NOT mirror-able
+      and stay unplannable.
+    - **FIELD-BOUND** (Center B1) — a bothSideFieldRef equality `f == p` with at least one
+      manifest-FIELD operand (e.g. `status == newStatus` where `status` is instance state,
+      `newStatus` the op param): the field is instance state, never a sampled arbitrary,
+      so the block samples ONLY the op-param arbitraries, binds the component instance
+      (`const instance = new <Component>();`), calls with the sampled params (positional,
+      matching the concrete-case call shape), and asserts the oracle with the field mapped
+      to `instance.<field>`. No mirror const, no record, no filter. A field-referencing
+      multi-param guard in the operation's guard set makes every OTHER
+      satisfies/invariant-preserving descriptor of the operation unplannable (the
+      mirror/record layouts cannot reference manifest fields in their filters); only
+      descriptors whose OWN clause is such a field-bound equality render the FIELD-BOUND
+      layout.
+    - **Record + bounded filter** — coupled numeric compounds over multiple params (e.g.
+      `a >= 0 and b >= 0 and a + b <= 100`): the planner derives per-param bounds
+      including **cross-param propagation** from sum/difference leaves (`p1 + p2 <= C`
+      with lower bounds L1, L2 → `p1 <= C − L2`, `p2 <= C − L1`; mirrored for `>=`/`>`
+      with upper bounds), then the emitter samples a joint region via
+      `fc.record({ a: ..., b: ... }).filter(({ a, b }) => <oracle>(a, b))` — bounded
+      space first so the valid region is healthy (~≥50%), never filter-sparse, never a
+      hang. If bounds cannot be derived (the space is unbounded) the clause stays
+      unplannable.
+  When a gate fails or the shape is unsupported — unrenderable oracles, component-typed
+  params, non-mirrorable equality (`!=`/`!==`), equality-of-sums (`a + b == C`), a
+  coupling that references a manifest-field operand (Center B2), an unboundable coupling
+  (cross-param propagation needs bounds on both operands), a coupling whose propagation
+  yields inverted bounds (unsatisfiable valid region), or a zero-param field-field
+  equality (`f1 == f2`, both operands manifest fields — the FIELD-BOUND layout has no
+  arbitrary to sample) — the clause surfaces **`PROPERTY_UNPLANNABLE`** — a non-silent, non-blocking
+  warning (same tier as `PREDICATE_UNPLANNABLE`: exit 0, warning in `CliResult.warnings`) —
+  never a silent zero. The descriptor is skipped, the clause id stays in the suite's clause
+  stream so `coverage.json` maps it to a visible zero-coverage gap (§9.3), and the strategy
+  record still reports the selector's choice (`property`) — the warning sits on top of a
+  recorded strategy, never a hidden gap. Multi-param oracles are never emitted as a
+  per-param `.filter` (fast-check's `.filter()` over independently sampled per-param
+  arbitraries receives `undefined` for the 2nd+ params, filters every candidate, and the
+  property hangs) — they get a joint-sampling strategy or an honest warning. This is the
+  plan's filter-sparsity mitigation: bounded-space-first joint sampling with honest
+  signaling over broken/hanging properties.
 - **Emitter rollout** — behind the ADR-0009 seam: vitest + fast-check first; pytest +
   hypothesis and xUnit + FsCheck follow. The consuming project adds the PBT library as a
   dev dependency — the tool ships the codegen, not the library.
@@ -784,6 +815,8 @@ layout above.
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-08-29 | general-manager | §9.6 FIELD-BOUND layout (VERSAILLES-165 final rounds, Center B1/B2 + W1 + Fix-1/Fix-2): the sampling strategy becomes THREE joint-sampling strategies — the equality-mirror, the record + bounded filter, and the NEW FIELD-BOUND layout for a bothSideFieldRef equality with a manifest-FIELD operand (`f == p`, e.g. `status == newStatus`): op-params only, component instance bound, the field mapped to `instance.<field>` in the assertion, no mirror/record/filter; a field-referencing multi-param guard in the guard set makes only the descriptor whose OWN clause is the field-bound equality plannable (siblings are PROPERTY_UNPLANNABLE); `PROPERTY_UNPLANNABLE` now also covers a coupling referencing a manifest-field operand (Center B2), a coupling whose propagation yields inverted bounds (unsatisfiable region), and a zero-param field-field equality (`f1 == f2`) — the FIELD-BOUND layout has no arbitrary to sample — alongside the existing non-mirrorable equality, equality-of-sums, unboundable couplings, unrenderable oracles, and component-typed params |
+| 2026-08-29 | general-manager | §9.6 joint sampling (VERSAILLES-165): the oracle-arity gate becomes a sampling-strategy routing — multi-param guard oracles are no longer blanket-unplannable; equality oracles (`p1 == p2` / `p1 === p2`, bothSideFieldRef) route to the equality-mirror strategy (emitted callback contains `const p2 = p1;` — no filter, zero filter sparsity) and coupled numeric compounds route to record + bounded filter (`fc.record({ a: ..., b: ... }).filter(({ a, b }) => <oracle>(a, b))`) with cross-param bounds derived from sum/difference leaves BEFORE any filter (`p1 + p2 <= C` with lower bounds L1, L2 → `p1 <= C − L2`, `p2 <= C − L1`; mirrored for `>=`/`>` with upper bounds) so the valid region stays healthy (~≥50%), never filter-sparse, never a hang; `PROPERTY_UNPLANNABLE` is retained only for genuinely unrepresentable shapes — unrenderable oracles, component-typed params, non-mirrorable equality (`!=`/`!==`, equality-of-sums `a + b == C`), unboundable couplings — and multi-param oracles are never emitted as a per-param `.filter` |
 | 2026-08-29 | general-manager | §9.6 plannability gate corrected (B1 fix, feat/seeded-pbt-emission): the gate is now three checks — param representability (every operation param maps to an ArbitrarySpec kind), oracle renderability (the clause codegens to an inline predicate), and the NEW oracle arity gate (a guard oracle used to filter a satisfies/invariant-preserving block must be single-param); multi-param oracles (bothSideFieldRef postconditions like `status == newStatus`, coupled compound preconditions like `a >= 0 and b >= 0 and a + b <= 100`) are **unplannable** — fast-check's `.filter()` receives `undefined` for the 2nd+ params, all candidates are filtered, and the property hangs — so the clause surfaces `PROPERTY_UNPLANNABLE` (non-silent, exit 0, `CliResult.warnings`), the descriptor is skipped, the clause id stays a visible zero-coverage gap in `coverage.json`, and the strategy record still reports the selector's `property` choice; single-param compounds (e.g. `amount >= 10 and amount <= 100`) remain planned, runnable properties — the plan's filter-sparsity mitigation, honest signaling over broken/hanging properties |
 | 2026-08-28 | general-manager | §3.1 config example gained the `propertyBased { enabled, numRuns, seed? }` block; new §9.6 Seeded PBT emission (ADR-0017): opt-in config, seed derivation (32-bit stable hash of block clause IDs + grammar version, explicit override), per-param arbitraries, clause-codegen'd oracles, strategy selection table, expected-rejection sweep replacement, unplannable warnings, emitter rollout (vitest/fast-check first) |
 | 2026-08-21 | general-manager | §9/§12 now describe both `generate` entry points — contract-first (greenfield, contracts-only) and extract-first (brownfield, manifests required) — per ADR-0011 Neutral consequence |
