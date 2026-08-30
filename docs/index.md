@@ -34,6 +34,7 @@ versailles
 │   │                    workspace-context, deterministic-generation, predicate-registry)
 │   ├── architecture/ ← context map + pluggable-edge seams (ADR-0008/0009)
 │   ├── features/     ← user-visible capabilities (CLI surface)
+│   ├── guides/       ← user-facing walkthroughs (zero-to-green tutorial, seeded PBT consumer guide)
 │   ├── contracts/    ← DbC contracts (one machine-checkable contract per bounded context)
 │   ├── specs/        ← behavioral specs, one per bounded context
 │   ├── decisions/    ← architecture decision records (ADRs)
@@ -92,6 +93,7 @@ PRs and pushes to `main` run both gates automatically via `.github/workflows/val
 - [Domains](domains/index.md) — bounded contexts, ownership, and the context map
 - [Architecture](architecture/index.md) — how the contexts interact; [plugin seams](architecture/plugin-seams.md) (ADR-0008/0009)
 - [Features](features/index.md) — user-visible capabilities mapped to the CLI surface
+- [Guides](guides/index.md) — user-facing walkthroughs (zero-to-green tutorial, seeded PBT consumer guide)
 - [Glossary](glossary.md) — ubiquitous language (single vocabulary — no competing definitions)
 - [Contracts](contracts/index.md) — machine-checkable DbC contracts
 - [Specs](specs/index.md) — behavioral specs, one per bounded context
