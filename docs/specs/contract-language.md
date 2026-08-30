@@ -11,7 +11,7 @@
 
 ## Behavioral Intent
 
-The contract language is the boolean-valued expression grammar (build-spec §4.1) that turns clause `expr` strings into the frozen AST node set (build-spec §4.3). The parser enforces structural constraints at parse time (build-spec §4.2) — `old(field)` is valid only in `postconditions[]`, and the grammar never produces assignments, loops, or statements — and the semantic validator (build-spec §5.1) checks field resolution, type compatibility, `in` operand shape, and predicate usage against the declared predicate map. Both parser and validator always return structured error results (build-spec §4.4, §5.2), never unstructured throws, so CI and external tooling can consume and re-inject them programmatically. Predicate calls resolve only to declared predicates with `verifiedPure: true` (ADR-0006); the validator hard-errors on anything else. The context is language-agnostic (ADR-0008) and never invokes an LLM (ADR-0010).
+The contract language is the boolean-valued expression grammar (build-spec §4.1) that turns clause `expr` strings into the frozen AST node set (build-spec §4.3). The parser enforces structural constraints at parse time (build-spec §4.2) — `old(field)` is valid only in `postconditions[]`, and the grammar never produces assignments, loops, or statements — and the semantic validator (build-spec §5.1) checks field resolution, type compatibility, `in` operand shape, and predicate usage against the declared predicate map. Both parser and validator always return structured error results (build-spec §4.4, §5.2), never unstructured throws, so CI and external tooling can consume and re-inject them programmatically. Predicate calls resolve only to declared predicates with `verifiedPure: true` (ADR-0006); the validator hard-errors on anything else, and an undeclared predicate name (`UNKNOWN_PREDICATE`) gets up to 2 "did you mean" suggestions in its detail when declared keys are within Levenshtein distance ≤ 2 (VERSAILLES-172). The context is language-agnostic (ADR-0008) and never invokes an LLM (ADR-0010).
 
 ## Scope
 
@@ -52,7 +52,7 @@ The contract language is the boolean-valued expression grammar (build-spec §4.1
 
 ### Semantic hard errors block the contract
 
-- **Given** an expression that parsed successfully but references an unknown field, mismatches declared types, has a malformed `in` operand, or calls a predicate with wrong arity/arg types
+- **Given** an expression that parsed successfully but references an unknown field, mismatches declared types, has a malformed `in` operand, references an undeclared predicate, or calls a predicate with wrong arity/arg types
 - **When** the semantic validator runs against the full context (contracts + manifests + predicates)
 - **Then** it returns `{ valid: false, errors: [ { contractId, code, field, detail } ] }` (build-spec §5.2) and the contract cannot pass validation
 
@@ -61,6 +61,13 @@ The contract language is the boolean-valued expression grammar (build-spec §4.1
 - **Given** a predicate call resolving to an entry in the top-level `predicates` map where `verifiedPure` is missing or `false`
 - **When** the semantic validator runs
 - **Then** it hard-errors — the contract cannot reference an unverified predicate (ADR-0006)
+
+### Undeclared predicate names get "did you mean" suggestions
+
+- **Given** a predicate call referencing a name not declared in the top-level `predicates` map
+- **When** the semantic validator runs
+- **Then** it returns an `UNKNOWN_PREDICATE` hard error (build-spec §5.2 shape `{ contractId, code, field, detail }`) whose `detail` appends at most 2 "did you mean" suggestions for declared keys within Levenshtein distance ≤ 2 — one suggestion reads ` — did you mean "X"?`, two join as `"a" or "b"` — ordered distance-then-alphabetically (closest match first, ties alphabetical) (VERSAILLES-172)
+- **And** no suggestion is appended when no predicates are declared (empty registry) or no declared key is within range; suggestions live only in the `detail` string, never as new error fields
 
 ### Low-confidence fields warn but never block
 
@@ -74,6 +81,7 @@ The contract language is the boolean-valued expression grammar (build-spec §4.1
 - `must_not` accept `old(...)` in `preconditions[]` or `invariants[]` — it is a parse-level rejection, never deferred to semantic validation (build-spec §4.2).
 - `must_not` resolve predicate calls at parse time — only call-shape is checked; resolution happens in semantic validation (build-spec §4.2).
 - `must_not` allow a predicate call unless the named predicate is registered with `verifiedPure === true`; `verifiedPure: false` or missing is a hard error (ADR-0006).
+- An undeclared predicate call is a hard error (`UNKNOWN_PREDICATE`); its `detail` may append at most 2 "did you mean" suggestions for declared keys within Levenshtein distance ≤ 2, and suggestions `must_not` add fields to the `{ contractId, code, field, detail }` error shape (VERSAILLES-172).
 - `must_not` throw unstructured exceptions on malformed input — parser and validator always return structured error results (build-spec §4.4).
 - `must_not` fork per target language — the grammar, parser, and validator stay language-agnostic (ADR-0008).
 - `must_not` invoke an LLM anywhere in this context — no LLM client, no prompting logic, no retry loop (ADR-0010).
@@ -96,3 +104,4 @@ The contract language is the boolean-valued expression grammar (build-spec §4.1
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §4–§5, ADR-0006/0008/0010 |
 | 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
 | 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
+| 2026-08-30 | general-manager | VERSAILLES-172: UNKNOWN_PREDICATE 'did you mean' fuzzy suggestion behavior spec'd (Levenshtein ≤ 2, at most 2, deterministic, detail-only) |

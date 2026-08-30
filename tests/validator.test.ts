@@ -164,6 +164,16 @@ import type {
  *    refs to the same low-confidence field emit one warning.
  * 10. valid === errors.length === 0 (build-spec §5.2 / contract assert: valid
  *     is false iff errors is non-empty); warnings never affect valid.
+ * 11. UNKNOWN_PREDICATE fuzzy suggestions (VERSAILLES-172): when the referenced
+ *     predicate is undeclared, the detail appends at most 2 declared keys
+ *     within Levenshtein distance ≤ 2 as " — did you mean "a" or "b"?"
+ *     (two suggestions join with " or "). Ordering is distance-then-
+ *     alphabetical: closest match first, ties alphabetical. No suggestion when
+ *     there are no declared predicates at all (empty map or null file) or no
+ *     declared key is within range. Suggestions live ONLY in the detail
+ *     string — code/field/contractId are unchanged, and the other predicate
+ *     error codes (UNVERIFIED_PREDICATE / PREDICATE_ARITY / PREDICATE_ARG_TYPE)
+ *     are untouched.
  */
 
 const OS = "OrderService";
@@ -1024,5 +1034,216 @@ describe("semanticValidate — [] wildcard field-path segment (decision 7)", () 
 		expect(result.valid).toBe(true);
 		expect(result.errors).toEqual([]);
 		expect(result.warnings).toEqual([]);
+	});
+});
+
+describe("semanticValidate — UNKNOWN_PREDICATE fuzzy-match suggestions (VERSAILLES-172)", () => {
+	// New behavior (RED phase): when a predicateCall references an undeclared
+	// predicate, the UNKNOWN_PREDICATE detail appends up to 2 suggestions for
+	// declared keys within Levenshtein distance ≤ 2 — " — did you mean "X"?"
+	// (two suggestions join as "a" or "b"). Pinned rule: ordering is
+	// distance-then-alphabetical — closest match first, ties alphabetical.
+	// Suggestions live ONLY in the detail string; the error shape
+	// (code/field/detail/contractId) is unchanged. No suggestion when there are
+	// no declared predicates at all or no declared key is within range.
+	//
+	// Default fixture declares: isPositive, isAvailable, noArg, sideEffectful,
+	// missingPurity.
+
+	it("F-fuzzy: a typo within distance 1 appends exactly one suggestion to the detail", () => {
+		// isPositiv → isPositive = 1; every other declared key is ≥ 7.
+		const result = validate(
+			"isPositiv(balance)",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toMatchObject({
+			contractId: PRE0,
+			code: "UNKNOWN_PREDICATE",
+			field: "predicateCall(isPositiv)",
+		});
+		expect(result.errors[0].detail).toBe(
+			'Predicate "isPositiv" is not declared in contracts.json — did you mean "isPositive"?',
+		);
+	});
+
+	it("F-fuzzy: distance exactly 2 (the threshold boundary) still suggests the close key", () => {
+		// isPostiv → isPositive = 2 (insert e, insert i); every other declared
+		// key is ≥ 7, so this pins the ≤ 2 boundary on the near side.
+		const result = validate(
+			"isPostiv(balance)",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toMatchObject({
+			code: "UNKNOWN_PREDICATE",
+			field: "predicateCall(isPostiv)",
+		});
+		expect(result.errors[0].detail).toBe(
+			'Predicate "isPostiv" is not declared in contracts.json — did you mean "isPositive"?',
+		);
+	});
+
+	it("F-fuzzy: at most 2 suggestions, closest first — cap and distance-first ordering", () => {
+		// isPositiv → isPositive = 1, isPositive2 = 2, isPositive3 = 2,
+		// isAvailable = 8. Top 2: isPositive (distance 1), then the distance-2
+		// tie broken alphabetically → isPositive2. isPositive3 is dropped by
+		// the at-most-2 cap even though it is within range. isAvailable is
+		// never suggested because it is beyond the ≤ 2 threshold.
+		const context = makeContext({
+			predicates: {
+				isPositive: {
+					params: ["n"],
+					paramTypes: ["number"],
+					returnType: "boolean",
+					sourceRef: "Num.isPositive",
+					verifiedPure: true,
+				},
+				isPositive2: {
+					params: ["n"],
+					paramTypes: ["number"],
+					returnType: "boolean",
+					sourceRef: "Num.isPositive2",
+					verifiedPure: true,
+				},
+				isPositive3: {
+					params: ["n"],
+					paramTypes: ["number"],
+					returnType: "boolean",
+					sourceRef: "Num.isPositive3",
+					verifiedPure: true,
+				},
+				isAvailable: {
+					params: ["status"],
+					paramTypes: ["enum<OPEN,SHIPPED>"],
+					returnType: "boolean",
+					sourceRef: "Order.isAvailable",
+					verifiedPure: true,
+				},
+			},
+		});
+		const result = validate(
+			"isPositiv(balance)",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+			context,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toMatchObject({
+			code: "UNKNOWN_PREDICATE",
+			field: "predicateCall(isPositiv)",
+		});
+		expect(result.errors[0].detail).toBe(
+			'Predicate "isPositiv" is not declared in contracts.json — did you mean "isPositive" or "isPositive2"?',
+		);
+	});
+
+	it("F-fuzzy: equal-distance ties break alphabetically, not by declaration order", () => {
+		// isPositivee → isPositive = 1 AND isPositive2 = 1 (tie); isAvailable
+		// is far. isPositive2 is declared FIRST so a naive insertion-order
+		// implementation would suggest "isPositive2" first; the pinned rule
+		// emits the alphabetically-earlier "isPositive" first.
+		const context = makeContext({
+			predicates: {
+				isPositive2: {
+					params: ["n"],
+					paramTypes: ["number"],
+					returnType: "boolean",
+					sourceRef: "Num.isPositive2",
+					verifiedPure: true,
+				},
+				isPositive: {
+					params: ["n"],
+					paramTypes: ["number"],
+					returnType: "boolean",
+					sourceRef: "Num.isPositive",
+					verifiedPure: true,
+				},
+				isAvailable: {
+					params: ["status"],
+					paramTypes: ["enum<OPEN,SHIPPED>"],
+					returnType: "boolean",
+					sourceRef: "Order.isAvailable",
+					verifiedPure: true,
+				},
+			},
+		});
+		const result = validate(
+			"isPositivee(balance)",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+			context,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toMatchObject({
+			code: "UNKNOWN_PREDICATE",
+			field: "predicateCall(isPositivee)",
+		});
+		expect(result.errors[0].detail).toBe(
+			'Predicate "isPositivee" is not declared in contracts.json — did you mean "isPositive" or "isPositive2"?',
+		);
+	});
+
+	it("F-fuzzy: a far-off name (distance > 2) keeps the plain detail — no suggestion", () => {
+		// totallyWrong is ≥ 9 from every declared key → no "did you mean" suffix.
+		const result = validate(
+			"totallyWrong(balance)",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toMatchObject({
+			code: "UNKNOWN_PREDICATE",
+			field: "predicateCall(totallyWrong)",
+		});
+		expect(result.errors[0].detail).toBe(
+			'Predicate "totallyWrong" is not declared in contracts.json',
+		);
+	});
+
+	it("F-fuzzy: a workspace with an empty declared-predicates map never suggests", () => {
+		const context = makeContext({ predicates: {} });
+		const result = validate(
+			"isPositive(balance)",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+			context,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toMatchObject({
+			code: "UNKNOWN_PREDICATE",
+			field: "predicateCall(isPositive)",
+		});
+		expect(result.errors[0].detail).toBe(
+			'Predicate "isPositive" is not declared in contracts.json',
+		);
+	});
+
+	it("F-fuzzy: a null predicates file (no declarations at all) never suggests", () => {
+		const context = makeContext();
+		context.predicates = null;
+		const result = validate(
+			"isPositive(balance)",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+			context,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors[0]).toMatchObject({
+			code: "UNKNOWN_PREDICATE",
+			field: "predicateCall(isPositive)",
+		});
+		expect(result.errors[0].detail).toBe(
+			'Predicate "isPositive" is not declared in contracts.json',
+		);
 	});
 });

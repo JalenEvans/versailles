@@ -71,11 +71,14 @@ operations:
     ensures:
       - "Returns the registered predicate entry when registry[predicateName].verifiedPure === true"
       - "Returns a hard validation error when the entry is missing, or verifiedPure is false, or verifiedPure is absent"
+      - "For a missing entry (UNKNOWN_PREDICATE), appends at most 2 'did you mean' suggestions to the error detail when declared keys are within Levenshtein distance ≤ 2 of predicateName; ordering is distance-then-alphabetical (closest first, ties alphabetical); no suggestion when no predicates are declared or no key is within range; suggestions never add fields to the error object (VERSAILLES-172)"
     examples:
       - input: "resolve_predicate('isAvailable', { isAvailable: { verifiedPure: true, params: [], paramTypes: [], returnType: 'boolean' } })"
         output: "the isAvailable entry"
       - input: "resolve_predicate('isAvailable', { isAvailable: { verifiedPure: false } })"
         output: "hard error — the contract cannot reference an unverified predicate"
+      - input: "resolve_predicate('isAvailabl', { isAvailable: { verifiedPure: true }, isPositive: { verifiedPure: true } })"
+        output: "hard error (UNKNOWN_PREDICATE) — detail: Predicate \"isAvailabl\" is not declared in contracts.json — did you mean \"isAvailable\"?"
 
 must:
   - "Parse any grammar-conforming clause expr string into an AST built only from the build-spec §4.3 node set: or | and | not | compare | arithmetic | old | predicateCall | fieldRef | literal."
@@ -85,6 +88,7 @@ must:
   - "After a successful parse, run the semantic validations of build-spec §5.1 against the full workspace context: root and transitive nested field resolution, type compatibility, in-operand shape, predicate existence, predicate arity, predicate argument types, and predicate purity."
   - "Return validation results of the build-spec §5.2 shape { valid, errors: [{ contractId, code, field, detail }], warnings: [] }."
   - "Hard-error every predicate call that resolves to an entry in the top-level predicates map whose verifiedPure is missing or false; such a contract cannot pass validation (ADR-0006)."
+  - "Hard-error every predicate call that references an undeclared predicate name with an UNKNOWN_PREDICATE error whose detail appends at most 2 'did you mean' suggestions for declared keys within Levenshtein distance ≤ 2, ordered distance-then-alphabetically (VERSAILLES-172)."
   - "Emit low-confidence or inferred-field notices as non-blocking warnings in warnings[], leaving valid true when no hard error exists (ADR-0004)."
   - "Block contracts with hard errors from passing validation and from passing CI in the lint flow (build-spec §5.2)."
 
@@ -93,6 +97,7 @@ must_not:
   - "Must not accept old(...) in preconditions[] or invariants[] — the rejection is a parse-time error, never deferred to semantic validation (build-spec §4.2)."
   - "Must not resolve predicate calls at parse time — only the call-shape is checked; resolution happens in semantic validation (build-spec §4.2)."
   - "Must not allow a contract to reference a predicate unless the top-level predicates map entry has verifiedPure === true (ADR-0006)."
+  - "Must not add fields to the validation error object to carry fuzzy-match suggestions — 'did you mean' suggestions live only inside the UNKNOWN_PREDICATE detail string; the error shape stays { contractId, code, field, detail } (VERSAILLES-172)."
   - "Must not throw unstructured exceptions on malformed input — parser and validator always return structured error results (build-spec §4.4, §5.2)."
   - "Must not fork per target language — the grammar, parser, and validator stay language-agnostic (ADR-0008)."
   - "Must not invoke an LLM anywhere in this context — no LLM client, no prompting logic, no retry loop (ADR-0010)."
@@ -100,6 +105,7 @@ must_not:
 
 can:
   - "May include human-friendly 'did you mean' suggestions inside parse error messages (build-spec §4.4 example)."
+  - "May include human-friendly 'did you mean' suggestions inside UNKNOWN_PREDICATE validation error details, at most 2, distance-then-alphabetical (VERSAILLES-172)."
   - "May emit additional non-blocking warning codes for low-confidence or inferred fields (build-spec §5.1 extension point)."
   - "May surface parsed-contract metadata (clause IDs, affected fields) alongside structured results for downstream tooling."
 
@@ -115,6 +121,8 @@ asserts:
   - "assert: every node in a parse result has a type that is a member of the build-spec §4.3 node set."
   - "assert: parsing a preconditions[] or invariants[] clause containing old(...) yields a structured parse error before semantic validation."
   - "assert: semantic_validate returns valid: false whenever any predicate call resolves to an entry with verifiedPure missing or false."
+  - "assert: an undeclared predicate call yields an UNKNOWN_PREDICATE error with exactly the { contractId, code, field, detail } shape — suggestions never add fields."
+  - "assert: a missing predicate name within Levenshtein distance ≤ 2 of a declared key appends a 'did you mean' suggestion to the UNKNOWN_PREDICATE detail (at most 2, distance-then-alphabetical); no suggestion when no predicates are declared or no key is within range."
   - "assert: feeding malformed input (assignment, loop, statement, stray token) to the parser never throws a raw exception; it always produces a structured error result."
   - "assert: valid is false if and only if errors is non-empty."
 
@@ -124,3 +132,4 @@ asserts:
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-11 | general-manager | Initial contract from docs/specs/contract-language.md; build-spec §4–§5; ADR-0004/0006/0008/0010 |
+| 2026-08-30 | general-manager | VERSAILLES-172: UNKNOWN_PREDICATE 'did you mean' fuzzy suggestions spec'd (Levenshtein ≤ 2, at most 2, distance-then-alphabetical, detail-only) |

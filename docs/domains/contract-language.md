@@ -59,6 +59,7 @@ Uses from [glossary](../glossary.md): *contract, clause, invariant, precondition
 - The grammar is boolean-valued only: no assignment, no loops, no statements (build-spec §4.2). Anything outside the grammar is a **parse error**.
 - `old(...)` is syntactically valid **only** when parsing a `postconditions[]` entry; encountering it in `preconditions[]` or `invariants[]` is a parse error, not a semantic one (build-spec §4.2). The validator re-asserts as defense-in-depth.
 - `predicate_call` identifiers are resolved at semantic validation, not parse time — the parser only checks the call-shape is well-formed.
+- An undeclared predicate call (`UNKNOWN_PREDICATE`) appends at most 2 "did you mean" suggestions to its detail for declared keys within Levenshtein distance ≤ 2, ordered distance-then-alphabetically; suggestions never add fields to the structured error (VERSAILLES-172).
 - Hard errors (unknown field, type mismatch, bad `in` shape, unknown predicate, arity/type mismatch, `verifiedPure !== true`) block the contract from passing validation, and block CI in the lint flow (build-spec §5.2).
 - Warnings are non-blocking and surfaced for awareness.
 - The parser and validator always return structured results — never throw unstructured exceptions (build-spec §4.4).
