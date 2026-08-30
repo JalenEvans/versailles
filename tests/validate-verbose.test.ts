@@ -162,6 +162,151 @@ async function seedOrderServiceWorkspace(name: string): Promise<string> {
 	return cwd;
 }
 
+/**
+ * VERSAILLES-168 Phase 5 (VERSAILLES-173): generic seeder for the
+ * predicateReferences fixtures — writes a contracts.json envelope carrying
+ * the given predicates map plus a manifests file.
+ */
+async function seedWorkspaceWith(
+	name: string,
+	contracts: unknown,
+	predicates: Record<string, unknown>,
+	manifests: unknown = orderServiceManifests(),
+): Promise<string> {
+	const cwd = await freshWorkspace(name);
+	const envelope = contracts as Record<string, unknown>;
+	envelope.predicates = predicates;
+	await writeWorkspaceFile(cwd, "contracts.json", envelope);
+	await writeWorkspaceFile(cwd, "manifests.json", manifests);
+	return cwd;
+}
+
+/**
+ * Multi-clause fixture: TWO clauses reference the same predicate.
+ * - OrderService.addItem.pre1: isPositive(price)   (price is a number param)
+ * - OrderService.addItem.post0: isPositive(balance) (balance is a number field)
+ * Both parse; the semantic validator resolves price (param) and balance
+ * (manifest field) as number, so the workspace stays valid (exit 0).
+ */
+function orderServiceMultiClauseContracts(): unknown {
+	return {
+		contracts: {
+			OrderService: {
+				invariants: [{ id: "OrderService.inv0", expr: "balance >= 0" }],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{ id: "OrderService.addItem.pre0", expr: 'sku != ""' },
+							{
+								id: "OrderService.addItem.pre1",
+								expr: "isPositive(price)",
+							},
+						],
+						postconditions: [
+							{
+								id: "OrderService.addItem.post0",
+								expr: "isPositive(balance)",
+							},
+						],
+						effects: [{ field: "balance", kind: "mutate" }],
+						sourceHash: "e6d9d945",
+					},
+				},
+			},
+		},
+	};
+}
+
+/**
+ * Multi-predicate fixture: TWO declared predicates, one used once and one
+ * used twice.
+ * - isAvailable(sku) used once (pre0, sku is a string param)
+ * - isPositive(price) pre1 + isPositive(balance) post0 → used twice
+ */
+function orderServiceMultiPredicateContracts(): unknown {
+	return {
+		contracts: {
+			OrderService: {
+				invariants: [{ id: "OrderService.inv0", expr: "balance >= 0" }],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{
+								id: "OrderService.addItem.pre0",
+								expr: "isAvailable(sku)",
+							},
+							{
+								id: "OrderService.addItem.pre1",
+								expr: "isPositive(price)",
+							},
+						],
+						postconditions: [
+							{
+								id: "OrderService.addItem.post0",
+								expr: "isPositive(balance)",
+							},
+						],
+						effects: [{ field: "balance", kind: "mutate" }],
+						sourceHash: "e6d9d945",
+					},
+				},
+			},
+		},
+	};
+}
+
+function orderServiceMultiPredicateDeclarations(): Record<string, unknown> {
+	return {
+		isAvailable: {
+			source: "Math.isAvailable",
+			params: ["value"],
+			paramTypes: ["string"],
+			returnType: "boolean",
+			verifiedPure: true,
+		},
+		isPositive: {
+			source: "Math.isPositive",
+			params: ["value"],
+			paramTypes: ["number"],
+			returnType: "boolean",
+			verifiedPure: true,
+		},
+	};
+}
+
+/**
+ * Zero-reference fixture: predicates map declares isEven (never referenced)
+ * alongside isPositive (referenced once by OrderService.addItem.pre1).
+ */
+function orderServicePredicatesWithUnused(): Record<string, unknown> {
+	return {
+		isEven: {
+			source: "Math.isEven",
+			params: ["value"],
+			paramTypes: ["number"],
+			returnType: "boolean",
+			verifiedPure: true,
+		},
+		isPositive: {
+			source: "Math.isPositive",
+			params: ["value"],
+			paramTypes: ["number"],
+			returnType: "boolean",
+			verifiedPure: true,
+		},
+	};
+}
+
 // ── Module import ──────────────────────────────────────────────────────────
 
 type CliErrorShape = {
@@ -352,6 +497,234 @@ describe("runCli validate --verbose — per-clause expr+AST pairs (ADR-0012 Phas
 		expect(result.exitCode).toBe(0);
 
 		// Output shape is exactly the existing { valid: boolean } — no verbose.
+		const output = result.output as Record<string, unknown>;
+		expect(output).toEqual({ valid: true });
+		expect(output.verbose).toBeUndefined();
+	});
+});
+
+describe("runCli validate --verbose — predicateReferences reverse-reference index (VERSAILLES-168 Phase 5, VERSAILLES-173)", () => {
+	// ── Pinned output shape ────────────────────────────────────────────────
+	// output.verbose gains an additive predicateReferences array — one entry
+	// per DECLARED predicate, mapping predicate name → clause usage:
+	//
+	//   predicateReferences: Array<{
+	//     predicate: string;  // declared predicate name, e.g. "isPositive"
+	//     source: string;     // the declaration's "source" field from contracts.json
+	//     clauses: string[];  // sorted clause ids whose expr calls this predicate
+	//     singleUse: boolean; // clauses.length === 1
+	//   }>
+	//
+	// Pinned decisions (reported to the Point Guard):
+	// - Entries are sorted by predicate name (alphabetical) — deterministic.
+	// - clauses are sorted by clause id (alphabetical).
+	// - singleUse is exactly clauses.length === 1.
+	// - EVERY declared predicate gets an entry, INCLUDING declared-but-unused
+	//   ones (clauses: [], singleUse: false) — authors must see unused
+	//   predicates; that is the discoverability intent.
+	// - References come from parsed ASTs only: a clause whose expr failed to
+	//   parse contributes nothing (and never crashes).
+	// - No declared predicates → predicateReferences: [].
+	// - --verbose is the only trigger.
+
+	type PredicateReference = {
+		predicate: string;
+		source: string;
+		clauses: string[];
+		singleUse: boolean;
+	};
+
+	function refsOf(result: { output?: unknown }): PredicateReference[] {
+		const output = result.output as {
+			verbose?: { predicateReferences?: unknown };
+		};
+		expect(output.verbose).toBeDefined();
+		const refs = output.verbose?.predicateReferences as
+			| PredicateReference[]
+			| undefined;
+		expect(Array.isArray(refs)).toBe(true);
+		return refs as PredicateReference[];
+	}
+
+	it("single use: the OrderService fixture's declared isPositive maps to OrderService.addItem.pre1 (source from the declaration, singleUse: true)", async () => {
+		const cwd = await seedOrderServiceWorkspace("vv-pr-single");
+		const result = await runCli(["validate", "--verbose"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		// Exact array — deterministic pin (not just shape). The fixture's
+		// predicates map declares source "Math.isPositive".
+		expect(refsOf(result)).toEqual([
+			{
+				predicate: "isPositive",
+				source: "Math.isPositive",
+				clauses: ["OrderService.addItem.pre1"],
+				singleUse: true,
+			},
+		]);
+	});
+
+	it("multi-clause: one predicate referenced by TWO clauses → clauses sorted with both ids, singleUse: false", async () => {
+		const cwd = await seedWorkspaceWith(
+			"vv-pr-multi-clause",
+			orderServiceMultiClauseContracts(),
+			orderServicePredicates(),
+		);
+		const result = await runCli(["validate", "--verbose"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		// Both pre1 (isPositive(price)) and post0 (isPositive(balance))
+		// reference isPositive. Clause ids sort alphabetically:
+		// "OrderService.addItem.post0" < "OrderService.addItem.pre1".
+		expect(refsOf(result)).toEqual([
+			{
+				predicate: "isPositive",
+				source: "Math.isPositive",
+				clauses: ["OrderService.addItem.post0", "OrderService.addItem.pre1"],
+				singleUse: false,
+			},
+		]);
+	});
+
+	it("multi-predicate: two declared predicates (one used twice, one once) → 2 entries sorted by predicate name", async () => {
+		const cwd = await seedWorkspaceWith(
+			"vv-pr-multi-pred",
+			orderServiceMultiPredicateContracts(),
+			orderServiceMultiPredicateDeclarations(),
+		);
+		const result = await runCli(["validate", "--verbose"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		// Entries sorted alphabetically by predicate: isAvailable < isPositive.
+		expect(refsOf(result)).toEqual([
+			{
+				predicate: "isAvailable",
+				source: "Math.isAvailable",
+				clauses: ["OrderService.addItem.pre0"],
+				singleUse: true,
+			},
+			{
+				predicate: "isPositive",
+				source: "Math.isPositive",
+				clauses: ["OrderService.addItem.post0", "OrderService.addItem.pre1"],
+				singleUse: false,
+			},
+		]);
+	});
+
+	it("declared-but-unused predicate gets an entry with clauses: [] and singleUse: false (zero-reference decision)", async () => {
+		const cwd = await seedWorkspaceWith(
+			"vv-pr-unused",
+			orderServiceContracts(),
+			orderServicePredicatesWithUnused(),
+		);
+		const result = await runCli(["validate", "--verbose"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		// isEven is declared but never referenced — it still appears, pinned
+		// with an empty clauses array and singleUse: false, so authors can
+		// discover unused predicate declarations. Entries stay alphabetical:
+		// isEven < isPositive.
+		expect(refsOf(result)).toEqual([
+			{
+				predicate: "isEven",
+				source: "Math.isEven",
+				clauses: [],
+				singleUse: false,
+			},
+			{
+				predicate: "isPositive",
+				source: "Math.isPositive",
+				clauses: ["OrderService.addItem.pre1"],
+				singleUse: true,
+			},
+		]);
+	});
+
+	it("no declared predicates → predicateReferences: []", async () => {
+		// freshWorkspace seeds contracts.json with { contracts: {} } — no
+		// predicates map, no components. The builder must tolerate that and
+		// emit an empty array (not crash, not null, not undefined).
+		const cwd = await freshWorkspace("vv-pr-no-preds");
+		const result = await runCli(["validate", "--verbose"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(refsOf(result)).toEqual([]);
+	});
+
+	it("a clause that fails to parse does not contribute a reference (and does not crash)", async () => {
+		const cwd = await seedWorkspaceWith(
+			"vv-pr-parse-fail",
+			{
+				contracts: {
+					OrderService: {
+						invariants: [],
+						operations: {
+							addItem: {
+								id: "OrderService.addItem",
+								params: [{ name: "price", type: "number" }],
+								preconditions: [
+									{
+										id: "OrderService.addItem.pre0",
+										expr: "isPositive(price)",
+									},
+									// Unclosed '(' — a parse error. No AST is
+									// produced, so this clause must NOT appear
+									// in isPositive's clauses list.
+									{
+										id: "OrderService.addItem.pre1",
+										expr: "isPositive(price",
+									},
+								],
+								postconditions: [],
+								effects: [],
+								sourceHash: "abc123",
+							},
+						},
+					},
+				},
+			},
+			orderServicePredicates(),
+		);
+		const result = await runCli(["validate", "--verbose"], { cwd });
+
+		// Parse error → exit 1, ok false.
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(result.errors).toContainEqual(
+			expect.objectContaining({ code: "PARSE_ERROR" }),
+		);
+
+		// Verbose data is still emitted. pre0 parsed and contributes the
+		// reference; pre1 failed to parse so it is absent from clauses — the
+		// reference list survives the parse failure without crashing.
+		expect(refsOf(result)).toEqual([
+			{
+				predicate: "isPositive",
+				source: "Math.isPositive",
+				clauses: ["OrderService.addItem.pre0"],
+				singleUse: true,
+			},
+		]);
+	});
+
+	it("without --verbose, no predicateReferences key anywhere — output stays { valid: boolean }", async () => {
+		const cwd = await seedOrderServiceWorkspace("vv-pr-no-flag");
+		const result = await runCli(["validate"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		// Exactly the legacy { valid: true } payload: no verbose namespace,
+		// so no predicateReferences key at any level.
 		const output = result.output as Record<string, unknown>;
 		expect(output).toEqual({ valid: true });
 		expect(output.verbose).toBeUndefined();
