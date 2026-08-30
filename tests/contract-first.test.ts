@@ -69,8 +69,6 @@ import type { PlannedSuite } from "../packages/engine/src/generator/index.js";
  */
 
 const SEEDED_CONFIG = {
-	grammarVersion: "1.0",
-	schemaVersion: "1.0",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -99,7 +97,6 @@ function cartContractsWithInvariants(
 	invariants: Array<{ id: string; expr: string }>,
 ): unknown {
 	return {
-		version: "1.0",
 		contracts: {
 			[CART]: {
 				invariants,
@@ -414,7 +411,8 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 		});
 
 		// ── IT 4c: regression pin — init-seeded empty manifests.json must not break greenfield ──
-		// Bug: after `versailles init`, the seeded EMPTY manifests.json (`{ version: "1.0" }`)
+		// Bug: after `versailles init`, the seeded EMPTY manifests.json (`{}` — ADR-0018:
+		// no version envelope)
 		// makes `context.manifests` non-null, so the validator emits UNKNOWN_FIELD for
 		// greenfield field references (e.g. `balance`) — breaking the contract-first TDD flow.
 		// The fix: flag UNKNOWN_FIELD only when the SPECIFIC component has a manifest entry.
@@ -437,15 +435,13 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 					cartContracts(),
 				);
 				// The init-seeded EMPTY manifests.json — this is the bug trigger.
-				await writeJsonFile(join(cwd, ".versailles", "manifests.json"), {
-					version: "1.0",
-				});
+				await writeJsonFile(join(cwd, ".versailles", "manifests.json"), {});
 
 				const context = await loadWorkspace(join(cwd, ".versailles"));
 
 				// The workspace MUST be valid despite the empty manifests.json.
 				// Currently Red: the validator emits UNKNOWN_FIELD for `balance` because
-				// `context.manifests !== null` (it's `{ version: "1.0" }`), so the greenfield
+				// `context.manifests !== null` (it's `{}`), so the greenfield
 				// skip-UNKNOWN_FIELD guard (line 430 in validator.ts) does not fire.
 				expect(
 					context.isValid,
@@ -488,7 +484,6 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 				// REAL manifest entry for Cart — but `balance` is ABSENT from the fields map.
 				// This is the brownfield case: the component is tracked, but the field is missing.
 				await writeJsonFile(join(cwd, ".versailles", "manifests.json"), {
-					version: "1.0",
 					manifests: {
 						[CART]: {
 							sourceHash: "cart-hash",
@@ -552,7 +547,6 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 				);
 				// manifests.json present (brownfield half) — minimal valid shape.
 				await writeJsonFile(join(cwd, ".versailles", "manifests.json"), {
-					version: "1.0",
 					manifests: {
 						[CART]: {
 							sourceHash: "cart-hash",
@@ -608,7 +602,6 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 				"../packages/core/src/core/parser.js"
 			);
 			const contracts = {
-				version: "1.0",
 				contracts: {
 					[CART]: {
 						invariants: [],
@@ -657,7 +650,6 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 				config: SEEDED_CONFIG,
 				contracts,
 				manifests: {
-					version: "1.0",
 					manifests: {
 						[CART]: {
 							sourceHash: "cart-hash",
@@ -669,7 +661,7 @@ describe("VERSAILLES-149 — contract-first emission (ADR-0011)", () => {
 						},
 					},
 				},
-				predicates: { version: "1.0", predicates: {} },
+				predicates: { predicates: {} },
 				parsedContracts,
 				parseErrors: [],
 				validationErrors: [],

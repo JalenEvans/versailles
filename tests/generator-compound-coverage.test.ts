@@ -79,15 +79,13 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
 
 // ── Fixture helpers (mirroring generator-planner-pbt.test.ts conventions) ────
 
-const EMPTY_MANIFESTS: ManifestsFile = { version: "1.0", manifests: {} };
-const EMPTY_PREDICATES: PredicatesFile = { version: "1.0", predicates: {} };
+const EMPTY_MANIFESTS: ManifestsFile = { manifests: {} };
+const EMPTY_PREDICATES: PredicatesFile = { predicates: {} };
 
 function makeConfig(
 	propertyBased?: WorkspaceConfig["propertyBased"],
 ): WorkspaceConfig {
 	const config: WorkspaceConfig = {
-		grammarVersion: "1.0",
-		schemaVersion: "1.0",
 		sourceRoots: ["src/**/*.ts"],
 		language: "typescript",
 		testFramework: "vitest",
@@ -164,7 +162,6 @@ const COMPOUND_CLAUSE_ID = "OrderService.placeOrder.pre0";
 
 function compoundContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -365,7 +362,6 @@ const SINGLE_CLAUSE_ID = "OrderService.withdraw.pre0";
 
 function singleParamCompoundContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -488,7 +484,6 @@ const SPLIT_CLAUDE_IDS = {
 
 function splitContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -632,7 +627,6 @@ const FIELD_COUPLING_CLAUSE_ID = "OrderService.purchase.pre2";
 
 function fieldOperandCouplingContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -663,7 +657,6 @@ function fieldOperandCouplingContext(): VersaillesContext {
 		},
 	};
 	const manifests: ManifestsFile = {
-		version: "1.0",
 		manifests: {
 			OrderService: {
 				sourceHash: "man-field-coupling",
@@ -728,7 +721,6 @@ const INVERTED_BOUNDS_CLAUSE_ID = "OrderService.balanceOrder.pre0";
 
 function invertedBoundsContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -799,7 +791,6 @@ const DIFF_CLAUSE_ID = "OrderService.planOrder.pre2";
 
 function differenceCouplingContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -832,7 +823,6 @@ const LOWER_COUPLING_CLAUSE_ID = "OrderService.stockOrder.pre2";
 
 function lowerBoundCouplingContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -872,7 +862,6 @@ const STRICT_CLAUSE_ID = "OrderService.strictOrder.pre2";
 
 function strictCouplingContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -1023,7 +1012,6 @@ const OR_COUPLING_CLAUSE_ID = "OrderService.mixOrder.pre2";
 
 function orDerivedBoundsContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],

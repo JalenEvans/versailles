@@ -138,7 +138,6 @@ const ADD_ITEM_PRE1 = "OrderService.addItem.pre1";
 
 function contractsFixture(): ContractsFile {
 	return {
-		version: "1.0",
 		contracts: {
 			[ORDER]: {
 				invariants: [],
@@ -198,7 +197,6 @@ function contractsFixture(): ContractsFile {
 
 function unplannableContractsFixture(): ContractsFile {
 	return {
-		version: "1.0",
 		contracts: {
 			[ORDER]: {
 				invariants: [],
@@ -227,7 +225,6 @@ function unplannableContractsFixture(): ContractsFile {
 
 function manifestsFixture(): ManifestsFile {
 	return {
-		version: "1.0",
 		manifests: {
 			[ORDER]: {
 				sourceHash: "man-order",
@@ -243,14 +240,12 @@ function manifestsFixture(): ManifestsFile {
 
 function predicatesFixture(): PredicatesFile {
 	return {
-		version: "1.0",
 		predicates: {
 			isPositive: {
 				params: ["n"],
 				paramTypes: ["number"],
 				returnType: "boolean",
 				sourceRef: "Num.isPositive",
-				sourceHash: "p-positive",
 				verifiedPure: true,
 			},
 			isNonEmpty: {
@@ -258,7 +253,6 @@ function predicatesFixture(): PredicatesFile {
 				paramTypes: ["list<number>"],
 				returnType: "boolean",
 				sourceRef: "List.isNonEmpty",
-				sourceHash: "p-nonempty",
 				verifiedPure: true,
 			},
 		},
@@ -267,8 +261,6 @@ function predicatesFixture(): PredicatesFile {
 
 function makeConfig(rejectionIdiom?: "throws" | "returns"): WorkspaceConfig {
 	const config: WorkspaceConfig = {
-		grammarVersion: "1.0",
-		schemaVersion: "1.0",
 		sourceRoots: ["src/**/*.ts"],
 		language: "typescript",
 		testFramework: "vitest",
@@ -390,7 +382,6 @@ function acceptCases(
  */
 function plainParamsContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			[PLAIN]: {
 				invariants: [],
@@ -413,12 +404,11 @@ function plainParamsContext(): VersaillesContext {
 		config: makeConfig(),
 		contracts,
 		manifests: {
-			version: "1.0",
 			manifests: {
 				[PLAIN]: { sourceHash: "man-plain", fields: { value: "number" } },
 			},
 		},
-		predicates: { version: "1.0", predicates: {} },
+		predicates: { predicates: {} },
 		parsedContracts: parseAll(contracts),
 		parseErrors: [],
 		validationErrors: [],
@@ -436,7 +426,6 @@ function plainParamsContext(): VersaillesContext {
  */
 function degeneratePredicateContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			[ORDER]: {
 				invariants: [],
@@ -462,20 +451,17 @@ function degeneratePredicateContext(): VersaillesContext {
 		config: makeConfig(),
 		contracts,
 		manifests: {
-			version: "1.0",
 			manifests: {
 				[ORDER]: { sourceHash: "man-order", fields: { subtotal: "number" } },
 			},
 		},
 		predicates: {
-			version: "1.0",
 			predicates: {
 				isAnyNumber: {
 					params: ["n"],
 					paramTypes: ["number"],
 					returnType: "boolean",
 					sourceRef: "Num.isAnyNumber",
-					sourceHash: "p-any",
 					verifiedPure: true,
 				},
 			},
@@ -503,7 +489,6 @@ function degeneratePredicateContext(): VersaillesContext {
  */
 function addItemIsolationContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			[ORDER]: {
 				invariants: [],
@@ -530,7 +515,6 @@ function addItemIsolationContext(): VersaillesContext {
 		config: makeConfig(),
 		contracts,
 		manifests: {
-			version: "1.0",
 			manifests: {
 				[ORDER]: { sourceHash: "man-order-isolation", fields: {} },
 			},

@@ -106,10 +106,11 @@ import { extractManifests } from "../packages/frontend-ts/src/extractors/index.j
  */
 
 // The exact SEEDED_CONFIG written by initWorkspace (src/cli/init.ts); kept
-// local so fixtures pin the loader's happy path against the seed.
+// local so fixtures pin the loader's happy path against the seed. ADR-0018
+// (VERSAILLES-170): no grammarVersion/schemaVersion fields — the `$schema`
+// pointer string replaces the version ceremony.
 const SEEDED_CONFIG = {
-	grammarVersion: "1.0",
-	schemaVersion: "1.0",
+	$schema: "../../config.schema.json",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -123,7 +124,6 @@ const CUSTOMER = "CustomerService";
 /** Generator fixture (valid through the real loader — verified): §9.1 + §9.2 case sources. */
 function generatorContracts(): unknown {
 	return {
-		version: "1.0",
 		contracts: {
 			[ACCOUNT]: {
 				invariants: [{ id: "AccountService.inv0", expr: "balance >= 0" }],
@@ -192,7 +192,6 @@ function generatorContracts(): unknown {
 
 function generatorManifests(): unknown {
 	return {
-		version: "1.0",
 		manifests: {
 			[ACCOUNT]: {
 				sourceHash: "man-account",
@@ -204,7 +203,7 @@ function generatorManifests(): unknown {
 }
 
 function emptyPredicates(): unknown {
-	return { version: "1.0", predicates: {} };
+	return { predicates: {} };
 }
 
 async function writeJsonFile(path: string, value: unknown): Promise<void> {
@@ -246,11 +245,9 @@ async function freshWorkspace(
 		...configOverrides,
 	});
 	await writeWorkspaceFile(cwd, "contracts.json", {
-		version: "1.0",
 		contracts: {},
 	});
 	await writeWorkspaceFile(cwd, "manifests.json", {
-		version: "1.0",
 		manifests: {},
 	});
 	return cwd;
@@ -280,7 +277,7 @@ function referenceManifests(cwd: string): unknown {
 			),
 		};
 	}
-	return { version: "1.0", manifests };
+	return { manifests };
 }
 
 /** .test.ts files present under <cwd>/.versailles/generated ([] if absent). */
@@ -500,7 +497,6 @@ describe("runCli extract-manifests — update covered, preserve uncovered (build
 		await writeSource(cwd, "OrderItem.ts", ORDER_ITEM_SOURCE);
 		// A stale covered entry + an uncovered component that must survive.
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "deadbeef",
@@ -600,7 +596,6 @@ describe("runCli validate — structured report (build-spec §10)", () => {
 	it("workspace with a parse error → ok false, PARSE_ERROR in errors, exit 1 — never a throw", async () => {
 		const cwd = await freshWorkspace("v-parse-error");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [],
@@ -620,7 +615,6 @@ describe("runCli validate — structured report (build-spec §10)", () => {
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-os",
@@ -645,7 +639,6 @@ describe("runCli validate — structured report (build-spec §10)", () => {
 	it("workspace with a semantic validation error → ok false, UNKNOWN_FIELD in errors, exit 1", async () => {
 		const cwd = await freshWorkspace("v-semantic-error");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				svc: {
 					invariants: [],
@@ -663,7 +656,6 @@ describe("runCli validate — structured report (build-spec §10)", () => {
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				svc: { sourceHash: "man-svc", fields: { known: "number" } },
 			},
@@ -731,7 +723,6 @@ describe("runCli check — staleness / exit codes (build-spec §8)", () => {
 		await writeSource(cwd, "OrderService.ts", SOURCE_VERSION_A);
 		await writeWorkspaceFile(cwd, "manifests.json", referenceManifests(cwd));
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [],
@@ -839,7 +830,6 @@ describe("runCli generate — deterministic generation (build-spec §9)", () => 
 	it("invalid workspace → exit 1 with structured errors and NO test files written", async () => {
 		const cwd = await freshWorkspace("g-invalid");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [],
@@ -859,7 +849,6 @@ describe("runCli generate — deterministic generation (build-spec §9)", () => 
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-os",
@@ -913,7 +902,6 @@ describe("runCli generate — non-silent unplannable predicate warnings (VERSAIL
 	it("a genuinely unplannable predicate clause surfaces PREDICATE_UNPLANNABLE in warnings — never a silent zero, exit 0", async () => {
 		const cwd = await freshWorkspace("g-predicate-unplannable");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [],
@@ -938,7 +926,6 @@ describe("runCli generate — non-silent unplannable predicate warnings (VERSAIL
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-order",
@@ -985,7 +972,6 @@ describe("runCli generate — non-silent UNPLANNABLE_OPERATION warnings for stag
 	it("a staged operation absent from the component's manifest methods metadata surfaces UNPLANNABLE_OPERATION in warnings — never a dead static call, exit 0", async () => {
 		const cwd = await freshWorkspace("g-unplannable-operation");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				Order: {
 					invariants: [],
@@ -1005,7 +991,6 @@ describe("runCli generate — non-silent UNPLANNABLE_OPERATION warnings for stag
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				Order: {
 					sourceHash: "man-order",
@@ -1065,7 +1050,6 @@ describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for retai
 			propertyBased: { enabled: true, numRuns: 100 },
 		});
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [],
@@ -1100,7 +1084,6 @@ describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for retai
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-order",
@@ -1266,7 +1249,6 @@ describe("runCli check — zero-resolved sourceRoots must never false-green (Cen
 		// Genuine grounding the zero-root scan cannot verify: a stored
 		// manifest whose hash check must NOT be silently skipped.
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "deadbeef",
@@ -1301,7 +1283,6 @@ describe("runCli extract-manifests --prune — unusable roots must not silently 
 			sourceRoots: ["does-not-exist/**/*.ts"],
 		});
 		const stored = {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "deadbeef",
@@ -1508,7 +1489,6 @@ describe("runCli extract-manifests — sourcePath persists through the store (VE
 		// A stale covered entry (refreshed path must gain sourcePath) + a
 		// legacy uncovered entry (preserved path must not invent one).
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "deadbeef",
@@ -1600,7 +1580,6 @@ describe("runCli extract-manifests + generate — a zero-method component with a
 		await writeSource(cwd, "Order.ts", ZERO_METHOD_ORDER_SOURCE);
 		// Stage an operation that cannot exist in the zero-method source.
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				Order: {
 					invariants: [],
@@ -1669,7 +1648,6 @@ async function seedGeneratorWorkspaceWithSourcePaths(
 ): Promise<string> {
 	const cwd = await seedGeneratorWorkspace(name);
 	await writeWorkspaceFile(cwd, "manifests.json", {
-		version: "1.0",
 		manifests: {
 			AccountService: {
 				sourceHash: "man-account",
@@ -1713,7 +1691,6 @@ describe("runCli generate — vitest module paths derive from manifest sourcePat
 		// Only AccountService carries sourcePath; CustomerService is a legacy
 		// entry without one and must fall back to the deterministic default.
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				AccountService: {
 					sourceHash: "man-account",
@@ -1773,7 +1750,6 @@ export class OrderItem {
 
 function v24OrderContracts(): unknown {
 	return {
-		version: "1.0",
 		contracts: {
 			Order: {
 				invariants: [],

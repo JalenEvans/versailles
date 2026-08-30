@@ -49,8 +49,6 @@ import type { Node } from "../packages/core/src/core/parser.js";
 // ── Fixture helpers (mirror tests/cli.test.ts conventions) ─────────────────
 
 const SEEDED_CONFIG = {
-	grammarVersion: "1.0",
-	schemaVersion: "1.0",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -78,11 +76,9 @@ async function freshWorkspace(name: string): Promise<string> {
 	await mkdir(join(cwd, ".versailles"), { recursive: true });
 	await writeWorkspaceFile(cwd, "config.json", SEEDED_CONFIG);
 	await writeWorkspaceFile(cwd, "contracts.json", {
-		version: "1.0",
 		contracts: {},
 	});
 	await writeWorkspaceFile(cwd, "manifests.json", {
-		version: "1.0",
 		manifests: {},
 	});
 	return cwd;
@@ -97,7 +93,6 @@ async function freshWorkspace(name: string): Promise<string> {
  */
 function orderServiceContracts(): unknown {
 	return {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [{ id: "OrderService.inv0", expr: "balance >= 0" }],
@@ -132,7 +127,6 @@ function orderServiceContracts(): unknown {
 
 function orderServiceManifests(): unknown {
 	return {
-		version: "1.0",
 		manifests: {
 			OrderService: {
 				sourceHash: "man-order",
@@ -277,7 +271,6 @@ describe("runCli validate --verbose — per-clause expr+AST pairs (ADR-0012 Phas
 		// One valid invariant + one operation with a parse-failing postcondition
 		// (single '=' is a parse error — the grammar requires '==').
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [{ id: "OrderService.inv0", expr: "balance >= 0" }],
@@ -331,7 +324,7 @@ describe("runCli validate --verbose — per-clause expr+AST pairs (ADR-0012 Phas
 	});
 
 	it("on a workspace with NO contracts (empty contracts map), validate --verbose returns ok with verbose.exprViews === [] (no crash)", async () => {
-		// freshWorkspace seeds { version: "1.0", contracts: {} } — no components,
+		// freshWorkspace seeds { contracts: {} } — no components,
 		// no predicates, no clauses. The verbose builder must tolerate an empty
 		// contracts map and emit an empty exprViews array (not crash, not null).
 		const cwd = await freshWorkspace("vv-empty-contracts");

@@ -41,8 +41,6 @@ import { extractManifests } from "../packages/frontend-ts/src/extractors/index.j
 // be valid for the loader so property failures are CLI failures, not
 // fixture failures.
 const SEEDED_CONFIG = {
-	grammarVersion: "1.0",
-	schemaVersion: "1.0",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -98,7 +96,6 @@ beforeAll(async () => {
 	await mkdir(join(workspaceDir, ".versailles"), { recursive: true });
 	await writeWorkspaceFile(workspaceDir, "config.json", SEEDED_CONFIG);
 	await writeWorkspaceFile(workspaceDir, "contracts.json", {
-		version: "1.0",
 		contracts: {
 			[ACCOUNT]: {
 				invariants: [{ id: "AccountService.inv0", expr: "balance >= 0" }],
@@ -123,7 +120,6 @@ beforeAll(async () => {
 		},
 	});
 	await writeWorkspaceFile(workspaceDir, "manifests.json", {
-		version: "1.0",
 		manifests: {
 			[ACCOUNT]: {
 				sourceHash: "man-account",
@@ -132,7 +128,6 @@ beforeAll(async () => {
 		},
 	});
 	await writeWorkspaceFile(workspaceDir, "predicates.json", {
-		version: "1.0",
 		predicates: {},
 	});
 	// Real source so extract/check commands see a scannable sourceRoot.
@@ -149,7 +144,6 @@ beforeAll(async () => {
 	const result = extractManifests([join(workspaceDir, "src")]);
 	const accountEntry = result.manifests[ACCOUNT];
 	await writeWorkspaceFile(workspaceDir, "manifests.json", {
-		version: "1.0",
 		manifests: {
 			[ACCOUNT]: {
 				sourceHash: accountEntry.sourceHash,

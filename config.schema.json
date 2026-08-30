@@ -3,10 +3,7 @@
 	"type": "object",
 	"additionalProperties": false,
 	"properties": {
-		"grammarVersion": {
-			"type": "string"
-		},
-		"schemaVersion": {
+		"$schema": {
 			"type": "string"
 		},
 		"sourceRoots": {
@@ -67,8 +64,6 @@
 		}
 	},
 	"required": [
-		"grammarVersion",
-		"schemaVersion",
 		"sourceRoots",
 		"language",
 		"testFramework",

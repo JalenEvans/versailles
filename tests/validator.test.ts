@@ -201,7 +201,6 @@ type MakeContextOverrides = {
 
 function contractsFixture(): unknown {
 	const fixture: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			[OS]: {
 				invariants: [],
@@ -265,7 +264,6 @@ function predicatesFixture(): PredicateOverride {
 			paramTypes: ["number"],
 			returnType: "boolean",
 			sourceRef: "Num.isPositive",
-			sourceHash: "p1",
 			verifiedPure: true,
 		},
 		isAvailable: {
@@ -273,7 +271,6 @@ function predicatesFixture(): PredicateOverride {
 			paramTypes: ["enum<OPEN,SHIPPED>"],
 			returnType: "boolean",
 			sourceRef: "Order.isAvailable",
-			sourceHash: "p2",
 			verifiedPure: true,
 		},
 		noArg: {
@@ -281,7 +278,6 @@ function predicatesFixture(): PredicateOverride {
 			paramTypes: [],
 			returnType: "boolean",
 			sourceRef: "Util.noArg",
-			sourceHash: "p3",
 			verifiedPure: true,
 		},
 		sideEffectful: {
@@ -289,7 +285,6 @@ function predicatesFixture(): PredicateOverride {
 			paramTypes: ["number"],
 			returnType: "boolean",
 			sourceRef: "Util.sideEffectful",
-			sourceHash: "p4",
 			verifiedPure: false,
 		},
 		missingPurity: {
@@ -297,7 +292,6 @@ function predicatesFixture(): PredicateOverride {
 			paramTypes: ["number"],
 			returnType: "boolean",
 			sourceRef: "Util.missingPurity",
-			sourceHash: "p5",
 		},
 	};
 }
@@ -313,11 +307,9 @@ function makeContext(overrides: MakeContextOverrides = {}): VersaillesContext {
 		config: null,
 		contracts: contractsFixture() as VersaillesContext["contracts"],
 		manifests: {
-			version: "1.0",
 			manifests: manifestsFixture(),
 		} as VersaillesContext["manifests"],
 		predicates: {
-			version: "1.0",
 			predicates: predicatesFixture(),
 		} as VersaillesContext["predicates"],
 		parsedContracts: {},
@@ -331,13 +323,11 @@ function makeContext(overrides: MakeContextOverrides = {}): VersaillesContext {
 	}
 	if (overrides.manifests !== undefined) {
 		context.manifests = {
-			version: "1.0",
 			manifests: overrides.manifests,
 		} as VersaillesContext["manifests"];
 	}
 	if (overrides.predicates !== undefined) {
 		context.predicates = {
-			version: "1.0",
 			predicates: overrides.predicates,
 		} as VersaillesContext["predicates"];
 	}

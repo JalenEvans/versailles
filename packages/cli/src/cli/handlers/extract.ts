@@ -172,7 +172,6 @@ export async function handleExtractManifests(
 		mergedStore[component] = storeEntry;
 	}
 	await writeJsonFile(workspaceDir, "manifests.json", {
-		version: "1.0",
 		manifests: mergedStore,
 	});
 

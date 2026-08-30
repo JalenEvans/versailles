@@ -2623,7 +2623,9 @@ export function planPropertyBlocks(
 	const pbt = context.config?.propertyBased;
 	const pbtEnabled = pbt?.enabled === true;
 	const idiom = context.config?.rejection?.idiom ?? "throws";
-	const grammarVersion = context.config?.grammarVersion ?? "1.0";
+	// ADR-0018: the config grammarVersion field is removed; pin "1.0" so the
+	// PBT seed derivation input stays byte-identical (ADR-0002).
+	const grammarVersion = "1.0";
 	const seedOverride = pbt?.seed;
 
 	const descriptors: PropertyDescriptor[] = [];

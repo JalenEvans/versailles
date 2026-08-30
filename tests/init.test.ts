@@ -6,32 +6,37 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import configSchema from "../config.schema.json";
 // initWorkspace scaffolds <targetDir>/.versailles/ with the three jointly-loaded
-// workspace files (build-spec §2): a default config plus two versioned stores.
+// workspace files (build-spec §2): a default config plus two empty stores.
 // ADR-0013 (Phase 3): predicates.json is retired; predicates now live inline in
 // contracts.json's top-level `predicates` map.
+// ADR-0018 (VERSAILLES-170): no version fields are seeded — the config gets a
+// `$schema` pointer and the stores are `{}` envelopes.
 import { initWorkspace } from "../packages/cli/src/cli/init.js";
 
 /**
  * Verifies `versailles init` seeds the .versailles/ workspace (build-spec §2,
- * §12): a default config plus the two empty schema stores, each as a
- * versioned envelope ({ "version": "1.0" }).
+ * §12): a default config plus the two empty schema stores, each as an empty
+ * envelope (`{}`).
  *
  * Contract grounding:
  * - workspace-context.contract.yaml (load_workspace requires): the directory
- *   must contain all three versioned, jointly-loaded files — config.json,
+ *   must contain all three jointly-loaded files — config.json,
  *   contracts.json, manifests.json (build-spec §2). ADR-0013 retired
  *   predicates.json; predicates are now declared inline in contracts.json.
- * - config.schema.json (draft-07, ADR-0009): required keys grammarVersion,
- *   schemaVersion, sourceRoots, language, testFramework, generatedDir,
- *   staleness.blockOnStale; rejection.idiom optional; additionalProperties
- *   false — so the seeded config must contain ONLY the allowed keys.
+ * - config.schema.json (draft-07, ADR-0009): required keys sourceRoots,
+ *   language, testFramework, generatedDir, staleness.blockOnStale;
+ *   rejection.idiom optional; additionalProperties false — so the seeded
+ *   config must contain ONLY the allowed keys.
+ * - ADR-0018 (VERSAILLES-170): init no longer seeds grammarVersion /
+ *   schemaVersion (the version ceremony is removed) and instead seeds the
+ *   `$schema` pointer; the empty stores are `{}` (no `{ "version": "1.0" }`
+ *   envelope).
  */
 
 const SEED_FILE_NAMES = ["config.json", "contracts.json", "manifests.json"];
 
 const SEEDED_CONFIG = {
-	grammarVersion: "1.0",
-	schemaVersion: "1.0",
+	$schema: "../../config.schema.json",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -99,7 +104,7 @@ describe("initWorkspace — scaffolds .versailles/", () => {
 	});
 
 	it.each(["contracts.json", "manifests.json"])(
-		'seeds %s as the versioned envelope { "version": "1.0" } (build-spec §3.2/§3.3)',
+		"seeds %s as the empty envelope {} (ADR-0018: no version field)",
 		async (fileName) => {
 			const targetDir = await freshTargetDir(`c-${fileName}`);
 
@@ -111,7 +116,7 @@ describe("initWorkspace — scaffolds .versailles/", () => {
 			);
 			expect(() => JSON.parse(content)).not.toThrow();
 			const parsed = JSON.parse(content) as Record<string, unknown>;
-			expect(parsed).toEqual({ version: "1.0" });
+			expect(parsed).toEqual({});
 		},
 	);
 
