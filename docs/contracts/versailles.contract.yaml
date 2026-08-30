@@ -8,11 +8,11 @@ schema_version: 1
 context: versailles
 
 owns:
-  - "The CLI command surface (build-spec §12): init, extract-manifests, validate, check, generate — the exact set of five subcommands, with no review/register-predicate/verify-purity/remind-unverified subcommands (ADR-0012, ADR-0013)"
-  - "Command routing and argument parsing: mapping argv to the five subcommands, positional/flag validation, and usage-error exit paths"
+  - "The CLI command surface (build-spec §12): init, extract-manifests, validate, check, generate — the exact set of five subcommands, with no review/register-predicate/verify-purity/remind-unverified subcommands (ADR-0012, ADR-0013); plus the root-level version flags -v/--version that short-circuit before dispatch and are never subcommands (VERSAILLES-171)"
+  - "Command routing and argument parsing: mapping argv to the five subcommands, root-level version-flag short-circuiting, positional/flag validation, and usage-error exit paths"
   - "The deterministic machine-readable output surface (build-spec §10): stable JSON output shape { ok: boolean, errors: [...], warnings: [...], exitCode: number } with structured errors — never unstructured throws"
   - "Stable exit-code semantics at the process boundary: 0 success/no staleness, 1 validation/parse errors present, 2 blocking staleness — mechanically computed by workspace-context's check_staleness and surfaced here (build-spec §8)"
-  - "The gate that blocks generate from running against an invalid context and routes the failure to structured output instead (build-spec §9)"
+  - "The single shared workspace gate (requireValidWorkspace) that blocks check, generate, and extract-manifests from running against an invalid or config-less context and standardizes every failure path on exit 1 with the empty output envelope {} (build-spec §9; VERSAILLES-171)"
   - "validate --verbose: raw expr + parsed AST per clause as a parser-sanity check (ADR-0012 folded the review-view into validate --verbose)"
 
 purpose: |
@@ -20,7 +20,9 @@ purpose: |
   five subcommands — init, extract-manifests, validate, check, generate — that parse argv, route
   to the owning context for each capability, and respond with stable JSON of the shape
   { ok, errors, warnings, exitCode } plus one of three exit codes (0 clean, 1 parse/validation
-  errors, 2 blocking staleness). The tool never invokes an LLM (ADR-0010). Every failure surface,
+  errors, 2 blocking staleness). The root-level flags -v / --version short-circuit before
+  command dispatch: they print the tool version and exit 0 from any directory with no workspace
+  load (VERSAILLES-171). The tool never invokes an LLM (ADR-0010). Every failure surface,
   from unknown commands to blocking staleness, is a structured error, never an unstructured throw,
   so the tool is deterministic and offline-testable. The authored file is the artifact; the git
   commit is the approval (ADR-0003, ADR-0012); no in-tool review or approval ceremony exists.
@@ -33,6 +35,8 @@ invariants:
   - "validate, check, and generate load the workspace exclusively through the workspace-context shared loader; no command re-implements loading (build-spec §6)."
   - "Exit code 2 is reserved exclusively for blocking staleness (build-spec §8); usage and validation errors never use it."
   - "The command surface contains exactly five subcommands (init, extract-manifests, validate, check, generate); no review, register-predicate, verify-purity, or remind-unverified subcommand exists (ADR-0012, ADR-0013)."
+  - "Root-level -v and --version short-circuit before command dispatch: they print the tool version and exit 0 from any directory, never loading the workspace; subcommands reject them as usage errors (VERSAILLES-171)."
+  - "The invalid-context failure path for check, generate, and extract-manifests standardizes on exit 1 with the empty output envelope {} via the single shared workspace gate — no command re-implements the envelope (VERSAILLES-171)."
 
 operations:
   route_command:
@@ -40,11 +44,14 @@ operations:
       - "argv is the raw command-line argument vector (process.argv minus node and script)"
     ensures:
       - "The first positional argument routes to exactly one of: init | extract-manifests | validate | check | generate"
+      - "-v and --version as the first positional short-circuit before routing and resolve { ok: true, output: { version: <package version> }, warnings: [], exitCode: 0 } — never dispatched as a subcommand, no workspace load, works from any directory (VERSAILLES-171)"
       - "An unknown first positional returns a structured usage error with exit code 1 — never a raw throw and never exit code 2"
       - "Commands accept no unexpected positional arguments; unexpected positionals are a structured usage error with exit code 1"
     examples:
       - input: "route_command(['check'])"
         output: "routes to the check handler"
+      - input: "route_command(['-v'])"
+        output: "{ ok: true, errors: [], warnings: [], exitCode: 0, output: { version: '0.1.0' } } — root-level version short-circuit, no dispatch"
       - input: "route_command(['author', 'OrderService'])"
         output: "structured usage error { ok: false, errors: [{ code: 'UNKNOWN_COMMAND', ... }], warnings: [], exitCode: 1 } — no author subcommand exists"
       - input: "route_command(['review', 'OrderService'])"
@@ -110,6 +117,8 @@ operations:
 
 must:
   - "Expose exactly the build-spec §12 command surface: init, extract-manifests, validate, check, generate; no review, register-predicate, verify-purity, or remind-unverified subcommand exists (ADR-0012, ADR-0013)."
+  - "Expose root-level -v / --version flags that short-circuit before command dispatch and print the tool version (the package version) with exit 0 from any directory; subcommands reject -v/--version as usage errors (VERSAILLES-171)."
+  - "Route check, generate, and extract-manifests through the single shared workspace gate (requireValidWorkspace) that loads the workspace once and standardizes every failure path on exit 1 with the empty output envelope {} — the former per-command envelopes ({ staleIds: [] }, { files: [] }) are gone (VERSAILLES-171)."
   - "Route argv deterministically to the five subcommands and reject unknown commands or malformed arguments with a structured usage error and exit code 1 — never a raw stack trace and never exit code 2."
   - "Produce the stable machine-readable output shape { ok: boolean, errors: [...], warnings: [...], exitCode: number } on every command and serialize it as deterministic JSON (build-spec §10)."
   - "Return every failure — usage errors, load errors, parse/validation errors, and blocking staleness — as structured errors, never unstructured throws (build-spec §10, ADR-0010)."
@@ -122,6 +131,8 @@ must:
 must_not:
   - "Must not invoke an LLM anywhere in the command surface — no LLM client, no prompt templates, no retry loop that calls an LLM (ADR-0010)."
   - "Must not expose review, register-predicate, verify-purity, remind-unverified, or author subcommands (ADR-0010, ADR-0012, ADR-0013)."
+  - "Must not treat -v / --version as subcommand flags — subcommands reject them as unexpected arguments (USAGE exit 1); --verbose remains the only validate flag (long-only) (VERSAILLES-171)."
+  - "Must not re-implement the invalid-context envelope per command — check, generate, and extract-manifests share the one workspace gate; no command returns its own { staleIds: [] } / { files: [] } failure envelope (VERSAILLES-171)."
   - "Must not throw unstructured exceptions on any path — malformed arguments, unknown commands, load failures, parse/validation errors, and staleness all surface as structured JSON errors (build-spec §10)."
   - "Must not exit with a code outside {0, 1, 2}, and must not use 2 for anything other than blocking staleness (build-spec §8)."
   - "Must not emit nondeterministic output — no timestamps, randomness, or environment-dependent content in machine-readable output (build-spec §10, ADR-0002)."
@@ -149,6 +160,8 @@ limits:
 asserts:
   - "assert: every command path exits with one of 0, 1, or 2."
   - "assert: running the same argv twice against the same workspace produces byte-identical stdout JSON."
+  - "assert: -v / --version from any directory (including one with no .versailles/) resolve ok:true exit:0 with output { version } — no workspace load, no dispatch (VERSAILLES-171)."
+  - "assert: check/generate/extract-manifests against an invalid or config-less context exit 1 with the standardized output {} — never { staleIds: [] } or { files: [] } (VERSAILLES-171)."
   - "assert: an unknown command or malformed argument exits 1 with a structured usage error, never a raw throw."
   - "assert: validate/check on a workspace with parse or validation errors exits 1; check on blocking staleness exits 2; clean exits 0; non-blocking staleness exits 0 with a warning."
   - "assert: generate against an invalid context writes zero files under generated/ and exits 1."
@@ -163,3 +176,4 @@ asserts:
 | 2026-08-14 | general-manager | Initial contract from docs/specs/versailles.md; build-spec §6, §8, §9, §10, §12; ADR-0002/0010. Cross-references workspace-context for staleness exit-code mechanics; no duplication of its check_staleness ownership |
 | 2026-08-16 | general-manager | Extended the command surface from six to nine subcommands — register-predicate, verify-purity, remind-unverified and the review --approve/--reject flags shipped (PR feat/review-ecosystem); build-spec §12 updated in step |
 | 2026-08-22 | power-forward | Retired review + predicate registration CLI per ADR-0012 / ADR-0013; command surface is now five subcommands; validate --verbose carries the parser-sanity view; predicates are declarative in contracts.json |
+| 2026-08-30 | general-manager | VERSAILLES-171 Phase 3 (CLI surface delta): root-level -v/--version flags short-circuit before dispatch (exit 0, output { version }, no workspace load, any directory); subcommands reject them as usage errors; check/generate/extract-manifests share one workspace gate (requireValidWorkspace) and standardize every failure path on exit 1 with the empty output envelope {} — the per-command { staleIds: [] } / { files: [] } envelopes are gone |

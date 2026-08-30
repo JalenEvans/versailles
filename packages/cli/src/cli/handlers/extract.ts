@@ -10,19 +10,22 @@
  *               not cover, kept because --prune was not passed
  *   pruned    = components in the previous manifests.json the extraction did
  *               not cover, REMOVED because --prune was passed
+ *
+ * VERSAILLES-171: the workspace gate (requireValidWorkspace) runs first; its
+ * failure-path output is the standardized {} (extract previously returned no
+ * output key on invalid/config-null workspaces).
  */
 import { join } from "node:path";
 
-import { loadWorkspace } from "../../../../core/src/loader/workspace.js";
 import {
 	extractManifests,
 	mergeManifests,
 } from "../../../../frontend-ts/src/extractors/index.js";
 import type { ManifestMap } from "../../../../frontend-ts/src/extractors/types.js";
 import {
-	contextErrors,
 	expandSourceRoots,
 	extractorWarnings,
+	requireValidWorkspace,
 	sourceRootsGuard,
 	writeJsonFile,
 } from "../context.js";
@@ -32,30 +35,12 @@ export async function handleExtractManifests(
 	cwd: string,
 	prune: boolean,
 ): Promise<CliResult> {
+	const guard = await requireValidWorkspace(cwd);
+	if (!guard.ok) {
+		return guard.result;
+	}
+	const { context } = guard;
 	const workspaceDir = join(cwd, ".versailles");
-	const context = await loadWorkspace(workspaceDir);
-	if (!context.isValid) {
-		return {
-			ok: false,
-			errors: contextErrors(context),
-			warnings: [],
-			exitCode: 1,
-		};
-	}
-	if (context.config === null) {
-		return {
-			ok: false,
-			errors: [
-				{
-					code: "CONFIG_INVALID",
-					field: "config.json",
-					detail: "Workspace config is missing — cannot determine sourceRoots",
-				},
-			],
-			warnings: [],
-			exitCode: 1,
-		};
-	}
 
 	const roots = expandSourceRoots(context.config.sourceRoots ?? [], cwd);
 	const stored = context.manifests?.manifests ?? {};

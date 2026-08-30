@@ -7,14 +7,16 @@
  * build-spec §9). The rejection idiom comes from config.rejection.idiom
  * (default "throws", ADR-0007) and flows through the planner into every
  * reject case. Deterministic: same context in, byte-identical files out.
+ *
+ * VERSAILLES-171: the workspace gate (requireValidWorkspace) runs first; its
+ * failure-path output is the standardized {} (never { files: [] }).
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 
-import {
-	type ManifestsFile,
-	type PredicatesFile,
-	loadWorkspace,
+import type {
+	ManifestsFile,
+	PredicatesFile,
 } from "../../../../core/src/loader/workspace.js";
 import {
 	coverageManifest,
@@ -23,36 +25,19 @@ import {
 	planTestCases,
 } from "../../../../engine/src/generator/index.js";
 import type { EmitOptions } from "../../../../engine/src/generator/index.js";
-import { contextErrors, contextWarnings, messageOf } from "../context.js";
+import {
+	contextWarnings,
+	messageOf,
+	requireValidWorkspace,
+} from "../context.js";
 import type { CliResult } from "../types.js";
 
 export async function handleGenerate(cwd: string): Promise<CliResult> {
-	const workspaceDir = join(cwd, ".versailles");
-	const context = await loadWorkspace(workspaceDir);
-	if (!context.isValid) {
-		return {
-			ok: false,
-			errors: contextErrors(context),
-			warnings: contextWarnings(context),
-			exitCode: 1,
-			output: { files: [] },
-		};
+	const guard = await requireValidWorkspace(cwd);
+	if (!guard.ok) {
+		return guard.result;
 	}
-	if (context.config === null) {
-		return {
-			ok: false,
-			errors: [
-				{
-					code: "CONFIG_INVALID",
-					field: "config.json",
-					detail: "Workspace config is missing — cannot determine generatedDir",
-				},
-			],
-			warnings: [],
-			exitCode: 1,
-			output: { files: [] },
-		};
-	}
+	const { context } = guard;
 
 	try {
 		const suite = planTestCases(context);

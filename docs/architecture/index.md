@@ -8,8 +8,8 @@ How the [bounded contexts](../domains/index.md) interact. The vocabulary is the 
  source code
       │  (manifest-extraction: extractor plugin per config.language — ADR-0008/0009)
       ▼
-  manifests.json ──►  .versailles/ workspace (versioned, loaded as one unit)
-                         │  (workspace-context: version gates + joint load)
+  manifests.json ──►  .versailles/ workspace (loaded as one unit)
+                         │  (workspace-context: joint load, no version gates)
                          ▼
                    VersaillesContext (isValid?)
                          │
@@ -29,7 +29,7 @@ How the [bounded contexts](../domains/index.md) interact. The vocabulary is the 
 
 | Context | Role in the pipeline | Key invariant it enforces |
 |---|---|---|
-| workspace-context | Shared kernel; provides the joint `VersaillesContext` to everyone | `.versailles/` files are never interpreted in isolation; version gates are hard |
+| workspace-context | Shared kernel; provides the joint `VersaillesContext` to everyone | `.versailles/` files are never interpreted in isolation; no version gates — the format policy is additive-only (ADR-0018) |
 | contract-language | Validation gate; structured error producer | Invalid contracts never reach generation |
 | manifest-extraction | Grounding edge; source → `manifests.json` | Manifests are derived by static analysis, never hallucinated |
 | deterministic-generation | The compiler; contracts → tests | Generation is a pure function; `generated/` is tool-owned |
@@ -66,7 +66,9 @@ The command surface binds contexts without owning domain logic (build-spec §12)
 | `versailles check` | workspace-context + contract-language + manifest-extraction | CI-mode; exit `2` = staleness (blocking) |
 | `versailles generate` | deterministic-generation | Requires `isValid: true`; exit `1` if invalid |
 
-**Rejected commands** are first-class behavior: an invalid context (parse/validation errors), a stale context while blocking, or a version mismatch makes the command reject with structured errors and a distinct exit code — never a silent partial run (see [features/command-rejection.md](../features/command-rejection.md)).
+**Rejected commands** are first-class behavior: an invalid context (parse/validation errors) or a stale context while blocking makes the command reject with structured errors and a distinct exit code — never a silent partial run (see [features/command-rejection.md](../features/command-rejection.md)). `check`, `generate`, and `extract-manifests` share one workspace gate and standardize every invalid-context failure path on exit `1` with the empty output envelope `{}` (VERSAILLES-171).
+
+Root-level `versailles -v` / `versailles --version` print the tool version and exit `0` from any directory — a flag, not a command: it short-circuits before dispatch and never loads the workspace (VERSAILLES-171).
 
 ## Pluggable edges (ADR-0008) and the v1 matrix (ADR-0009)
 

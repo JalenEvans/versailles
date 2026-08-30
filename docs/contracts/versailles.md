@@ -9,14 +9,23 @@
 Versailles is the **deterministic, machine-readable CLI surface** of the tool. It exposes
 five subcommands — `init`, `extract-manifests`, `validate`, `check`, `generate` — that parse
 arguments, route to the owning context for each capability, and respond with stable JSON
-plus a stable exit code. The tool never invokes an LLM (ADR-0010). The authored file is the
-artifact; the git commit is the approval (ADR-0003, ADR-0012). No in-tool review or
-approval ceremony exists.
+plus a stable exit code. The root-level flags `versailles -v` / `versailles --version`
+short-circuit before command dispatch — they print the tool version and exit `0` from any
+directory, never loading the workspace (VERSAILLES-171). The tool never invokes an LLM
+(ADR-0010). The authored file is the artifact; the git commit is the approval (ADR-0003,
+ADR-0012). No in-tool review or approval ceremony exists.
 
 ## What it guarantees (must)
 
 - Exactly the five commands above — **no `review`, `register-predicate`, `verify-purity`,
   `remind-unverified`, or `author` subcommand** exists (ADR-0010, ADR-0012, ADR-0013).
+- Root-level `versailles -v` / `--version` print the tool version and exit `0` from any
+  directory — a flag, not a command; subcommands reject `-v` / `--version` as usage errors,
+  and `--verbose` stays the only `validate` flag (long-only) (VERSAILLES-171).
+- `check`, `generate`, and `extract-manifests` share one workspace gate
+  (`requireValidWorkspace`); every invalid-context failure path exits `1` with the
+  standardized empty output envelope `{}` — no command re-implements the envelope
+  (VERSAILLES-171).
 - Every command answers with the stable shape `{ ok, errors, warnings, exitCode }` as
   deterministic JSON — same input, same output, byte for byte.
 - Every failure — bad arguments, unknown commands, load errors, validation errors,

@@ -11,7 +11,7 @@ Implemented layout (pipeline core, generator, extractor, CLI, and tests are ship
 ```
 versailles
 ├── .versailles/      ← tool state: config.json, contracts.json (with top-level predicates
-│   │                    map), manifests.json, generated/ — versioned and loaded as one unit
+│   │                    map), manifests.json, generated/ — loaded as one unit
 │   └── generated/    ← deterministic generator output (tool-owned, never hand-edited)
 ├── packages/            ← bun workspaces monorepo ("workspaces": ["packages/*"]); packages are
 │   │                     @versailles/*; per-package licensing recorded in ADR-0015
@@ -27,7 +27,7 @@ versailles
 ├── tests/            ← implemented: init, config-schema enum, smoke, parser, validator, loader, generator,
 │                       extractor, CLI (unit + property, vitest)
 ├── examples/         ← committed reference example: order-service/ — a real TypeScript service with a
-│                       versioned .versailles/ workspace + generated vitest suite; regenerated
+│                       .versailles/ workspace + generated vitest suite; regenerated
 │                       deterministically by `bun run example:generate`
 ├── docs/             ← this layer (DDD knowledge base)
 │   ├── domains/      ← bounded contexts (contract-language, manifest-extraction,
@@ -50,7 +50,7 @@ Module boundaries per the build spec (§13 milestones). Contracts/specs are regi
 | Module | Path | Owns | Spec | Contract |
 |--------|------|------|------|----------|
 | Contract language (grammar + parser + validator) | `packages/core/src/core/parser`, `packages/core/src/core/validator` | expression grammar, AST, semantic checks, structured error contract | [docs/specs/contract-language.md](specs/contract-language.md) | [draft](contracts/contract-language.contract.yaml) |
-| Loader / context | `packages/core/src/loader` | unified versioned context, version gates, scoped extraction helper | [docs/specs/workspace-context.md](specs/workspace-context.md) | [draft](contracts/workspace-context.contract.yaml) |
+| Loader / context | `packages/core/src/loader` | unified context, no version gates (additive-only, ADR-0018), scoped extraction helper | [docs/specs/workspace-context.md](specs/workspace-context.md) | [draft](contracts/workspace-context.contract.yaml) |
 | Manifest extractor | `packages/frontend-ts/src/extractors` | source → `manifests.json`, structural `sourceHash` | [docs/specs/manifest-extraction.md](specs/manifest-extraction.md) | [draft](contracts/manifest-extraction.contract.yaml) |
 | Deterministic generator | `packages/engine/src/generator` | test-case IR → test files, `generated/coverage.json` | [docs/specs/deterministic-generation.md](specs/deterministic-generation.md) | [draft](contracts/deterministic-generation.contract.yaml) |
 | CLI | `packages/cli/src/cli` | command surface (`init`, `extract-manifests`, `validate`, `check`, `generate`), machine-readable structured output + exit codes for CI and external consumers | [docs/specs/versailles.md](specs/versailles.md) | [draft](contracts/versailles.contract.yaml) |
@@ -84,7 +84,7 @@ PRs and pushes to `main` run both gates automatically via `.github/workflows/val
 - Docs are the single knowledge source — never duplicate them into chat.
 - ADRs are immutable once accepted; new decisions supersede, never edit (see [decisions/](decisions/index.md)).
 - Spec threshold rule: write a spec only where the change touches money / permissions / public API / data / state.
-- `.versailles/` files are versioned together and loaded as a single unit — never interpret one file in isolation.
+- `.versailles/` files are loaded as a single unit — never interpret one file in isolation.
 - `generated/` is fully tool-owned — never hand-edited, always regenerated from `contracts.json`.
 - No implementation starts without a registered contract (`contract_gate`).
 

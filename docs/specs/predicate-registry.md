@@ -3,7 +3,7 @@
 **ID:** SPEC-pr
 **Lifecycle:** implemented
 **Owner:** associate-head-coach
-**Threshold:** data (predicates are part of the tool's versioned data layer — declared inline in `contracts.json`), public-api (the validator's predicate-verification behavior is user-facing)
+**Threshold:** data (predicates are part of the tool's data layer — declared inline in `contracts.json`), public-api (the validator's predicate-verification behavior is user-facing)
 **Linked contract:** `docs/contracts/predicate-registry.contract.yaml`
 **Canonical source:** `~/.opencode/skills/spec-builder/references/spec.template.md`
 
@@ -95,3 +95,4 @@ boundary stays with contract-language. The tool never invokes an LLM (ADR-0010).
 | 2026-08-16 | associate-head-coach | Made the shipped CLI command names concrete (`register-predicate`, `verify-purity`, `remind-unverified`) — milestone 8 tooling is shipped (PR feat/review-ecosystem) |
 | 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
 | 2026-08-22 | power-forward | Rewritten for declarative predicates (ADR-0013): predicates declared inline in contracts.json; registration CLI removed; sourceHash dropped; validate verifies declarations (resolve-or-warn, name validity, verifiedPure gate) |
+| 2026-08-30 | general-manager | Reconcile with ADR-0018 (VERSAILLES-168 Phase 2/3 follow-up): predicates are part of the tool's data layer — dropped the stale "versioned" qualifier |

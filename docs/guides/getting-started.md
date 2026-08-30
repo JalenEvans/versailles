@@ -32,16 +32,16 @@ cd your-project
 versailles init
 ```
 
-`init` creates the [`.versailles/` workspace](../domains/workspace-context.md) — the versioned, jointly-loaded tool state:
+`init` creates the [`.versailles/` workspace](../domains/workspace-context.md) — the jointly-loaded tool state:
 
 ```
 .versailles/
-├── config.json        # seeded defaults: grammarVersion, sourceRoots, language, testFramework, …
-├── contracts.json     # empty store: { "version": "1.0" }
-└── manifests.json     # empty store: { "version": "1.0" }  (filled by extract-manifests, brownfield only)
+├── config.json        # seeded defaults: $schema pointer, sourceRoots, language, testFramework, …
+├── contracts.json     # empty store: {}
+└── manifests.json     # empty store: {}  (filled by extract-manifests, brownfield only)
 ```
 
-`config.json` is seeded with TypeScript + vitest defaults and `staleness.blockOnStale: true`. `contracts.json` and `manifests.json` start as empty versioned stores — you author the contract next, and you never hand-author the manifest.
+`config.json` is seeded with TypeScript + vitest defaults and `staleness.blockOnStale: true`. `contracts.json` and `manifests.json` start as empty stores — you author the contract next, and you never hand-author the manifest.
 
 > `init` re-seeds the schema files, so only run it on a fresh project — not one you've already authored.
 
@@ -51,7 +51,6 @@ Open `.versailles/contracts.json` and write the whole contract. This is the arti
 
 ```json
 {
-  "version": "1.0",
   "predicates": {
     "isPositive": {
       "source": "BankAccount.isPositive",

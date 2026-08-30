@@ -1,4 +1,3 @@
-import { messageOf } from "./context.js";
 /**
  * The machine-readable CLI surface (build-spec §10, §12,
  * docs/contracts/versailles.contract.yaml) — runCli routes argv to exactly
@@ -9,9 +8,18 @@ import { messageOf } from "./context.js";
  * malformed args, load errors, parse/validation errors, staleness, internal
  * failures) is a structured error (ADR-0010).
  *
+ * Root-level version flags (VERSAILLES-168 Phase 3, VERSAILLES-171): -v /
+ * --version short-circuit BEFORE the command table and resolve ok:true
+ * exit:0 with output { version } — the repo-root package.json version, read
+ * dynamically. The short-circuit is pure: no workspace load, works from any
+ * directory. Subcommands reject the flags as ordinary unexpected arguments
+ * (USAGE exit 1) — --verbose stays long-only on validate.
+ *
  * ADR-0013 (Phase 3): the predicate CLI trio (register-predicate, verify-purity,
  * remind-unverified) is REMOVED. Predicates are now declarative in contracts.json.
  */
+import pkg from "../../../../package.json" with { type: "json" };
+import { messageOf } from "./context.js";
 import { handleCheck } from "./handlers/check.js";
 import { handleExtractManifests } from "./handlers/extract.js";
 import { handleGenerate } from "./handlers/generate.js";
@@ -73,6 +81,18 @@ async function dispatch(argv: string[], cwd: string): Promise<CliResult> {
 			"USAGE",
 			"Missing command — expected one of: init, extract-manifests, validate, check, generate",
 		);
+	}
+	// Root-level version flags (VERSAILLES-168 Phase 3, VERSAILLES-171):
+	// short-circuit BEFORE the command table — pure, no workspace load, works
+	// from any directory. The version is the repo-root package.json version.
+	if (command === "-v" || command === "--version") {
+		return {
+			ok: true,
+			errors: [],
+			warnings: [],
+			exitCode: 0,
+			output: { version: pkg.version },
+		};
 	}
 	if (!COMMANDS.has(command)) {
 		return usageError(

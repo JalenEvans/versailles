@@ -10,12 +10,12 @@
 
 ## Behavioral Intent
 
-Versailles turns Design-by-Contract specifications (invariants, preconditions, postconditions) written in a small expression language into deterministic test suites. Contracts are the single source of truth: a validated contract always produces the same tests. The CLI never drives an LLM — no LLM is invoked by the tool at any point (ADR-0010). Contracts are authored directly into `contracts.json` (with predicates declared inline in the top-level `predicates` map, ADR-0013); `validate` / `check` gate correctness; the git commit is the approval (ADR-0003, ADR-0012). The CLI exposes a deterministic, machine-readable surface (structured errors, stable JSON output, stable exit codes) that CI and external tooling can consume. The `.versailles/` directory is versioned and loaded as a single unit, and every contract clause and generated test traces back to a source hash.
+Versailles turns Design-by-Contract specifications (invariants, preconditions, postconditions) written in a small expression language into deterministic test suites. Contracts are the single source of truth: a validated contract always produces the same tests. The CLI never drives an LLM — no LLM is invoked by the tool at any point (ADR-0010). Contracts are authored directly into `contracts.json` (with predicates declared inline in the top-level `predicates` map, ADR-0013); `validate` / `check` gate correctness; the git commit is the approval (ADR-0003, ADR-0012). The CLI exposes a deterministic, machine-readable surface (structured errors, stable JSON output, stable exit codes) that CI and external tooling can consume. The `.versailles/` directory is loaded as a single unit, and every contract clause and generated test traces back to a source hash.
 
 ## Scope
 
 **In scope:**
-- The `.versailles/` file set (`config.json`, `contracts.json` with its top-level `predicates` map, `manifests.json`) as a versioned, jointly-loaded unit.
+- The `.versailles/` file set (`config.json`, `contracts.json` with its top-level `predicates` map, `manifests.json`) as a jointly-loaded unit.
 - Contract expression grammar: parse, structural constraints, semantic validation, structured error reporting.
 - Deterministic test generation: per-operation cases (boundary, partitions, precondition-violation, postcondition-satisfaction) and per-component invariant tests, with traceability comments and a coverage manifest.
 - Machine-readable CLI surface: structured errors, stable JSON output, deterministic behavior CI and external tooling can consume.
@@ -29,7 +29,7 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - Approval metadata (`approvedBy`/`approvedAt`) in the file schema — the audit trail is git history (ADR-0003).
 - In-tool review or approval ceremony — retired by ADR-0012.
 
-**Programmatic surface (v1): CLI only.** The CLI — `bin versailles` plus the deterministic `runCli` envelope (`{ ok, errors, warnings, exitCode }`, build-spec §10) — is v1's programmatic interface. CI and external tooling consume the CLI as a subprocess, never in-process imports (ADR-0010). There is no library API in v1: `src/index.ts` exports only `packageName`; parser/validator/loader/generator are internal implementation, not a public import surface. A programmatic library API is an explicit non-goal for v1, deferred to v2+ (VERSAILLES-19).
+**Programmatic surface (v1): CLI only.** The CLI — `bin versailles` plus the deterministic `runCli` envelope (`{ ok, errors, warnings, exitCode }`, build-spec §10) — is v1's programmatic interface. CI and external tooling consume the CLI as a subprocess, never in-process imports (ADR-0010). The root-level flags `versailles -v` / `--version` short-circuit before command dispatch, print the tool version (the package `version`, currently `0.1.0`) and exit `0` from any directory — no workspace load (VERSAILLES-171). There is no library API in v1: `src/index.ts` exports only `packageName`; parser/validator/loader/generator are internal implementation, not a public import surface. A programmatic library API is an explicit non-goal for v1, deferred to v2+ (VERSAILLES-19).
 
 ## Behavior
 
@@ -44,6 +44,14 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - **Given** a contract with a parse or semantic error
 - **When** `versailles validate` / `versailles check` / `versailles generate` runs
 - **Then** the command fails with structured errors (never an unstructured throw), and generation does not run
+- **And** `check` / `generate` / `extract-manifests` route through the single shared workspace gate (`requireValidWorkspace`), so every invalid-context failure path exits `1` with the standardized empty output envelope `{}` — no command re-implements the invalid-context envelope (VERSAILLES-171)
+
+### Root-level version flags short-circuit before dispatch
+
+- **Given** `versailles -v` or `versailles --version` from any directory (with or without a `.versailles/` workspace)
+- **When** the CLI runs
+- **Then** it prints the tool version (the package `version`, currently `0.1.0`) and exits `0` — the flags short-circuit before command dispatch and never load the workspace
+- **And** subcommands reject `-v` / `--version` as usage errors (exit `1`); `--verbose` remains the only `validate` flag (long-only)
 
 ### Staleness is detected, and blocking is configurable
 
@@ -104,3 +112,5 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 | 2026-08-11 | associate-head-coach | Architecture correction: CLI never drives an LLM; LLMs drive the CLI (ADR-0010) |
 | 2026-08-19 | general-manager | Programmatic surface pinned: CLI only, no library API in v1 (VERSAILLES-19) |
 | 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
+| 2026-08-30 | general-manager | CLI surface delta (VERSAILLES-171 Phase 3): root-level `-v` / `--version` flags short-circuit before dispatch (exit 0, `{ version }`, no workspace load); subcommands reject them as usage errors; check/generate/extract-manifests share one workspace gate (`requireValidWorkspace`) with the standardized `{}` failure-path output |
+| 2026-08-30 | general-manager | Reconcile with ADR-0018 (VERSAILLES-168 Phase 2/3 follow-up): the `.versailles/` file set is loaded as a single unit — dropped the versioned/version-gate phrasing (no version fields, additive-only format policy) |

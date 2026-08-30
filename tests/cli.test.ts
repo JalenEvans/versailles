@@ -751,6 +751,49 @@ describe("runCli check — staleness / exit codes (build-spec §8)", () => {
 		);
 	});
 
+	it("a workspace with BOTH a parse error AND stale manifests → exit 1 with PARSE_ERROR — validation dominates staleness, never 2 (requireValidWorkspace, VERSAILLES-171)", async () => {
+		const cwd = await freshWorkspace("c-parse-error-dominates");
+		await writeSource(cwd, "OrderService.ts", SOURCE_VERSION_A);
+		await writeWorkspaceFile(cwd, "manifests.json", referenceManifests(cwd));
+		// Stale: source changes after extraction (the stored hash no longer
+		// matches the recomputed hash).
+		await writeSource(cwd, "OrderService.ts", SOURCE_VERSION_B);
+		// And contracts carry a parse error (single '=' — grammar requires '==').
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			contracts: {
+				OrderService: {
+					invariants: [],
+					operations: {
+						placeOrder: {
+							id: "OrderService.placeOrder",
+							params: [],
+							preconditions: [],
+							postconditions: [
+								{ id: "OrderService.placeOrder.post0", expr: "total = 100" },
+							],
+							effects: [],
+							sourceHash: "abc123",
+						},
+					},
+				},
+			},
+		});
+
+		const result = await runCli(["check"], { cwd });
+
+		// Validation errors short-circuit the staleness pass: exit 1, never 2,
+		// no STALE error. The failure-path output is the standardized {}.
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(result.errors).toContainEqual(
+			expect.objectContaining({ code: "PARSE_ERROR" }),
+		);
+		expect(result.errors).not.toContainEqual(
+			expect.objectContaining({ code: "STALE" }),
+		);
+		expect(result.output).toEqual({});
+	});
+
 	it("stale manifests with staleness.blockOnStale true → exit 2, STALE error listing stale IDs", async () => {
 		const cwd = await freshWorkspace("c-stale-block");
 		await writeSource(cwd, "OrderService.ts", SOURCE_VERSION_A);
@@ -787,6 +830,86 @@ describe("runCli check — staleness / exit codes (build-spec §8)", () => {
 		);
 		expect(result.output).toMatchObject({ staleIds: ["OrderService"] });
 	});
+});
+
+// ── VERSAILLES-171 (Phase 3): workspace-gate dedup — requireValidWorkspace ──
+// The duplicated !isValid / config === null blocks in check.ts / generate.ts /
+// extract.ts are replaced by ONE shared guard (requireValidWorkspace in
+// src/cli/context.ts): { ok: true, context } on a valid workspace with a
+// non-null config, else a structured CliResult. The guard's failure-path
+// OUTPUT standardizes on {} — previously check returned { staleIds: [] },
+// generate returned { files: [] }, and extract returned NO output key on
+// invalid/config-null workspaces. Exit codes are PRESERVED (1) and the
+// !isValid / config-null error surfaces stay command-appropriate
+// (PARSE_ERROR… / CONFIG_INVALID). These tests FAIL against the current
+// handlers (Red): the old failure envelopes still carry staleIds / files, and
+// a missing config.json surfaces MISSING_FILE, not CONFIG_INVALID.
+
+describe("runCli — requireValidWorkspace gate: failure-path output standardizes on {} (VERSAILLES-171)", () => {
+	it.each(["check", "generate", "extract-manifests"])(
+		"%s on an invalid workspace (parse error) → exit 1 with PARSE_ERROR and output {} — never { staleIds: [] } / { files: [] }",
+		async (command) => {
+			const cwd = await freshWorkspace(`gate-invalid-${command}`);
+			await writeWorkspaceFile(cwd, "contracts.json", {
+				contracts: {
+					OrderService: {
+						invariants: [],
+						operations: {
+							placeOrder: {
+								id: "OrderService.placeOrder",
+								params: [],
+								preconditions: [],
+								postconditions: [
+									{
+										id: "OrderService.placeOrder.post0",
+										expr: "total = 100",
+									},
+								],
+								effects: [],
+								sourceHash: "abc123",
+							},
+						},
+					},
+				},
+			});
+			await writeWorkspaceFile(cwd, "manifests.json", {
+				manifests: {
+					OrderService: {
+						sourceHash: "man-os",
+						fields: { total: "number" },
+					},
+				},
+			});
+
+			const result = await runCli([command], { cwd });
+
+			expect(result.ok).toBe(false);
+			expect(result.exitCode).toBe(1);
+			expect(result.errors).toContainEqual(
+				expect.objectContaining({ code: "PARSE_ERROR" }),
+			);
+			// The standardized failure envelope — staleIds / files payloads are
+			// success-path-only.
+			expect(result.output).toEqual({});
+		},
+	);
+
+	it.each(["check", "generate", "extract-manifests"])(
+		"%s with config === null (missing config.json) → exit 1 with CONFIG_INVALID and output {}",
+		async (command) => {
+			const cwd = await freshWorkspace(`gate-noconfig-${command}`);
+			await rm(join(cwd, ".versailles", "config.json"), { force: true });
+
+			const result = await runCli([command], { cwd });
+
+			expect(result.ok).toBe(false);
+			expect(result.exitCode).toBe(1);
+			expect(result.errors).toContainEqual(
+				expect.objectContaining({ code: "CONFIG_INVALID" }),
+			);
+			expect(result.output).toEqual({});
+		},
+	);
 });
 
 // ── generate (build-spec §9) ───────────────────────────────────────────────

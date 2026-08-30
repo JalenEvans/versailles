@@ -57,7 +57,7 @@ is broken never ships.
 
 ```
 .versailles/
-├── config.json          # tool config: grammar version, source globs, generator target
+├── config.json          # tool config: $schema pointer, source globs, generator target
 ├── contracts.json        # component contracts (invariants + operations) plus a top-level
 │                         # `predicates` map (declarative predicate registry, ADR-0013)
 ├── manifests.json        # field manifests per component/type, derived from source
@@ -65,12 +65,12 @@ is broken never ships.
     └── <component>/<operation>.test.<ext>
 ```
 
-All three top-level data files are versioned together and must be loaded as a single unit — no
+All three top-level data files are loaded as a single unit — no
 file is valid to interpret in isolation because contracts reference manifests and
 predicates by name.
 
 A committed reference implementation of this layout lives at `examples/order-service/`:
-a real TypeScript service with a versioned `.versailles/` workspace and a generated vitest
+a real TypeScript service with a `.versailles/` workspace and a generated vitest
 suite. `bun run example:generate` re-extracts and regenerates it, failing if the output
 drifts from what is committed.
 
@@ -105,9 +105,7 @@ drifts from what is committed.
 - **Version gates removed (ADR-0018):** there are no `grammarVersion` / `schemaVersion`
   config fields and no file-level `version` fields. The tool version lives in the binary
   (`versailles -v` / `--version`). Format evolution is additive-only, with a
-  deprecate-don't-remove policy and a tool-driven `migrate` policy. (The `contracts.json`
-  / `manifests.json` examples in §3.2–3.4 still carry legacy `version` fields; the full
-  sweep is Phase 2 of the ADR-0018 wave.)
+  deprecate-don't-remove policy and a tool-driven `migrate` policy.
 - `sourceRoots`: glob patterns the manifest extractor scans.
 - `language`: selects the manifest extractor plugin (see §7).
 - `testFramework`: selects the generator's output emitter (see §9).
@@ -127,7 +125,6 @@ drifts from what is committed.
 
 ```json
 {
-  "version": "1.0",
   "contracts": {
     "<ComponentName>": {
       "invariants": [
@@ -171,7 +168,6 @@ Rules:
 
 ```json
 {
-  "version": "1.0",
   "manifests": {
     "<ComponentName>": {
       "sourceHash": "<hash of structural shape: sorted field pairs + sorted method-signature records>",
@@ -225,7 +221,6 @@ purity judgment:
 
 ```json
 {
-  "version": "1.0",
   "predicates": {
     "<predicateName>": {
       "source": "<Module.functionName>",
@@ -376,8 +371,9 @@ no component re-implements loading or cross-referencing independently.
 **Responsibilities:**
 1. Read and JSON-parse all three data files (`config.json`, `contracts.json`,
    `manifests.json`).
-2. Check `config.grammarVersion` / `config.schemaVersion` against the tool's supported versions;
-   hard-fail with an explicit upgrade message on mismatch.
+2. Apply no version gates (ADR-0018): `grammarVersion` / `schemaVersion` and the per-file
+   `version` fields are removed — a version-less config is the valid default; deprecated
+   fields still load permissively (deprecate-don't-remove) until `migrate` rewrites them.
 3. Parse every `expr` string in `contracts.json` into an AST, collecting structured parse
    errors.
 4. Run the semantic validator against the full context, collecting structured semantic
@@ -400,7 +396,7 @@ no component re-implements loading or cross-referencing independently.
 
 The loader never throws on malformed input — missing files, invalid JSON, valid-JSON/wrong-shape
 files, and malformed expressions all produce structured errors (`LoaderError` codes
-`VERSION_MISMATCH` | `MISSING_FILE` | `INVALID_JSON` | `CONFIG_INVALID` | `INVALID_SHAPE`, with
+`MISSING_FILE` | `INVALID_JSON` | `CONFIG_INVALID` | `INVALID_SHAPE`, with
 scoped extraction reporting unknown targets as `NOT_FOUND`) rather than unstructured exceptions.
 A runtime shape-guard pass catches wrong-shape files before any consumer touches them, and the
 semantic validator returns structured results — never a raw throw — on arbitrary ASTs/contexts,
@@ -820,6 +816,7 @@ layout above.
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-08-30 | general-manager | §3.1 version-gate text reconciled with ADR-0018 (Policy Foundation, VERSAILLES-168/169): removed `grammarVersion` / `schemaVersion` from the config example (replaced with a `$schema` pointer to `config.schema.json`) and rewrote the gate bullet to state the gates are removed — no version config fields, no file-level version fields, tool version in the binary (`versailles -v` / `--version`), additive-only format evolution, deprecate-don't-remove, tool-driven `migrate` policy; §3.2–3.4 `version` fields and seed-literal grammar-version references intentionally left for Phase 2 |
+| 2026-08-30 | general-manager | Phase 2 sweep follow-through (VERSAILLES-168): dropped the legacy `"version": "1.0"` envelope from the §3.2/§3.3/§3.4 example snippets, reconciled the §2 layout comment and §6 loader responsibility #2 with ADR-0018 (no version gate; the loader no longer checks versions), and removed `VERSION_MISMATCH` from the §6 LoaderError code set; seed-literal grammar-version references (§3.1 `propertyBased.seed`, §9.6) remain deferred |
 | 2026-08-29 | general-manager | §9.6 FIELD-BOUND layout (VERSAILLES-165 final rounds, Center B1/B2 + W1 + Fix-1/Fix-2): the sampling strategy becomes THREE joint-sampling strategies — the equality-mirror, the record + bounded filter, and the NEW FIELD-BOUND layout for a bothSideFieldRef equality with a manifest-FIELD operand (`f == p`, e.g. `status == newStatus`): op-params only, component instance bound, the field mapped to `instance.<field>` in the assertion, no mirror/record/filter; a field-referencing multi-param guard in the guard set makes only the descriptor whose OWN clause is the field-bound equality plannable (siblings are PROPERTY_UNPLANNABLE); `PROPERTY_UNPLANNABLE` now also covers a coupling referencing a manifest-field operand (Center B2), a coupling whose propagation yields inverted bounds (unsatisfiable region), and a zero-param field-field equality (`f1 == f2`) — the FIELD-BOUND layout has no arbitrary to sample — alongside the existing non-mirrorable equality, equality-of-sums, unboundable couplings, unrenderable oracles, and component-typed params |
 | 2026-08-29 | general-manager | §9.6 joint sampling (VERSAILLES-165): the oracle-arity gate becomes a sampling-strategy routing — multi-param guard oracles are no longer blanket-unplannable; equality oracles (`p1 == p2` / `p1 === p2`, bothSideFieldRef) route to the equality-mirror strategy (emitted callback contains `const p2 = p1;` — no filter, zero filter sparsity) and coupled numeric compounds route to record + bounded filter (`fc.record({ a: ..., b: ... }).filter(({ a, b }) => <oracle>(a, b))`) with cross-param bounds derived from sum/difference leaves BEFORE any filter (`p1 + p2 <= C` with lower bounds L1, L2 → `p1 <= C − L2`, `p2 <= C − L1`; mirrored for `>=`/`>` with upper bounds) so the valid region stays healthy (~≥50%), never filter-sparse, never a hang; `PROPERTY_UNPLANNABLE` is retained only for genuinely unrepresentable shapes — unrenderable oracles, component-typed params, non-mirrorable equality (`!=`/`!==`, equality-of-sums `a + b == C`), unboundable couplings — and multi-param oracles are never emitted as a per-param `.filter` |
 | 2026-08-29 | general-manager | §9.6 plannability gate corrected (B1 fix, feat/seeded-pbt-emission): the gate is now three checks — param representability (every operation param maps to an ArbitrarySpec kind), oracle renderability (the clause codegens to an inline predicate), and the NEW oracle arity gate (a guard oracle used to filter a satisfies/invariant-preserving block must be single-param); multi-param oracles (bothSideFieldRef postconditions like `status == newStatus`, coupled compound preconditions like `a >= 0 and b >= 0 and a + b <= 100`) are **unplannable** — fast-check's `.filter()` receives `undefined` for the 2nd+ params, all candidates are filtered, and the property hangs — so the clause surfaces `PROPERTY_UNPLANNABLE` (non-silent, exit 0, `CliResult.warnings`), the descriptor is skipped, the clause id stays a visible zero-coverage gap in `coverage.json`, and the strategy record still reports the selector's `property` choice; single-param compounds (e.g. `amount >= 10 and amount <= 100`) remain planned, runnable properties — the plan's filter-sparsity mitigation, honest signaling over broken/hanging properties |
