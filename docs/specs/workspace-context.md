@@ -16,7 +16,7 @@ The `.versailles/` workspace — `config.json`, `contracts.json` (with its top-l
 ## Scope
 
 **In scope:**
-- Joint loading and JSON-parsing of all four top-level `.versailles/` files together (build-spec §2, §6).
+- Joint loading and JSON-parsing of all three top-level `.versailles/` data files together (build-spec §2, §6).
 - The additive-only format policy (ADR-0018): no version gates — `grammarVersion`/`schemaVersion` and per-file `version` fields are removed; `config.json` carries a `$schema` pointer to `config.schema.json`; the tool version lives in the binary (`versailles -v` / `--version`); deprecated fields load permissively until `migrate` rewrites them.
 - `config.schema.json` (machine-checkable config validation) against the ADR-0009 enum matrix — `language` accepts `typescript | csharp | python`; `testFramework` accepts `vitest | xunit | pytest`; `jest` (and any value outside the matrix) is rejected.
 - Producing a single `VersaillesContext` object: `config, contracts, manifests, predicates, parsedContracts, parseErrors, validationErrors, validationWarnings, isValid` (build-spec §6.5).

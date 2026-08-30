@@ -20,7 +20,7 @@ owns:
 
 purpose: |
   workspace-context owns the .versailles/ workspace as a jointly-loaded unit under the
-  additive-only format policy. The four top-level files are never valid to interpret in
+  additive-only format policy. The three top-level data files are never valid to interpret in
   isolation — contracts reference manifests and predicates by name — so the loader reads them
   together, applies no version gates (ADR-0018: the grammarVersion/schemaVersion fields and the
   per-file version fields are removed; config.json carries a $schema pointer to
@@ -39,7 +39,7 @@ purpose: |
   exactly as stored, never stripping or inventing it.
 
 invariants:
-  - "The four top-level .versailles/ files are always loaded together; no file is interpreted in isolation (build-spec §2)."
+  - "The three top-level .versailles/ data files are always loaded together; no file is interpreted in isolation (build-spec §2)."
   - "No load path gates on versions — the grammarVersion/schemaVersion fields and per-file version fields are removed (ADR-0018); config.json carries the $schema pointer to config.schema.json, and deprecated fields still load permissively (deprecate-don't-remove)."
   - "isValid is the aggregation of all hard errors: isValid === (parseErrors is empty and validationErrors is empty)."
   - "The loader never throws on malformed input — missing files, invalid JSON, malformed-shape files, and malformed expressions all surface as structured LoaderError/ParseError/ValidationError objects inside the returned context; no failure path raises an unstructured exception (ADR-0010)."

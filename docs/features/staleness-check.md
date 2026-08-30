@@ -6,7 +6,7 @@
 
 ## Overview
 
-The CI-mode command that fails when the workspace has drifted from source. After validation, it **recomputes every stored `sourceHash`** — manifest entries (sorted field name+type pairs), predicates (function implementation), and contract operations (signature + docstring) — and compares against the stored hashes. Staleness is about **structural shape only**; unrelated edits to method bodies do not count.
+The CI-mode command that fails when the workspace has drifted from source. After validation, it **recomputes every stored `sourceHash`** — manifest entries (sorted field name+type pairs) and contract operations (signature + docstring) — and compares against the stored hashes. Predicate `sourceHash` is dropped (ADR-0013) — predicate drift is not staleness-checked. Staleness is about **structural shape only**; unrelated edits to method bodies do not count.
 
 ## User story
 
@@ -16,7 +16,7 @@ The CI-mode command that fails when the workspace has drifted from source. After
 
 1. Load the workspace via the [workspace-context](../domains/workspace-context.md) loader.
 2. Fail if `parseErrors` or `validationErrors` are non-empty (exit `1`).
-3. Recompute `sourceHash` for every manifest entry, predicate, and contract operation from current source; compare against stored hashes.
+3. Recompute `sourceHash` for every manifest entry and contract operation from current source; compare against stored hashes (predicate `sourceHash` is dropped per ADR-0013 — predicate drift is not staleness-checked).
 4. On mismatch:
    - `config.staleness.blockOnStale === true` → hard fail with the list of stale IDs (exit `2`);
    - otherwise → emit a warning report (e.g. CI annotation) and exit `0`.
