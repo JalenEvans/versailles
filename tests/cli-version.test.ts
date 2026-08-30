@@ -11,12 +11,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * flags short-circuit BEFORE command dispatch. `--verbose` stays long-only on
  * validate; subcommands NEVER accept `-v` / `--version`.
  *
- * These tests FAIL against the current implementation:
- * - `-v` / `--version` route to UNKNOWN_COMMAND (exit 1) today — the flags
- *   are not recognized anywhere.
- *
- * The Power Forward implements the GREEN phase (root-level version handling
- * in src/cli/index.ts dispatch) to turn these red pins green.
+ * These tests PIN the implemented root-level `-v` / `--version` behavior
+ * (GREEN landed in 9316a4f): the flags short-circuit BEFORE dispatch and
+ * print the tool version from any directory. They were written as a RED-phase
+ * pin against the pre-implementation behavior (the flags routed to
+ * UNKNOWN_COMMAND, exit 1) and now serve as the regression pin for the
+ * landed dispatch (src/cli/index.ts).
  *
  * ── Pinned output shape ───────────────────────────────────────────────────
  *

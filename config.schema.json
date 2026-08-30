@@ -6,6 +6,12 @@
 		"$schema": {
 			"type": "string"
 		},
+		"grammarVersion": {
+			"type": "string"
+		},
+		"schemaVersion": {
+			"type": "string"
+		},
 		"sourceRoots": {
 			"type": "array",
 			"items": {

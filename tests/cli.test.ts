@@ -841,9 +841,12 @@ describe("runCli check — staleness / exit codes (build-spec §8)", () => {
 // generate returned { files: [] }, and extract returned NO output key on
 // invalid/config-null workspaces. Exit codes are PRESERVED (1) and the
 // !isValid / config-null error surfaces stay command-appropriate
-// (PARSE_ERROR… / CONFIG_INVALID). These tests FAIL against the current
-// handlers (Red): the old failure envelopes still carry staleIds / files, and
-// a missing config.json surfaces MISSING_FILE, not CONFIG_INVALID.
+// (PARSE_ERROR… / CONFIG_INVALID). These tests were written as a RED-phase
+// pin against the pre-gate handlers (whose failure envelopes carried
+// staleIds / files, and where a missing config.json surfaced MISSING_FILE,
+// not CONFIG_INVALID); requireValidWorkspace GREEN landed in 9316a4f, so they
+// now pin the landed standard: failure-path output {} on every guarded
+// command.
 
 describe("runCli — requireValidWorkspace gate: failure-path output standardizes on {} (VERSAILLES-171)", () => {
 	it.each(["check", "generate", "extract-manifests"])(

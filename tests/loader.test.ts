@@ -459,6 +459,74 @@ describe("loadWorkspace — version ceremony removed (ADR-0018)", () => {
 		expect(context.parseErrors).toEqual([]);
 		expect(context.isValid).toBe(true);
 	});
+
+	// ADR-0018 deprecate-don't-remove promise (VERSAILLES-168 Center review):
+	// a PRE-MIGRATION config.json — one still carrying the removed
+	// grammarVersion/schemaVersion fields — must LOAD PERMISSIVELY without a
+	// version error, so old workspaces keep working until a future `migrate`
+	// command rewrites them. Today config.schema.json declares neither key and
+	// keeps additionalProperties: false, so ajv rejects the legacy keys with
+	// CONFIG_INVALID "must NOT have additional properties". The Green schema
+	// fix declares both as OPTIONAL deprecated properties; these tests pin the
+	// post-fix contract and MUST FAIL (Red) against the current schema.
+	it("loads a PRE-MIGRATION config carrying legacy grammarVersion/schemaVersion as valid — deprecate-don't-remove (ADR-0018)", async () => {
+		const ws = await seedWorkspace("c-pre-migration-legacy-fields");
+		// SEEDED_CONFIG is the version-less shape; spread the removed legacy
+		// version fields back in to simulate a pre-migration workspace.
+		await writeWorkspaceFile(ws, "config.json", {
+			...SEEDED_CONFIG,
+			grammarVersion: "1.0",
+			schemaVersion: "1.0",
+		});
+		// The contracts fixture calls isValidEmail(email), so the matching
+		// predicates map must be declared inline (ADR-0013) — otherwise the
+		// clause would surface UNKNOWN_PREDICATE instead of pinning the
+		// permissive-loading behavior.
+		const contracts = contractsFixture() as Record<string, unknown>;
+		contracts.predicates = predicatesFixture();
+		await writeWorkspaceFile(ws, "contracts.json", contracts);
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		// Permissive: the legacy keys are tolerated, not rejected.
+		expect(
+			context.validationErrors.filter((e) => e.code === "CONFIG_INVALID"),
+		).toEqual([]);
+		// VERSION_MISMATCH is gone entirely — no version-gate error may appear.
+		expect(
+			context.validationErrors.some((e) => e.code === "VERSION_MISMATCH"),
+		).toBe(false);
+		expect(context.parseErrors).toEqual([]);
+		expect(context.isValid).toBe(true);
+	});
+
+	it("loads a PRE-MIGRATION config carrying legacy version fields AND a $schema pointer as valid (ADR-0018)", async () => {
+		const ws = await seedWorkspace("c-pre-migration-legacy-schema");
+		// The pre-migration shape may also keep its $schema pointer alongside
+		// the legacy version fields — both must be tolerated together.
+		await writeWorkspaceFile(ws, "config.json", {
+			...SEEDED_CONFIG,
+			$schema: "../../config.schema.json",
+			grammarVersion: "1.0",
+			schemaVersion: "1.0",
+		});
+		// Same inline-predicates rationale as the sibling legacy test.
+		const contracts = contractsFixture() as Record<string, unknown>;
+		contracts.predicates = predicatesFixture();
+		await writeWorkspaceFile(ws, "contracts.json", contracts);
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(
+			context.validationErrors.filter((e) => e.code === "CONFIG_INVALID"),
+		).toEqual([]);
+		expect(context.parseErrors).toEqual([]);
+		expect(context.isValid).toBe(true);
+	});
 });
 
 describe("loadWorkspace — missing files", () => {

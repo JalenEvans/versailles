@@ -107,11 +107,15 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  *    after its clauses.
  * 4. Seed wiring: EVERY descriptor carries `seed` =
  *    config.propertyBased.seed ?? derivePropertySeed(descriptor.traces,
- *    context.config.grammarVersion). Per-block, over the block's OWN covered
- *    clause ids — the contract's "distinct property blocks carry distinct
- *    seed literals (derived per-block from the covered clause IDs + grammar
- *    version, or the explicit config override)". The override wins; the
- *    derived seed stays an int32 (fast-check's `seed | 0` round-trip).
+ *    "1.0"). ADR-0018 removed context.config.grammarVersion from
+ *    WorkspaceConfig; the planner pins the constant `"1.0"` (planner.ts:
+ *    "ADR-0018: the config grammarVersion field is removed; pin \"1.0\" so
+ *    the PBT seed derivation input stays byte-identical (ADR-0002)") so the
+ *    derivation input stays byte-identical. Per-block, over the block's OWN
+ *    covered clause ids — the contract's "distinct property blocks carry
+ *    distinct seed literals (derived per-block from the covered clause IDs +
+ *    grammar version, or the explicit config override)". The override wins;
+ *    the derived seed stays an int32 (fast-check's `seed | 0` round-trip).
  * 5. Per-param arbitraries (ArbitrarySpec): number → kind "number" with
  *    bounds from numericConstraintBounds — and for COMPOUND clauses the
  *    planner must extract the numeric sub-expression bounds too (the flagship
