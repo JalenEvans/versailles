@@ -120,7 +120,6 @@ const COVERED_OP_ID = "Order.setTotal";
  */
 function contractsFixture(): ContractsFile {
 	return {
-		version: "1.0",
 		contracts: {
 			[ORDER]: {
 				invariants: [],
@@ -154,7 +153,6 @@ function contractsFixture(): ContractsFile {
  */
 function methodsMissingOpFixture(): ManifestsFile {
 	return {
-		version: "1.0",
 		manifests: {
 			[ORDER]: {
 				sourceHash: "man-order",
@@ -174,7 +172,6 @@ function methodsMissingOpFixture(): ManifestsFile {
 /** Negative control (a): methods metadata covers every staged op → no warning. */
 function methodsCoverAllFixture(): ManifestsFile {
 	return {
-		version: "1.0",
 		manifests: {
 			[ORDER]: {
 				sourceHash: "man-order",
@@ -199,7 +196,6 @@ function methodsCoverAllFixture(): ManifestsFile {
 /** Negative control (b): full-legacy entry — no methods key at all. */
 function legacyManifestsFixture(): ManifestsFile {
 	return {
-		version: "1.0",
 		manifests: {
 			[ORDER]: {
 				sourceHash: "man-order",
@@ -211,8 +207,6 @@ function legacyManifestsFixture(): ManifestsFile {
 
 function makeConfig(): WorkspaceConfig {
 	return {
-		grammarVersion: "1.0",
-		schemaVersion: "1.0",
 		sourceRoots: ["src/**/*.ts"],
 		language: "typescript",
 		testFramework: "vitest",
@@ -259,7 +253,7 @@ function makeContext(manifests: ManifestsFile): VersaillesContext {
 		config: makeConfig(),
 		contracts,
 		manifests,
-		predicates: { version: "1.0", predicates: {} },
+		predicates: { predicates: {} },
 		parsedContracts: parseAll(contracts),
 		parseErrors: [],
 		validationErrors: [],
@@ -431,7 +425,6 @@ describe("planTestCases — UNPLANNABLE_OPERATION determinism (ADR-0002)", () =>
 /** W3 fixture: a component whose methods map is EMPTY — zero methods known. */
 function zeroMethodManifestsFixture(): ManifestsFile {
 	return {
-		version: "1.0",
 		manifests: {
 			[ORDER]: {
 				sourceHash: "man-order-zero",

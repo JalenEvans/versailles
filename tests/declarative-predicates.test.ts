@@ -50,8 +50,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 // The exact SEEDED_CONFIG written by initWorkspace (src/cli/init.ts).
 const SEEDED_CONFIG = {
-	grammarVersion: "1.0",
-	schemaVersion: "1.0",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -118,11 +116,9 @@ async function freshWorkspaceNoPredicatesFile(
 		...configOverrides,
 	});
 	await writeWorkspaceFile(cwd, "contracts.json", {
-		version: "1.0",
 		contracts: {},
 	});
 	await writeWorkspaceFile(cwd, "manifests.json", {
-		version: "1.0",
 		manifests: {},
 	});
 	// NOTE: NO predicates.json written — the new shape.
@@ -136,7 +132,6 @@ describe("declarative predicates — loader reads predicates from contracts.json
 		const cwd = await freshWorkspaceNoPredicatesFile("dp-loader-happy");
 		// Predicates declared in contracts.json (top-level `predicates` map).
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			predicates: {
 				isPositive: {
 					source: "OrderService.isPositive",
@@ -165,7 +160,6 @@ describe("declarative predicates — loader reads predicates from contracts.json
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-os",
@@ -193,7 +187,6 @@ describe("declarative predicates — validator gate preserved (verifiedPure: fal
 	it("contract referencing a predicate with verifiedPure: false (declared in contracts.json) → UNVERIFIED_PREDICATE hard error, exit 1", async () => {
 		const cwd = await freshWorkspaceNoPredicatesFile("dp-unverified");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			predicates: {
 				isPositive: {
 					source: "OrderService.isPositive",
@@ -222,7 +215,6 @@ describe("declarative predicates — validator gate preserved (verifiedPure: fal
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-os",
@@ -247,7 +239,6 @@ describe("declarative predicates — missing predicate → UNKNOWN_PREDICATE", (
 	it("contract referencing a predicate not declared at all → UNKNOWN_PREDICATE hard error, exit 1", async () => {
 		const cwd = await freshWorkspaceNoPredicatesFile("dp-missing");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			predicates: {
 				// isPositive is NOT declared — only isNegative is.
 				isNegative: {
@@ -277,7 +268,6 @@ describe("declarative predicates — missing predicate → UNKNOWN_PREDICATE", (
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-os",
@@ -302,7 +292,6 @@ describe("declarative predicates — resolve-or-warn (source unresolvable → wa
 	it("declaration with `source` pointing at a nonexistent module/function → warning surfaced (PREDICATE_SOURCE_UNRESOLVED), exit 0, ok true", async () => {
 		const cwd = await freshWorkspaceNoPredicatesFile("dp-source-unresolved");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			predicates: {
 				isPositive: {
 					// This source does NOT exist under sourceRoots.
@@ -332,7 +321,6 @@ describe("declarative predicates — resolve-or-warn (source unresolvable → wa
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-os",
@@ -366,7 +354,6 @@ describe("declarative predicates — invalid declaration name → INVALID_PREDIC
 		async (name) => {
 			const cwd = await freshWorkspaceNoPredicatesFile("dp-invalid-name");
 			await writeWorkspaceFile(cwd, "contracts.json", {
-				version: "1.0",
 				predicates: {
 					[name]: {
 						source: "OrderService.someFn",
@@ -379,7 +366,6 @@ describe("declarative predicates — invalid declaration name → INVALID_PREDIC
 				contracts: {},
 			});
 			await writeWorkspaceFile(cwd, "manifests.json", {
-				version: "1.0",
 				manifests: {},
 			});
 
@@ -428,7 +414,6 @@ describe("declarative predicates — arity/type checks still work (PREDICATE_ARI
 	it("a contract calling isPositive(price, extra) where the declaration declares params: ['amount'] (arity 1) → PREDICATE_ARITY", async () => {
 		const cwd = await freshWorkspaceNoPredicatesFile("dp-arity");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			predicates: {
 				isPositive: {
 					source: "OrderService.isPositive",
@@ -464,7 +449,6 @@ describe("declarative predicates — arity/type checks still work (PREDICATE_ARI
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-os",
@@ -485,7 +469,6 @@ describe("declarative predicates — arity/type checks still work (PREDICATE_ARI
 	it("a contract calling isPositive(name) where the declaration declares paramTypes: ['number'] → PREDICATE_ARG_TYPE", async () => {
 		const cwd = await freshWorkspaceNoPredicatesFile("dp-arg-type");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			predicates: {
 				isPositive: {
 					source: "OrderService.isPositive",
@@ -515,7 +498,6 @@ describe("declarative predicates — arity/type checks still work (PREDICATE_ARI
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-os",
@@ -540,7 +522,6 @@ describe("declarative predicates — malformed predicate declaration → INVALID
 	it("a predicate declaration missing `source` → INVALID_SHAPE error on contracts.predicates.<name>.source, exit 1", async () => {
 		const cwd = await freshWorkspaceNoPredicatesFile("dp-malformed-source");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			predicates: {
 				isPositive: {
 					// `source` is missing entirely.
@@ -553,7 +534,6 @@ describe("declarative predicates — malformed predicate declaration → INVALID
 			contracts: {},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {},
 		});
 
@@ -572,7 +552,6 @@ describe("declarative predicates — malformed predicate declaration → INVALID
 	it("a predicate declaration missing `verifiedPure` → INVALID_SHAPE error on contracts.predicates.<name>.verifiedPure, exit 1", async () => {
 		const cwd = await freshWorkspaceNoPredicatesFile("dp-malformed-pure");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			predicates: {
 				isPositive: {
 					source: "OrderService.isPositive",
@@ -585,7 +564,6 @@ describe("declarative predicates — malformed predicate declaration → INVALID
 			contracts: {},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {},
 		});
 

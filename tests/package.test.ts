@@ -52,10 +52,9 @@ async function readPackageJson(): Promise<PackageJson> {
 }
 
 // The exact SEEDED_CONFIG written by initWorkspace (packages/cli/src/cli/init.ts); kept
-// local so fixtures pin the loader's happy path against the seed.
+// local so fixtures pin the loader's happy path against the seed. ADR-0018
+// (VERSAILLES-170): no grammarVersion/schemaVersion fields.
 const SEEDED_CONFIG = {
-	grammarVersion: "1.0",
-	schemaVersion: "1.0",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -85,15 +84,12 @@ async function freshWorkspace(name: string): Promise<string> {
 	await mkdir(join(cwd, ".versailles"), { recursive: true });
 	await writeWorkspaceFile(cwd, "config.json", SEEDED_CONFIG);
 	await writeWorkspaceFile(cwd, "contracts.json", {
-		version: "1.0",
 		contracts: {},
 	});
 	await writeWorkspaceFile(cwd, "manifests.json", {
-		version: "1.0",
 		manifests: {},
 	});
 	await writeWorkspaceFile(cwd, "predicates.json", {
-		version: "1.0",
 		predicates: {},
 	});
 	return cwd;

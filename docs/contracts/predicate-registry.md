@@ -27,6 +27,19 @@ are removed (ADR-0013).
   ADR-0005, ADR-0013).
 - `verifiedPure: true` happens only through a human's manual lint/review, recorded as data
   in `contracts.json`. The tool itself never analyzes purity.
+- When `validate --verbose` emits `predicateReferences`, the reverse-reference index is
+  deterministic (ADR-0002): exactly one entry per declared predicate — unused predicates
+  included with `clauses: []` — entries sorted by predicate name, clauses by clause id,
+  `singleUse` exactly `clauses.length === 1` (VERSAILLES-173).
+
+## What it may (can)
+
+- `validate --verbose` may emit a reverse-reference index (`verbose.predicateReferences`)
+  mapping every declared predicate to the clauses that call it — the discoverability
+  surface for the flat top-level `predicates` map, so authors can see each predicate's
+  reach and spot declared-but-unused entries (VERSAILLES-173). The index is additive and
+  detail-only: without `--verbose`, the output keeps the existing `{ valid: boolean }`
+  shape and no error shape changes.
 
 ## What it forbids (must not)
 
@@ -40,5 +53,6 @@ are removed (ADR-0013).
 
 ## Grounding
 
-[build-spec §3.4, §13 milestone 8, §14](../build-spec.md) · ADR-0003 (git audit trail) ·
+[build-spec §3.4, §13 milestone 8, §14](../build-spec.md) · ADR-0002 (determinism) ·
+ADR-0003 (git audit trail) ·
 ADR-0006 (purity gate) · ADR-0010 (no in-tool LLM) · ADR-0013 (declarative predicates)

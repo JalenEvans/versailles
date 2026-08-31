@@ -149,10 +149,9 @@ function parseAll(contracts: ContractsFile): Record<string, Node> {
 	return parsed;
 }
 
-/** A minimal valid context whose withdraw op surfaces clause ids + grammar version. */
+/** A minimal valid context whose withdraw op surfaces clause ids (ADR-0018: no config version fields). */
 function makeContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			AccountService: {
 				invariants: [{ id: "AccountService.inv0", expr: "balance >= 0" }],
@@ -178,7 +177,6 @@ function makeContext(): VersaillesContext {
 		},
 	};
 	const manifests: ManifestsFile = {
-		version: "1.0",
 		manifests: {
 			AccountService: {
 				sourceHash: "man-account",
@@ -186,11 +184,9 @@ function makeContext(): VersaillesContext {
 			},
 		},
 	};
-	const predicates: PredicatesFile = { version: "1.0", predicates: {} };
+	const predicates: PredicatesFile = { predicates: {} };
 	return {
 		config: {
-			grammarVersion: "1.0",
-			schemaVersion: "1.0",
 			sourceRoots: ["src/**/*.ts"],
 			language: "typescript",
 			testFramework: "vitest",
@@ -291,21 +287,22 @@ describe("derivePropertySeed — empty clause set", () => {
 // ── derivePropertySeed — planning-time context integration ─────────────────
 
 describe("derivePropertySeed — planning-time context integration", () => {
-	it("derives a stable seed from a planned suite's clauseIds + config.grammarVersion — the exact runtime access the planner uses", () => {
+	it("derives a stable seed from a planned suite's clauseIds + the format-version seed input — the exact runtime access the planner uses", () => {
 		const context = makeContext();
 		const suite = planTestCases(context);
 
 		// At planning time the clause ids live on the suite (collected from
 		// context.contracts.contracts[].invariants[].id + operations[].
-		// preconditions[].id + postconditions[].id — see planner.ts) and the
-		// grammar version lives on the config.
+		// preconditions[].id + postconditions[].id — see planner.ts). ADR-0018
+		// (VERSAILLES-170): the config no longer carries grammarVersion, so the
+		// planner's seed input falls back to the fixed format version ("1.0").
 		expect(suite.clauseIds.length).toBeGreaterThan(0);
-		const grammarVersion = context.config?.grammarVersion ?? "unset";
+		const formatVersion = "1.0";
 
-		const first = derivePropertySeed(suite.clauseIds, grammarVersion);
+		const first = derivePropertySeed(suite.clauseIds, formatVersion);
 		const second = derivePropertySeed(
 			planTestCases(context).clauseIds,
-			grammarVersion,
+			formatVersion,
 		);
 		expect(second).toBe(first);
 	});
@@ -316,8 +313,7 @@ describe("derivePropertySeed — planning-time context integration", () => {
 		// Chunk 5 planner tests pin the actual override-wins behavior.
 		const context = makeContext();
 		const suite = planTestCases(context);
-		const grammarVersion = context.config?.grammarVersion ?? "unset";
-		const derived = derivePropertySeed(suite.clauseIds, grammarVersion);
+		const derived = derivePropertySeed(suite.clauseIds, "1.0");
 		const override = 123456;
 		// The derived seed is not assumed to equal some arbitrary override.
 		// (Both are valid int32s; the planner picks the override when set.)

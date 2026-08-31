@@ -9,7 +9,7 @@ context: workspace-context
 
 owns:
   - "Joint loading and JSON-parsing of the three top-level .versailles/ data files — config.json, contracts.json (with its top-level predicates map), manifests.json — as a single unit (build-spec §2, §6)"
-  - "The version gates on config.grammarVersion and config.schemaVersion with hard-error + upgrade-path behavior (build-spec §3.1)"
+  - "The additive-only format policy (ADR-0018): no version gates, no grammarVersion/schemaVersion fields, no per-file version fields; config.json carries the $schema pointer to config.schema.json; deprecated fields load permissively until a tool-driven migrate rewrites them (build-spec §3.1)"
   - "config.schema.json machine-checkable validation against the ADR-0009 enum matrix"
   - "The VersaillesContext object (build-spec §6.5): config, contracts, manifests, predicates, parsedContracts, parseErrors, validationErrors, validationWarnings, isValid"
   - "The scoped extraction helper (build-spec §6.6): component/operation sub-object plus its errors/warnings"
@@ -19,11 +19,13 @@ owns:
   - "Surfacing sourcePath and methods on ManifestsFile entries so downstream consumers (generate handler → emitter modulePaths + call shape) can use them"
 
 purpose: |
-  workspace-context owns the .versailles/ workspace as a versioned, jointly-loaded unit. The
-  four top-level files are never valid to interpret in isolation — contracts reference manifests
-  and predicates by name — so the loader reads them together, applies version gates on
-  grammarVersion and schemaVersion (a mismatch is a hard error with an upgrade-path message,
-  never a silent best-effort parse), parses and validates every expr against the full context,
+  workspace-context owns the .versailles/ workspace as a jointly-loaded unit under the
+  additive-only format policy. The three top-level data files are never valid to interpret in
+  isolation — contracts reference manifests and predicates by name — so the loader reads them
+  together, applies no version gates (ADR-0018: the grammarVersion/schemaVersion fields and the
+  per-file version fields are removed; config.json carries a $schema pointer to
+  config.schema.json; deprecated fields load permissively until a tool-driven migrate rewrites
+  them), parses and validates every expr against the full context,
   and returns one VersaillesContext with an aggregated isValid. It validates config against the
   ADR-0009 matrix, exposes the scoped extraction helper used by validate --verbose, and orchestrates
   the CI staleness check with distinct exit codes 0, 1, and 2. A single shared loader serves
@@ -37,8 +39,8 @@ purpose: |
   exactly as stored, never stripping or inventing it.
 
 invariants:
-  - "The four top-level .versailles/ files are always loaded together; no file is interpreted in isolation (build-spec §2)."
-  - "Any load path that hits a grammarVersion or schemaVersion mismatch produces a hard error with an explicit upgrade-path message — never a silent best-effort parse (build-spec §3.1)."
+  - "The three top-level .versailles/ data files are always loaded together; no file is interpreted in isolation (build-spec §2)."
+  - "No load path gates on versions — the grammarVersion/schemaVersion fields and per-file version fields are removed (ADR-0018); config.json carries the $schema pointer to config.schema.json, and deprecated fields still load permissively (deprecate-don't-remove)."
   - "isValid is the aggregation of all hard errors: isValid === (parseErrors is empty and validationErrors is empty)."
   - "The loader never throws on malformed input — missing files, invalid JSON, malformed-shape files, and malformed expressions all surface as structured LoaderError/ParseError/ValidationError objects inside the returned context; no failure path raises an unstructured exception (ADR-0010)."
   - "Every consuming component reaches the workspace through the single shared loader; no component re-implements loading (build-spec §6)."
@@ -49,19 +51,19 @@ invariants:
 operations:
   load_workspace:
     requires:
-      - "the directory contains all three versioned data files: config.json, contracts.json, manifests.json"
+      - "the directory contains all three data files: config.json, contracts.json, manifests.json"
     ensures:
       - "Returns a single VersaillesContext with config, contracts, manifests, predicates, parsedContracts (contract ID → AST), parseErrors, validationErrors, validationWarnings, and isValid"
-      - "Version gates are checked before any processing; a mismatch returns a hard error with an upgrade-path message"
+      - "No version gates are applied — a version-less config (no grammarVersion/schemaVersion) is the valid default, and deprecated fields still load permissively (ADR-0018)"
       - "ManifestsFile entries surface sourcePath and methods exactly as stored — the loader neither requires them on legacy entries nor strips them when present; a present empty methods map ({} — the refreshed-entry zero-methods signal) is surfaced unchanged (VERSAILLES-25 follow-up)"
-      - "Never throws on missing files, invalid JSON, malformed-shape files, or version/config mismatches — every failure path returns the VersaillesContext carrying structured LoaderErrors of the fixed code set (VERSION_MISMATCH | MISSING_FILE | INVALID_JSON | CONFIG_INVALID | INVALID_SHAPE)"
+      - "Never throws on missing files, invalid JSON, or malformed-shape files — every failure path returns the VersaillesContext carrying structured LoaderErrors of the fixed code set (MISSING_FILE | INVALID_JSON | CONFIG_INVALID | INVALID_SHAPE)"
       - "The call never throws an unstructured exception; semantic validation results (ValidationResult { valid, errors, warnings }) are aggregated into validationErrors/validationWarnings, never raised"
       - "No file is interpreted on its own"
     examples:
-      - input: "load_workspace('.versailles') on a complete, version-matching workspace"
+      - input: "load_workspace('.versailles') on a complete workspace"
         output: "one VersaillesContext with parsedContracts populated and isValid reflecting parse + validation results"
-      - input: "load_workspace('.versailles') with config.grammarVersion out of date"
-        output: "hard error containing an explicit upgrade path; no context is returned"
+      - input: "load_workspace('.versailles') on a pre-migration workspace still carrying grammarVersion/schemaVersion or version fields"
+        output: "the same VersaillesContext — deprecated fields load permissively, no version error (ADR-0018 deprecate-don't-remove)"
   validate_config:
     requires:
       - "config is the parsed config.json content"
@@ -101,19 +103,19 @@ operations:
 
 must:
   - "Read and JSON-parse all three top-level data files together as one unit; never interpret any file on its own (build-spec §2)."
-  - "Check config.grammarVersion and config.schemaVersion against the tool's supported versions before any processing; on mismatch return a hard error with an explicit upgrade-path message (build-spec §3.1)."
+  - "Apply no version gates: the grammarVersion/schemaVersion fields are removed (ADR-0018) — a version-less config is the valid default, and deprecated fields load permissively until a tool-driven migrate rewrites them (build-spec §3.1)."
   - "Validate config against the ADR-0009 enum matrix: language accepts typescript | csharp | python and testFramework accepts vitest | xunit | pytest; reject jest and any value outside the matrix (ADR-0009)."
   - "Parse every expr string in contracts.json into an AST, collect structured parse errors, run the semantic validator against the full context, and aggregate everything into one VersaillesContext with an isValid flag (build-spec §6)."
   - "Expose the scoped extraction helper that returns a single component/operation sub-object plus its errors and warnings (build-spec §6.6)."
   - "Orchestrate versailles check: fail on non-empty parseErrors/validationErrors; recompute every stored sourceHash and compare; honor config.staleness.blockOnStale; exit 0 clean, 1 on parse/validation error, 2 on blocking staleness, and warn-with-0 when staleness is non-blocking (build-spec §8)."
   - "Be the single shared loader: every consuming component (CLI commands, CI lint, generator) loads the workspace through this module, never re-implementing loading (build-spec §6)."
-  - "Return every failure as structured errors inside the returned context or scoped view — never throw — for missing files (MISSING_FILE), invalid JSON (INVALID_JSON), malformed shapes (INVALID_SHAPE, shape-guard pass), version/config mismatches (VERSION_MISMATCH | CONFIG_INVALID), malformed expressions (ParseError), and unknown scoped targets (NOT_FOUND) (build-spec §6, ADR-0010)."
+  - "Return every failure as structured errors inside the returned context or scoped view — never throw — for missing files (MISSING_FILE), invalid JSON (INVALID_JSON), malformed shapes (INVALID_SHAPE, shape-guard pass), invalid config (CONFIG_INVALID), malformed expressions (ParseError), and unknown scoped targets (NOT_FOUND) (build-spec §6, ADR-0010)."
   - "Acknowledge the manifests.json store entry shape: sourcePath (string; project-root-relative with POSIX separators when present, e.g. src/order.ts — never empty for covered entries; legacy entries lacking it preserved as-is) and methods (per-component map of method name → { static: boolean, params: string[], returnType?: string }, recorded where determinable, permissive low-confidence policy); a refreshed entry always carries the methods key — possibly {} — with only preserved legacy entries allowed to lack it (build-spec §3.3, §7, VERSAILLES-25 follow-up)."
   - "Surface sourcePath and methods on ManifestsFile entries so downstream consumers (generate handler → emitter modulePaths + call shape) can use them directly from the loaded context."
 
 must_not:
-  - "Must not interpret any of the three top-level data files in isolation — they are versioned together and loaded as one unit (build-spec §2)."
-  - "Must not silently best-effort parse on a grammarVersion or schemaVersion mismatch — it is a hard error with an upgrade-path message (build-spec §3.1)."
+  - "Must not interpret any of the three top-level data files in isolation — they are loaded as one unit (build-spec §2)."
+  - "Must not gate on versions — there are no grammarVersion/schemaVersion fields to check and no VERSION_MISMATCH path (ADR-0018); a version-less config is the valid default, and deprecated fields still load permissively (deprecate-don't-remove)."
   - "Must not accept language or testFramework values outside the ADR-0009 enum matrix — jest is rejected, vitest is accepted (ADR-0009)."
   - "Must not let consumers re-implement loading — the shared loader is the only path into the context (build-spec §6)."
   - "Must not return a whole file from scoped extraction — always the single sub-object plus its errors (build-spec §6.6)."
@@ -139,10 +141,10 @@ limits:
 asserts:
   - "assert: load_workspace returns isValid === (parseErrors is empty and validationErrors is empty)."
   - "assert: validate_config accepts vitest and typescript and rejects jest and any value outside the matrix."
-  - "assert: every loader path that encounters a version mismatch returns a hard error containing an upgrade-path message."
+  - "assert: no loader path gates on versions — a version-less config (no grammarVersion/schemaVersion) loads as valid, and a pre-migration file still carrying the removed fields loads without a version error (ADR-0018)."
   - "assert: extract_scoped returns at most the requested sub-object and never the whole contracts.json content."
   - "assert: check_staleness exits 0 on clean, 1 on parse/validation errors, 2 on blocking staleness, and 0 with a warning when staleness is non-blocking."
-  - "assert: load_workspace never throws on missing/invalid-JSON/malformed-shape files — it returns a VersaillesContext with structured LoaderErrors of the fixed code set (VERSION_MISMATCH | MISSING_FILE | INVALID_JSON | CONFIG_INVALID | INVALID_SHAPE)."
+  - "assert: load_workspace never throws on missing/invalid-JSON/malformed-shape files — it returns a VersaillesContext with structured LoaderErrors of the fixed code set (MISSING_FILE | INVALID_JSON | CONFIG_INVALID | INVALID_SHAPE)."
   - "assert: extract_scoped never throws on degenerate/partial contexts — it returns a ScopedView with an errors array, and reports an unknown component/operation as a structured NOT_FOUND error."
   - "assert: the semantic validation pass never throws on arbitrary ASTs/contexts — it returns ValidationResult { valid, errors, warnings } and the loader appends its errors to validationErrors and its warnings to validationWarnings (ADR-0010)."
   - "assert: load_workspace surfaces sourcePath and methods on ManifestsFile entries when present in manifests.json, and legacy entries lacking them load unchanged without INVALID_SHAPE errors."
@@ -158,3 +160,4 @@ asserts:
 | 2026-08-17 | general-manager | Acknowledged the manifests.json store entry shape — sourcePath (never empty for covered entries; legacy entries lacking it preserved as-is) and per-component methods metadata ({ static, params, returnType? }, recorded where determinable, permissive low-confidence policy) — and that the loader surfaces both on ManifestsFile entries for downstream consumers (generate handler → emitter modulePaths + call shape). Aligns with the manifest-extraction/deterministic-generation extension (fix/generator-emitter-runnability); backs VERSAILLES-20/21/22/23 |
 | 2026-08-18 | general-manager | Acknowledged the canonical sourcePath semantic (VERSAILLES-24): covered entries store project-root-relative POSIX paths (src/order.ts); the loader surfaces them exactly as stored. Aligns with the manifest-extraction/deterministic-generation extension on fix/generator-emitter-runnability |
 | 2026-08-18 | general-manager | Pinned the methods-key presence semantics (VERSAILLES-25 review-warning follow-up): a refreshed manifest entry always carries the methods key — possibly {} — with only preserved legacy entries allowed to lack it; the loader surfaces a present empty map exactly as stored, never stripping or inventing it |
+| 2026-08-30 | general-manager | Reconcile with ADR-0018 (VERSAILLES-168 Phase 2/3 follow-up): removed the version-gate owns/purpose/invariant/ensures/must/must_not/assert coverage — no grammarVersion/schemaVersion checks, no VERSION_MISMATCH error code (LoaderError set is now MISSING_FILE | INVALID_JSON | CONFIG_INVALID | INVALID_SHAPE); version-less config is the valid default, config.json carries the $schema pointer, deprecated fields load permissively (deprecate-don't-remove) |

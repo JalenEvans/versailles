@@ -894,9 +894,8 @@ describe("emitters-pbt-joint fixture integrity", () => {
 
 const EXEC_REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const EXEC_EMPTY_MANIFESTS: ManifestsFile = { version: "1.0", manifests: {} };
+const EXEC_EMPTY_MANIFESTS: ManifestsFile = { manifests: {} };
 const EXEC_EMPTY_PREDICATES: PredicatesFile = {
-	version: "1.0",
 	predicates: {},
 };
 
@@ -904,8 +903,6 @@ function execConfig(
 	propertyBased: WorkspaceConfig["propertyBased"],
 ): WorkspaceConfig {
 	return {
-		grammarVersion: "1.0",
-		schemaVersion: "1.0",
 		sourceRoots: ["src/**/*.ts"],
 		language: "typescript",
 		testFramework: "vitest",
@@ -965,7 +962,6 @@ function execContext(
  */
 function execMirrorContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			AccountService: {
 				invariants: [],
@@ -1004,7 +1000,6 @@ function execMirrorContext(): VersaillesContext {
  */
 function execFieldBoundContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			AccountService: {
 				invariants: [],
@@ -1027,7 +1022,6 @@ function execFieldBoundContext(): VersaillesContext {
 		},
 	};
 	const manifests: ManifestsFile = {
-		version: "1.0",
 		manifests: {
 			AccountService: {
 				sourceHash: "man-exec-fieldbound",
@@ -1046,7 +1040,6 @@ function execFieldBoundContext(): VersaillesContext {
  */
 function execRecordContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -1111,7 +1104,6 @@ const EXEC_FIELD_BOUND_SOURCE = `export class AccountService {
  */
 function execMixedContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			MergeService: {
 				invariants: [],
@@ -1135,7 +1127,6 @@ function execMixedContext(): VersaillesContext {
 		},
 	};
 	const manifests: ManifestsFile = {
-		version: "1.0",
 		manifests: {
 			MergeService: {
 				sourceHash: "man-exec-mixed",

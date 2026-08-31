@@ -2,11 +2,11 @@
 
 **Scope:** any `versailles` command on a context that cannot be processed
 **Primary context:** cross-cutting (CLI + workspace-context, contract-language, manifest-extraction)
-**Vocabulary:** [glossary](../glossary.md) — *rejected command, structured error, exit code, version gate, sourceHash*
+**Vocabulary:** [glossary](../glossary.md) — *rejected command, structured error, exit code, sourceHash*
 
 ## Overview
 
-A **rejected command** is a first-class, deterministic outcome — not a crash. When the workspace is invalid (parse or validation errors), stale while blocking, or version-mismatched, the command exits with structured results and a distinct exit code. There is **no silent partial run, no unstructured throw** anywhere in the pipeline.
+A **rejected command** is a first-class, deterministic outcome — not a crash. When the workspace is invalid (parse or validation errors) or stale while blocking, the command exits with structured results and a distinct exit code. There is **no silent partial run, no unstructured throw** anywhere in the pipeline. The version gate is gone (ADR-0018) — no workspace state can be "version-mismatched"; the tool version lives in the binary (`versailles -v` / `--version`), never in the workspace.
 
 ## What rejection looks like
 
@@ -16,7 +16,6 @@ A **rejected command** is a first-class, deterministic outcome — not a crash. 
 | Semantic validation error (unknown field, type mismatch, unverified predicate) | `validate`, `check`, `generate` | Structured validation errors (`{ contractId, code, field, detail }`); processing stops | `1` |
 | Staleness while `config.staleness.blockOnStale: true` | `check` | List of stale IDs; processing stops | `2` |
 | Staleness while non-blocking | `check` | Warning report (CI annotation), continues | `0` |
-| Grammar/schema version mismatch | all commands | Hard error with upgrade-path message | `1` (distinct message) |
 
 A canonical **parse error** shape (build-spec §4.4):
 
@@ -48,7 +47,7 @@ A canonical **semantic error** shape (build-spec §5.2):
 
 ## Flow
 
-1. Load the workspace; the **version gate** fires first (mismatch = hard error with upgrade message, never a silent best-effort parse).
+1. Load the workspace via the workspace-context shared loader (build-spec §6) — there is **no version gate** (ADR-0018): the workspace carries no version fields, so nothing can be version-mismatched.
 2. Parse all exprs; collect structured parse errors (parser never throws unstructured).
 3. Run semantic validation; collect structured errors/warnings.
 4. If `parseErrors`/`validationErrors` are non-empty → reject with exit `1` (or the command-specific code), surfacing the full structured report.
@@ -59,7 +58,7 @@ A canonical **semantic error** shape (build-spec §5.2):
 
 - Every parse/validation failure is a **structured object**, never a string and never a throw (build-spec §4.4, §5.2).
 - Distinct exit codes (`0` / `1` / `2`) let CI branch behavior (build-spec §8).
-- Version mismatch is a hard error with an upgrade-path message, not a silent degraded parse (build-spec §3.1).
+- **The invalid-context envelope is standardized**: `check`, `generate`, and `extract-manifests` share one workspace gate (`requireValidWorkspace`) that loads the workspace once, and every failure path exits `1` with the empty output envelope `{}` — the former per-command envelopes (`{ staleIds: [] }`, `{ files: [] }`) are gone (VERSAILLES-171).
 - Generation only proceeds from valid, non-stale contexts.
 
 ## Edge cases

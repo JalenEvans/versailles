@@ -18,30 +18,29 @@ import { loadWorkspace } from "../packages/core/src/loader/workspace.js";
  *
  * The loader is the single shared path into the .versailles/ workspace: it
  * reads and JSON-parses the three jointly-loaded files (config.json,
- * contracts.json, manifests.json), applies the version gates
- * (build-spec §3.1) BEFORE any other processing, parses every expr string in
+ * contracts.json, manifests.json), parses every expr string in
  * contracts.json into an AST via parseExpression (src/core/parser.ts),
  * validates config.json against config.schema.json (ADR-0009 matrix), and
  * returns ONE VersaillesContext with an aggregated isValid flag (build-spec
  * §6.5). After parsing, the loader runs the semantic validator over every
  * successfully-parsed clause and aggregates its errors/warnings into
  * validationErrors/validationWarnings (build-spec §6.5); loader-level results
- * (config schema errors under code CONFIG_INVALID, plus version, missing-file,
+ * (config schema errors under code CONFIG_INVALID, plus missing-file,
  * and invalid-json errors) are recorded into the same arrays.
  *
  * ── Module contract ────────────────────────────────────────────────────────
  *
+ * ADR-0018 (VERSAILLES-170): the version ceremony is removed. No workspace
+ * file carries a top-level `version` field, config.json carries no
+ * grammarVersion/schemaVersion, and the loader has no version-gate branches
+ * (SUPPORTED_GRAMMAR_VERSION / SUPPORTED_SCHEMA_VERSION / VERSION_MISMATCH
+ * are gone). config.json may carry a `$schema` pointer string instead.
+ *
  * Module: src/loader/workspace.ts
- * Exports: loadWorkspace, SUPPORTED_GRAMMAR_VERSION,
- *          SUPPORTED_SCHEMA_VERSION (+ the types below)
+ * Exports: loadWorkspace (+ the types below)
  *
  * ```ts
- * export const SUPPORTED_GRAMMAR_VERSION = "1.0";
- * export const SUPPORTED_SCHEMA_VERSION = "1.0";
- *
  * export type WorkspaceConfig = {
- *   grammarVersion: string;
- *   schemaVersion: string;
  *   sourceRoots: string[];
  *   language: "typescript" | "csharp" | "python";
  *   testFramework: "vitest" | "xunit" | "pytest";
@@ -67,29 +66,24 @@ import { loadWorkspace } from "../packages/core/src/loader/workspace.js";
  * };
  *
  * export type ContractsFile = {
- *   version: string;
  *   contracts: Record<string, ComponentContract>;
  * };
  *
  * export type ManifestsFile = {
- *   version: string;
  *   manifests: Record<string, { sourceHash: string; fields: Record<string, string> }>;
  * };
  *
  * export type PredicatesFile = {
- *   version: string;
  *   predicates: Record<string, {
  *     params: string[];
  *     paramTypes: string[];
  *     returnType: string;
  *     sourceRef: string;
- *     sourceHash: string;
  *     verifiedPure: boolean;
  *   }>;
  * };
  *
  * export type LoaderErrorCode =
- *   | "VERSION_MISMATCH" // config.grammarVersion / config.schemaVersion out of date
  *   | "MISSING_FILE"     // one of the four jointly-loaded files absent
  *   | "INVALID_JSON"     // a present file fails JSON.parse
  *   | "CONFIG_INVALID"   // config.schema.json / ADR-0009 rejection
@@ -127,9 +121,10 @@ import { loadWorkspace } from "../packages/core/src/loader/workspace.js";
  * 3. parseErrors keep the §4.4 shape; the loader decorates `field` with the
  *    entry index (e.g. "postconditions[0]"), which the standalone parser does
  *    not add (see the tests/parser.test.ts header note).
- * 4. Version mismatch short-circuits BEFORE any processing: no config schema
- *    validation and no expr parsing (build-spec §3.1 "checked before
- *    processing").
+ * 4. ADR-0018 (VERSAILLES-170): there is no version gate — the loader never
+ *    short-circuits on config.grammarVersion / config.schemaVersion (the
+ *    fields and the VERSION_MISMATCH branch are removed); a version-less
+ *    config is the valid default and `$schema` is tolerated.
  * 5. Missing file / invalid JSON never throw: the loader records a structured
  *    LoaderError and the affected context field is null.
  * 6. Config schema errors go into validationErrors as
@@ -147,11 +142,11 @@ import { loadWorkspace } from "../packages/core/src/loader/workspace.js";
  */
 
 // The exact SEEDED_CONFIG written by initWorkspace (src/cli/init.ts); kept
-// local so the loader's happy path is pinned against the seed, not against
-// the loader's own exported constants.
+// local so the loader's happy path is pinned against the seed. ADR-0018
+// (VERSAILLES-170): no grammarVersion/schemaVersion fields — the `$schema`
+// pointer string replaces the version ceremony.
 const SEEDED_CONFIG = {
-	grammarVersion: "1.0",
-	schemaVersion: "1.0",
+	$schema: "../../config.schema.json",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -161,7 +156,6 @@ const SEEDED_CONFIG = {
 
 function contractsFixture(): unknown {
 	return {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [{ id: "OrderService.inv0", expr: "total >= 0" }],
@@ -215,7 +209,6 @@ function contractsFixture(): unknown {
 
 function manifestsFixture(): unknown {
 	return {
-		version: "1.0",
 		manifests: {
 			OrderService: {
 				sourceHash: "man-hash-1",
@@ -310,17 +303,17 @@ describe("loadWorkspace — joint loading of the three .versailles/ files", () =
 		expectedContracts.predicates = predicatesFixture();
 		expect(context.contracts).toEqual(expectedContracts);
 		expect(context.manifests).toEqual(manifestsFixture());
-		// The loader builds a PredicatesFile from the inline predicates for
-		// backward compatibility with the validator. sourceRef = source, sourceHash = "".
+		// ADR-0013 (Phase 3) + ADR-0018 (VERSAILLES-170): the loader builds a
+		// PredicatesFile from the inline predicates for backward compatibility
+		// with the validator. The shape carries no `version` and no `sourceHash`
+		// (the `""` vestige is removed); sourceRef = source.
 		expect(context.predicates).toEqual({
-			version: "1.0",
 			predicates: {
 				isValidEmail: {
 					params: ["email"],
 					paramTypes: ["string"],
 					returnType: "boolean",
 					sourceRef: "EmailUtils.isValidEmail",
-					sourceHash: "",
 					verifiedPure: true,
 				},
 			},
@@ -368,7 +361,6 @@ describe("loadWorkspace — parse errors", () => {
 	it("collects a §4.4-structured error with the decorated field for a malformed expr — never throws", async () => {
 		const ws = await seedWorkspace("b-malformed");
 		await writeWorkspaceFile(ws, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [],
@@ -407,34 +399,134 @@ describe("loadWorkspace — parse errors", () => {
 	});
 });
 
-describe("loadWorkspace — version gates (build-spec §3.1)", () => {
-	it.each(["grammarVersion", "schemaVersion"])(
-		"hard-fails with an upgrade-path message when config.%s is out of date — never throws",
-		async (versionField) => {
-			const ws = await seedWorkspace(`c-${versionField}`);
-			await writeWorkspaceFile(ws, "config.json", {
-				...SEEDED_CONFIG,
-				[versionField]: "9.9",
-			});
-			// A well-formed expr is present: the version gate must short-circuit
-			// parsing, proving "checked before processing" (build-spec §3.1).
-			await writeWorkspaceFile(ws, "contracts.json", contractsFixture());
+/**
+ * ADR-0018 (VERSAILLES-170): the version ceremony is removed. config.json no
+ * longer carries grammarVersion/schemaVersion and the loader has no
+ * VERSION_MISMATCH branch — a version-less config is the valid default and
+ * parsing proceeds (no short-circuit). config.json may carry a `$schema`
+ * pointer string instead; the new config.schema.json allows that key.
+ */
+describe("loadWorkspace — version ceremony removed (ADR-0018)", () => {
+	it("loads a config WITHOUT grammarVersion/schemaVersion as valid — no version errors, no short-circuit", async () => {
+		const ws = await seedWorkspace("c-versionless-config");
+		// SEEDED_CONFIG carries no grammarVersion/schemaVersion (ADR-0018).
+		await writeWorkspaceFile(ws, "config.json", SEEDED_CONFIG);
+		// A well-formed expr is present: with the version gates gone, parsing
+		// must proceed — the loader never short-circuits before processing.
+		// The contracts fixture calls isValidEmail(email), so the matching
+		// predicates map must be declared inline (ADR-0013) — otherwise the
+		// clause would surface UNKNOWN_PREDICATE instead of pinning the
+		// version-ceremony behavior.
+		const contracts = contractsFixture() as Record<string, unknown>;
+		contracts.predicates = predicatesFixture();
+		await writeWorkspaceFile(ws, "contracts.json", contracts);
 
-			const load = loadWorkspace(ws);
-			await expect(load).resolves.toBeDefined();
-			const context = await load;
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
 
-			const versionError = context.validationErrors.find(
-				(error) => error.code === "VERSION_MISMATCH",
-			);
-			expect(versionError).toBeDefined();
-			expect(versionError?.field).toBe(versionField);
-			expect(versionError?.detail).toMatch(/upgrade/i);
-			expect(context.parseErrors).toEqual([]);
-			expect(context.parsedContracts).toEqual({});
-			expect(context.isValid).toBe(false);
-		},
-	);
+		// No VERSION_MISMATCH-style errors, no config errors, no parse errors.
+		expect(context.validationErrors).toEqual([]);
+		expect(context.parseErrors).toEqual([]);
+		// Parsing proceeded — the well-formed expr produced an AST.
+		expect(
+			context.parsedContracts["OrderService.placeOrder.post0"],
+		).toBeDefined();
+		expect(context.isValid).toBe(true);
+	});
+
+	it("tolerates a config carrying a $schema pointer string — the key is allowed by the new schema", async () => {
+		const ws = await seedWorkspace("c-schema-pointer");
+		await writeWorkspaceFile(ws, "config.json", {
+			...SEEDED_CONFIG,
+			$schema: "../../config.schema.json",
+		});
+		// The contracts fixture calls isValidEmail(email), so the matching
+		// predicates map must be declared inline (ADR-0013) — otherwise the
+		// clause would surface UNKNOWN_PREDICATE instead of pinning the
+		// $schema-tolerance behavior.
+		const contracts = contractsFixture() as Record<string, unknown>;
+		contracts.predicates = predicatesFixture();
+		await writeWorkspaceFile(ws, "contracts.json", contracts);
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(
+			context.validationErrors.filter((e) => e.code === "CONFIG_INVALID"),
+		).toEqual([]);
+		expect(context.parseErrors).toEqual([]);
+		expect(context.isValid).toBe(true);
+	});
+
+	// ADR-0018 deprecate-don't-remove promise (VERSAILLES-168 Center review):
+	// a PRE-MIGRATION config.json — one still carrying the removed
+	// grammarVersion/schemaVersion fields — must LOAD PERMISSIVELY without a
+	// version error, so old workspaces keep working until a future `migrate`
+	// command rewrites them. Today config.schema.json declares neither key and
+	// keeps additionalProperties: false, so ajv rejects the legacy keys with
+	// CONFIG_INVALID "must NOT have additional properties". The Green schema
+	// fix declares both as OPTIONAL deprecated properties; these tests pin the
+	// post-fix contract and MUST FAIL (Red) against the current schema.
+	it("loads a PRE-MIGRATION config carrying legacy grammarVersion/schemaVersion as valid — deprecate-don't-remove (ADR-0018)", async () => {
+		const ws = await seedWorkspace("c-pre-migration-legacy-fields");
+		// SEEDED_CONFIG is the version-less shape; spread the removed legacy
+		// version fields back in to simulate a pre-migration workspace.
+		await writeWorkspaceFile(ws, "config.json", {
+			...SEEDED_CONFIG,
+			grammarVersion: "1.0",
+			schemaVersion: "1.0",
+		});
+		// The contracts fixture calls isValidEmail(email), so the matching
+		// predicates map must be declared inline (ADR-0013) — otherwise the
+		// clause would surface UNKNOWN_PREDICATE instead of pinning the
+		// permissive-loading behavior.
+		const contracts = contractsFixture() as Record<string, unknown>;
+		contracts.predicates = predicatesFixture();
+		await writeWorkspaceFile(ws, "contracts.json", contracts);
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		// Permissive: the legacy keys are tolerated, not rejected.
+		expect(
+			context.validationErrors.filter((e) => e.code === "CONFIG_INVALID"),
+		).toEqual([]);
+		// VERSION_MISMATCH is gone entirely — no version-gate error may appear.
+		expect(
+			context.validationErrors.some((e) => e.code === "VERSION_MISMATCH"),
+		).toBe(false);
+		expect(context.parseErrors).toEqual([]);
+		expect(context.isValid).toBe(true);
+	});
+
+	it("loads a PRE-MIGRATION config carrying legacy version fields AND a $schema pointer as valid (ADR-0018)", async () => {
+		const ws = await seedWorkspace("c-pre-migration-legacy-schema");
+		// The pre-migration shape may also keep its $schema pointer alongside
+		// the legacy version fields — both must be tolerated together.
+		await writeWorkspaceFile(ws, "config.json", {
+			...SEEDED_CONFIG,
+			$schema: "../../config.schema.json",
+			grammarVersion: "1.0",
+			schemaVersion: "1.0",
+		});
+		// Same inline-predicates rationale as the sibling legacy test.
+		const contracts = contractsFixture() as Record<string, unknown>;
+		contracts.predicates = predicatesFixture();
+		await writeWorkspaceFile(ws, "contracts.json", contracts);
+
+		const load = loadWorkspace(ws);
+		await expect(load).resolves.toBeDefined();
+		const context = await load;
+
+		expect(
+			context.validationErrors.filter((e) => e.code === "CONFIG_INVALID"),
+		).toEqual([]);
+		expect(context.parseErrors).toEqual([]);
+		expect(context.isValid).toBe(true);
+	});
 });
 
 describe("loadWorkspace — missing files", () => {
@@ -677,7 +769,6 @@ describe("loadWorkspace — repeatability", () => {
  */
 function semanticErrorContractsFixture(): unknown {
 	return {
-		version: "1.0",
 		contracts: {
 			svc: {
 				invariants: [],
@@ -711,7 +802,6 @@ function semanticErrorContractsFixture(): unknown {
 
 function semanticErrorManifestsFixture(): unknown {
 	return {
-		version: "1.0",
 		manifests: {
 			svc: { sourceHash: "man-svc", fields: { known: "number" } },
 			otherComp: { sourceHash: "man-other", fields: {} },
@@ -756,7 +846,6 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 		const ws = await seedWorkspace("b-semantic-clean");
 		// ADR-0013 (Phase 3): predicates are inline in contracts.json.
 		await writeWorkspaceFile(ws, "contracts.json", {
-			version: "1.0",
 			predicates: {
 				isPositive: {
 					source: "Num.isPositive",
@@ -787,7 +876,6 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 			},
 		});
 		await writeWorkspaceFile(ws, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				svc: { sourceHash: "man-svc", fields: { total: "number" } },
 			},
@@ -806,7 +894,6 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 	it("c: a type mismatch between a clause literal and the manifest-declared field type propagates TYPE_MISMATCH with the clause contractId", async () => {
 		const ws = await seedWorkspace("c-type-mismatch");
 		await writeWorkspaceFile(ws, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				svc: {
 					invariants: [],
@@ -824,7 +911,6 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 			},
 		});
 		await writeWorkspaceFile(ws, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				svc: { sourceHash: "man-svc", fields: { balance: "number" } },
 			},
@@ -844,7 +930,6 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 	it("d: an inferred (low-confidence) manifest field warns LOW_CONFIDENCE_FIELD but never flips isValid (ADR-0004)", async () => {
 		const ws = await seedWorkspace("d-low-confidence");
 		await writeWorkspaceFile(ws, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				svc: {
 					invariants: [],
@@ -865,7 +950,6 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 		});
 		// ADR-0004 extension object form: { type, confidence: "inferred" }.
 		await writeWorkspaceFile(ws, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				svc: {
 					sourceHash: "man-svc",
@@ -949,7 +1033,6 @@ type ShapeOperation = {
 };
 
 type ShapeContractFile = {
-	version: string;
 	contracts: Record<
 		string,
 		{
@@ -966,7 +1049,6 @@ type ShapeOverrides = {
 
 function baseContracts(): ShapeContractFile {
 	return {
-		version: "1.0",
 		contracts: {
 			Svc: {
 				invariants: [{ id: "Svc.inv0", expr: "total >= 0" }],
@@ -987,7 +1069,6 @@ function baseContracts(): ShapeContractFile {
 
 function baseManifests(): unknown {
 	return {
-		version: "1.0",
 		manifests: {
 			Svc: { sourceHash: "man-svc", fields: { total: "number" } },
 		},
@@ -1120,7 +1201,6 @@ describe("loadWorkspace — malformed-shape workspace files never throw (ADR-001
 
 	it("records INVALID_SHAPE when a manifest entry is missing fields, root ref (C7) — never throws", async () => {
 		const manifests = {
-			version: "1.0",
 			manifests: { Svc: { sourceHash: "man-svc" } },
 		};
 
@@ -1148,7 +1228,6 @@ describe("loadWorkspace — malformed-shape workspace files never throw (ADR-001
 			{ id: "Svc.inv0", expr: 'order.status == "OPEN"' },
 		];
 		const manifests = {
-			version: "1.0",
 			manifests: {
 				Svc: { sourceHash: "man-svc", fields: { order: "Order" } },
 				Order: { sourceHash: "man-order" },
@@ -1176,7 +1255,6 @@ describe("loadWorkspace — malformed-shape workspace files never throw (ADR-001
 
 	it("records INVALID_SHAPE when a manifest entry has fields: null (C10) — never throws", async () => {
 		const manifests = {
-			version: "1.0",
 			manifests: { Svc: { sourceHash: "man-svc", fields: null } },
 		};
 
@@ -1206,7 +1284,6 @@ describe("loadWorkspace — malformed-shape workspace files never throw (ADR-001
 		const DEPTH = 20000;
 		const deepTypeRef = `${"list<".repeat(DEPTH)}number${">".repeat(DEPTH)}`;
 		const manifests = {
-			version: "1.0",
 			manifests: {
 				Svc: { sourceHash: "man-svc", fields: { total: deepTypeRef } },
 			},
@@ -1305,7 +1382,6 @@ describe("loadWorkspace — re-review crash holes close (chunk 3.4b)", () => {
 			{ id: "Svc.op.pre0", expr: "total == total" },
 		];
 		const manifests = {
-			version: "1.0",
 			manifests: {
 				Svc: { sourceHash: "man-svc", fields: { total: deepTypeRef } },
 			},
@@ -1361,7 +1437,6 @@ describe("loadWorkspace — surfaces sourcePath on manifests store entries (VERS
 	it("preserves sourcePath on a manifests store entry exactly as stored — never stripped or defaulted", async () => {
 		const ws = await seedWorkspace("sp1-sourcepath-preserved");
 		await writeWorkspaceFile(ws, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				Order: {
 					sourceHash: "man-order",
@@ -1387,7 +1462,6 @@ describe("loadWorkspace — surfaces sourcePath on manifests store entries (VERS
 	it("loads a legacy manifest entry without sourcePath as-is — no INVALID_SHAPE error, no invented path", async () => {
 		const ws = await seedWorkspace("sp2-legacy-no-sourcepath");
 		await writeWorkspaceFile(ws, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				Legacy: {
 					sourceHash: "legacy-hash",

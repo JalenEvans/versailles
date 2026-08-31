@@ -9,50 +9,29 @@
  *   1 parse/validation errors present (dominates staleness, never 2)
  *   2 blocking staleness when staleness.blockOnStale is true
  *   0 with a STALE warning when staleness.blockOnStale is false
+ *
+ * VERSAILLES-171: the workspace gate (requireValidWorkspace) runs first; its
+ * failure-path output is the standardized {} (never { staleIds: [] }).
  */
-import { join } from "node:path";
-
-import { loadWorkspace } from "../../../../core/src/loader/workspace.js";
 import {
 	computeSourceHash,
 	extractManifests,
 } from "../../../../frontend-ts/src/extractors/index.js";
 import {
-	contextErrors,
 	contextWarnings,
 	expandSourceRoots,
 	extractorWarnings,
+	requireValidWorkspace,
 	sourceRootsGuard,
 } from "../context.js";
 import type { CliError, CliResult } from "../types.js";
 
 export async function handleCheck(cwd: string): Promise<CliResult> {
-	const workspaceDir = join(cwd, ".versailles");
-	const context = await loadWorkspace(workspaceDir);
-	if (!context.isValid) {
-		return {
-			ok: false,
-			errors: contextErrors(context),
-			warnings: contextWarnings(context),
-			exitCode: 1,
-			output: { staleIds: [] },
-		};
+	const guard = await requireValidWorkspace(cwd);
+	if (!guard.ok) {
+		return guard.result;
 	}
-	if (context.config === null) {
-		return {
-			ok: false,
-			errors: [
-				{
-					code: "CONFIG_INVALID",
-					field: "config.json",
-					detail: "Workspace config is missing — cannot determine sourceRoots",
-				},
-			],
-			warnings: [],
-			exitCode: 1,
-			output: { staleIds: [] },
-		};
-	}
+	const { context } = guard;
 
 	const roots = expandSourceRoots(context.config.sourceRoots ?? [], cwd);
 	const stored = context.manifests?.manifests ?? {};

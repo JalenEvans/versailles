@@ -69,7 +69,6 @@ type PredicateOverride = Record<string, Record<string, unknown>>;
 
 function contractsFixture(): unknown {
 	const fixture: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			[OS]: {
 				invariants: [],
@@ -132,7 +131,6 @@ function predicatesFixture(): PredicateOverride {
 			paramTypes: ["number"],
 			returnType: "boolean",
 			sourceRef: "Num.isPositive",
-			sourceHash: "p1",
 			verifiedPure: true,
 		},
 		isAvailable: {
@@ -140,7 +138,6 @@ function predicatesFixture(): PredicateOverride {
 			paramTypes: ["enum<OPEN,SHIPPED>"],
 			returnType: "boolean",
 			sourceRef: "Order.isAvailable",
-			sourceHash: "p2",
 			verifiedPure: true,
 		},
 		noArg: {
@@ -148,7 +145,6 @@ function predicatesFixture(): PredicateOverride {
 			paramTypes: [],
 			returnType: "boolean",
 			sourceRef: "Util.noArg",
-			sourceHash: "p3",
 			verifiedPure: true,
 		},
 	};
@@ -166,11 +162,9 @@ function makeTestContext(): VersaillesContext {
 		config: null,
 		contracts: contractsFixture() as VersaillesContext["contracts"],
 		manifests: {
-			version: "1.0",
 			manifests: manifestsFixture(),
 		} as VersaillesContext["manifests"],
 		predicates: {
-			version: "1.0",
 			predicates: predicatesFixture(),
 		} as VersaillesContext["predicates"],
 		parsedContracts: {},

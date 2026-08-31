@@ -131,7 +131,6 @@ const V1_EMITTER_FRAMEWORKS: EmitterFramework[] = ["vitest", "xunit", "pytest"];
 
 function contractsFixture(): ContractsFile {
 	return {
-		version: "1.0",
 		contracts: {
 			[ACCOUNT]: {
 				invariants: [{ id: "AccountService.inv0", expr: "balance >= 0" }],
@@ -206,7 +205,6 @@ function contractsFixture(): ContractsFile {
 
 function manifestsFixture(): ManifestsFile {
 	return {
-		version: "1.0",
 		manifests: {
 			[ACCOUNT]: {
 				sourceHash: "man-account",
@@ -218,13 +216,11 @@ function manifestsFixture(): ManifestsFile {
 }
 
 function predicatesFixture(): PredicatesFile {
-	return { version: "1.0", predicates: {} };
+	return { predicates: {} };
 }
 
 function makeConfig(rejectionIdiom?: "throws" | "returns"): WorkspaceConfig {
 	const config: WorkspaceConfig = {
-		grammarVersion: "1.0",
-		schemaVersion: "1.0",
 		sourceRoots: ["src/**/*.ts"],
 		language: "typescript",
 		testFramework: "vitest",
@@ -1005,8 +1001,6 @@ function makeGeneratedContext(
 ): VersaillesContext {
 	return {
 		config: {
-			grammarVersion: "1.0",
-			schemaVersion: "1.0",
 			sourceRoots: ["src/**/*.ts"],
 			language: "typescript",
 			testFramework: "vitest",
@@ -1014,7 +1008,6 @@ function makeGeneratedContext(
 			staleness: { blockOnStale: false },
 		},
 		contracts: {
-			version: "1.0",
 			contracts: {
 				Gen: {
 					invariants: [{ id: "Gen.inv0", expr: "balance >= 0" }],
@@ -1048,12 +1041,11 @@ function makeGeneratedContext(
 			},
 		},
 		manifests: {
-			version: "1.0",
 			manifests: {
 				Gen: { sourceHash: "man-gen", fields: { balance: "number" } },
 			},
 		},
-		predicates: { version: "1.0", predicates: {} },
+		predicates: { predicates: {} },
 		parsedContracts: {
 			"Gen.withdraw.pre0": parseAst(pre0, "preconditions", "Gen.withdraw.pre0"),
 			"Gen.withdraw.pre1": parseAst(pre1, "preconditions", "Gen.withdraw.pre1"),
@@ -2127,7 +2119,6 @@ describe("emitSuite — postcondition-satisfaction seeds captured pre-state onto
  */
 function makeV148IsolationContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -2153,7 +2144,6 @@ function makeV148IsolationContext(): VersaillesContext {
 		config: makeConfig(),
 		contracts,
 		manifests: {
-			version: "1.0",
 			manifests: {
 				OrderService: { sourceHash: "man-order-v148", fields: {} },
 			},

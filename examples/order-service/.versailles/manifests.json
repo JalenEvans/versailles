@@ -1,5 +1,4 @@
 {
-  "version": "1.0",
   "manifests": {
     "OrderService": {
       "sourceHash": "e6d9d945",

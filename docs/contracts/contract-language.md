@@ -23,6 +23,9 @@ consume. Nothing downstream ever sees a raw, unparsed, or invalid expression.
   `contracts.json`.
 - Predicates may be referenced **only** if declared with `verifiedPure: true`; anything else
   is a hard error.
+- Undeclared predicate calls return an `UNKNOWN_PREDICATE` error whose detail suggests up to 2
+  declared predicate names within edit distance ≤ 2 (` — did you mean "X"?`, two join as
+  `"a" or "b"`), ordered closest-first; suggestions never change the structured error shape.
 - All failures come back as **structured error objects** (parse shape and validation shape)
   that CI and external tooling can read and re-inject programmatically.
 

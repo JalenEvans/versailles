@@ -151,7 +151,6 @@ const CLAUSE_IDS = [
 
 function contractsFixture(): ContractsFile {
 	return {
-		version: "1.0",
 		contracts: {
 			[ACCOUNT]: {
 				invariants: [{ id: "AccountService.inv0", expr: "balance >= 0" }],
@@ -230,7 +229,6 @@ function contractsFixture(): ContractsFile {
 
 function manifestsFixture(): ManifestsFile {
 	return {
-		version: "1.0",
 		manifests: {
 			[ACCOUNT]: {
 				sourceHash: "man-account",
@@ -242,13 +240,11 @@ function manifestsFixture(): ManifestsFile {
 }
 
 function predicatesFixture(): PredicatesFile {
-	return { version: "1.0", predicates: {} };
+	return { predicates: {} };
 }
 
 function makeConfig(rejectionIdiom?: "throws" | "returns"): WorkspaceConfig {
 	const config: WorkspaceConfig = {
-		grammarVersion: "1.0",
-		schemaVersion: "1.0",
 		sourceRoots: ["src/**/*.ts"],
 		language: "typescript",
 		testFramework: "vitest",
@@ -339,7 +335,6 @@ function makeInvalidContext(): VersaillesContext {
  */
 function makeOrderContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [{ id: "OrderService.inv0", expr: "balance >= 0" }],
@@ -373,7 +368,6 @@ function makeOrderContext(): VersaillesContext {
 		config: makeConfig(),
 		contracts,
 		manifests: {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-order",
@@ -403,7 +397,6 @@ function makeOrderContext(): VersaillesContext {
  */
 function makeGenericViolationContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -429,7 +422,6 @@ function makeGenericViolationContext(): VersaillesContext {
 		config: makeConfig(),
 		contracts,
 		manifests: {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-order-generic",
@@ -455,7 +447,6 @@ function makeGenericViolationContext(): VersaillesContext {
  */
 function makeBoundaryIsolationContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -481,7 +472,6 @@ function makeBoundaryIsolationContext(): VersaillesContext {
 		config: makeConfig(),
 		contracts,
 		manifests: {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-order-boundary",
@@ -508,7 +498,6 @@ function makeBoundaryIsolationContext(): VersaillesContext {
  */
 function makePartitionIsolationContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -534,7 +523,6 @@ function makePartitionIsolationContext(): VersaillesContext {
 		config: makeConfig(),
 		contracts,
 		manifests: {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-order-partition",
@@ -561,7 +549,6 @@ function makePartitionIsolationContext(): VersaillesContext {
  */
 function makeEnumPartitionIsolationContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			CatalogService: {
 				invariants: [],
@@ -587,7 +574,6 @@ function makeEnumPartitionIsolationContext(): VersaillesContext {
 		config: makeConfig(),
 		contracts,
 		manifests: {
-			version: "1.0",
 			manifests: {
 				CatalogService: {
 					sourceHash: "man-catalog",
@@ -1257,7 +1243,6 @@ describe("emitSuite — identifier safety (Center W1: injection into generated f
 		extraParamNames: string[],
 	): VersaillesContext {
 		const contracts: ContractsFile = {
-			version: "1.0",
 			contracts: {
 				[componentName]: {
 					invariants: [{ id: `${componentName}.inv0`, expr: "balance >= 0" }],
@@ -1289,7 +1274,6 @@ describe("emitSuite — identifier safety (Center W1: injection into generated f
 			config: makeConfig(),
 			contracts,
 			manifests: {
-				version: "1.0",
 				manifests: {
 					[componentName]: {
 						sourceHash: "man-named",

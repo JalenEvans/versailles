@@ -13,8 +13,10 @@ import configSchema from "../config.schema.json";
  *   jest and any value outside the matrix is rejected (ADR-0009).
  * - ADR-0007 / build-spec §3.1 + §9.1: rejection.idiom is configurable,
  *   default "throws", with the error-return alternative documented as "returns".
- * - build-spec §3.1: grammarVersion, schemaVersion, sourceRoots, language,
- *   testFramework, generatedDir, staleness.blockOnStale (boolean).
+ * - build-spec §3.1: sourceRoots, language, testFramework, generatedDir,
+ *   staleness.blockOnStale (boolean). ADR-0018 (VERSAILLES-170): the schema
+ *   drops grammarVersion/schemaVersion from `required` and properties and
+ *   allows an optional `$schema` pointer string.
  * - config.schema.json (JSON Schema draft-07, imported from the repo root):
  *   the nested staleness/rejection objects reject unknown keys via
  *   additionalProperties: false.
@@ -34,8 +36,6 @@ function baseConfig(
 	overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
 	return {
-		grammarVersion: "1.0",
-		schemaVersion: "1.0",
 		sourceRoots: ["src/**/*.ts"],
 		language: "typescript",
 		testFramework: "vitest",
@@ -152,8 +152,6 @@ describe("config.schema.json — nested objects reject unknown keys", () => {
 describe("config.schema.json — required properties and type enforcement", () => {
 	it("rejects a config missing the required testFramework field", () => {
 		const config = {
-			grammarVersion: "1.0",
-			schemaVersion: "1.0",
 			sourceRoots: ["src/**/*.ts"],
 			language: "typescript",
 			generatedDir: ".versailles/generated",
@@ -185,6 +183,12 @@ describe("config.schema.json — full-shape happy path", () => {
 		const config = baseConfig({
 			rejection: { idiom: "throws" },
 		});
+		expect(validateConfig(config)).toBe(true);
+		expect(validateConfig.errors).toBeNull();
+	});
+
+	it("accepts a config carrying a $schema pointer string (ADR-0018 — the version-ceremony replacement)", () => {
+		const config = baseConfig({ $schema: "../../config.schema.json" });
 		expect(validateConfig(config)).toBe(true);
 		expect(validateConfig.errors).toBeNull();
 	});

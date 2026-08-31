@@ -70,6 +70,14 @@ pass (Green).
 | `generate` | Deterministic tests from contracts → `.versailles/generated/` |
 | `check` | CI lint: validate + staleness; exit `0` clean · `1` parse/validation · `2` blocking staleness |
 
+### Root-level flags
+
+`versailles -v` / `versailles --version` prints the tool version (the package
+`version`, currently `0.1.0`) and exits `0` from any directory — it is a
+**root-level flag, not a command**: it short-circuits before command dispatch
+and never touches the workspace. Subcommands reject `-v` / `--version` as
+usage errors; `--verbose` remains the only flag on `validate` (long-only).
+
 ### Contract expression cheat-sheet
 
 A clause is a boolean expression (full grammar: [build-spec §4](docs/build-spec.md#4-contract-expression-grammar),

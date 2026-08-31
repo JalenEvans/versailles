@@ -106,10 +106,11 @@ import { extractManifests } from "../packages/frontend-ts/src/extractors/index.j
  */
 
 // The exact SEEDED_CONFIG written by initWorkspace (src/cli/init.ts); kept
-// local so fixtures pin the loader's happy path against the seed.
+// local so fixtures pin the loader's happy path against the seed. ADR-0018
+// (VERSAILLES-170): no grammarVersion/schemaVersion fields — the `$schema`
+// pointer string replaces the version ceremony.
 const SEEDED_CONFIG = {
-	grammarVersion: "1.0",
-	schemaVersion: "1.0",
+	$schema: "../../config.schema.json",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -123,7 +124,6 @@ const CUSTOMER = "CustomerService";
 /** Generator fixture (valid through the real loader — verified): §9.1 + §9.2 case sources. */
 function generatorContracts(): unknown {
 	return {
-		version: "1.0",
 		contracts: {
 			[ACCOUNT]: {
 				invariants: [{ id: "AccountService.inv0", expr: "balance >= 0" }],
@@ -192,7 +192,6 @@ function generatorContracts(): unknown {
 
 function generatorManifests(): unknown {
 	return {
-		version: "1.0",
 		manifests: {
 			[ACCOUNT]: {
 				sourceHash: "man-account",
@@ -204,7 +203,7 @@ function generatorManifests(): unknown {
 }
 
 function emptyPredicates(): unknown {
-	return { version: "1.0", predicates: {} };
+	return { predicates: {} };
 }
 
 async function writeJsonFile(path: string, value: unknown): Promise<void> {
@@ -246,11 +245,9 @@ async function freshWorkspace(
 		...configOverrides,
 	});
 	await writeWorkspaceFile(cwd, "contracts.json", {
-		version: "1.0",
 		contracts: {},
 	});
 	await writeWorkspaceFile(cwd, "manifests.json", {
-		version: "1.0",
 		manifests: {},
 	});
 	return cwd;
@@ -280,7 +277,7 @@ function referenceManifests(cwd: string): unknown {
 			),
 		};
 	}
-	return { version: "1.0", manifests };
+	return { manifests };
 }
 
 /** .test.ts files present under <cwd>/.versailles/generated ([] if absent). */
@@ -500,7 +497,6 @@ describe("runCli extract-manifests — update covered, preserve uncovered (build
 		await writeSource(cwd, "OrderItem.ts", ORDER_ITEM_SOURCE);
 		// A stale covered entry + an uncovered component that must survive.
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "deadbeef",
@@ -600,7 +596,6 @@ describe("runCli validate — structured report (build-spec §10)", () => {
 	it("workspace with a parse error → ok false, PARSE_ERROR in errors, exit 1 — never a throw", async () => {
 		const cwd = await freshWorkspace("v-parse-error");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [],
@@ -620,7 +615,6 @@ describe("runCli validate — structured report (build-spec §10)", () => {
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-os",
@@ -645,7 +639,6 @@ describe("runCli validate — structured report (build-spec §10)", () => {
 	it("workspace with a semantic validation error → ok false, UNKNOWN_FIELD in errors, exit 1", async () => {
 		const cwd = await freshWorkspace("v-semantic-error");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				svc: {
 					invariants: [],
@@ -663,7 +656,6 @@ describe("runCli validate — structured report (build-spec §10)", () => {
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				svc: { sourceHash: "man-svc", fields: { known: "number" } },
 			},
@@ -731,7 +723,6 @@ describe("runCli check — staleness / exit codes (build-spec §8)", () => {
 		await writeSource(cwd, "OrderService.ts", SOURCE_VERSION_A);
 		await writeWorkspaceFile(cwd, "manifests.json", referenceManifests(cwd));
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [],
@@ -758,6 +749,49 @@ describe("runCli check — staleness / exit codes (build-spec §8)", () => {
 		expect(result.errors).toContainEqual(
 			expect.objectContaining({ code: "UNKNOWN_FIELD" }),
 		);
+	});
+
+	it("a workspace with BOTH a parse error AND stale manifests → exit 1 with PARSE_ERROR — validation dominates staleness, never 2 (requireValidWorkspace, VERSAILLES-171)", async () => {
+		const cwd = await freshWorkspace("c-parse-error-dominates");
+		await writeSource(cwd, "OrderService.ts", SOURCE_VERSION_A);
+		await writeWorkspaceFile(cwd, "manifests.json", referenceManifests(cwd));
+		// Stale: source changes after extraction (the stored hash no longer
+		// matches the recomputed hash).
+		await writeSource(cwd, "OrderService.ts", SOURCE_VERSION_B);
+		// And contracts carry a parse error (single '=' — grammar requires '==').
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			contracts: {
+				OrderService: {
+					invariants: [],
+					operations: {
+						placeOrder: {
+							id: "OrderService.placeOrder",
+							params: [],
+							preconditions: [],
+							postconditions: [
+								{ id: "OrderService.placeOrder.post0", expr: "total = 100" },
+							],
+							effects: [],
+							sourceHash: "abc123",
+						},
+					},
+				},
+			},
+		});
+
+		const result = await runCli(["check"], { cwd });
+
+		// Validation errors short-circuit the staleness pass: exit 1, never 2,
+		// no STALE error. The failure-path output is the standardized {}.
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(result.errors).toContainEqual(
+			expect.objectContaining({ code: "PARSE_ERROR" }),
+		);
+		expect(result.errors).not.toContainEqual(
+			expect.objectContaining({ code: "STALE" }),
+		);
+		expect(result.output).toEqual({});
 	});
 
 	it("stale manifests with staleness.blockOnStale true → exit 2, STALE error listing stale IDs", async () => {
@@ -796,6 +830,89 @@ describe("runCli check — staleness / exit codes (build-spec §8)", () => {
 		);
 		expect(result.output).toMatchObject({ staleIds: ["OrderService"] });
 	});
+});
+
+// ── VERSAILLES-171 (Phase 3): workspace-gate dedup — requireValidWorkspace ──
+// The duplicated !isValid / config === null blocks in check.ts / generate.ts /
+// extract.ts are replaced by ONE shared guard (requireValidWorkspace in
+// src/cli/context.ts): { ok: true, context } on a valid workspace with a
+// non-null config, else a structured CliResult. The guard's failure-path
+// OUTPUT standardizes on {} — previously check returned { staleIds: [] },
+// generate returned { files: [] }, and extract returned NO output key on
+// invalid/config-null workspaces. Exit codes are PRESERVED (1) and the
+// !isValid / config-null error surfaces stay command-appropriate
+// (PARSE_ERROR… / CONFIG_INVALID). These tests were written as a RED-phase
+// pin against the pre-gate handlers (whose failure envelopes carried
+// staleIds / files, and where a missing config.json surfaced MISSING_FILE,
+// not CONFIG_INVALID); requireValidWorkspace GREEN landed in 9316a4f, so they
+// now pin the landed standard: failure-path output {} on every guarded
+// command.
+
+describe("runCli — requireValidWorkspace gate: failure-path output standardizes on {} (VERSAILLES-171)", () => {
+	it.each(["check", "generate", "extract-manifests"])(
+		"%s on an invalid workspace (parse error) → exit 1 with PARSE_ERROR and output {} — never { staleIds: [] } / { files: [] }",
+		async (command) => {
+			const cwd = await freshWorkspace(`gate-invalid-${command}`);
+			await writeWorkspaceFile(cwd, "contracts.json", {
+				contracts: {
+					OrderService: {
+						invariants: [],
+						operations: {
+							placeOrder: {
+								id: "OrderService.placeOrder",
+								params: [],
+								preconditions: [],
+								postconditions: [
+									{
+										id: "OrderService.placeOrder.post0",
+										expr: "total = 100",
+									},
+								],
+								effects: [],
+								sourceHash: "abc123",
+							},
+						},
+					},
+				},
+			});
+			await writeWorkspaceFile(cwd, "manifests.json", {
+				manifests: {
+					OrderService: {
+						sourceHash: "man-os",
+						fields: { total: "number" },
+					},
+				},
+			});
+
+			const result = await runCli([command], { cwd });
+
+			expect(result.ok).toBe(false);
+			expect(result.exitCode).toBe(1);
+			expect(result.errors).toContainEqual(
+				expect.objectContaining({ code: "PARSE_ERROR" }),
+			);
+			// The standardized failure envelope — staleIds / files payloads are
+			// success-path-only.
+			expect(result.output).toEqual({});
+		},
+	);
+
+	it.each(["check", "generate", "extract-manifests"])(
+		"%s with config === null (missing config.json) → exit 1 with CONFIG_INVALID and output {}",
+		async (command) => {
+			const cwd = await freshWorkspace(`gate-noconfig-${command}`);
+			await rm(join(cwd, ".versailles", "config.json"), { force: true });
+
+			const result = await runCli([command], { cwd });
+
+			expect(result.ok).toBe(false);
+			expect(result.exitCode).toBe(1);
+			expect(result.errors).toContainEqual(
+				expect.objectContaining({ code: "CONFIG_INVALID" }),
+			);
+			expect(result.output).toEqual({});
+		},
+	);
 });
 
 // ── generate (build-spec §9) ───────────────────────────────────────────────
@@ -839,7 +956,6 @@ describe("runCli generate — deterministic generation (build-spec §9)", () => 
 	it("invalid workspace → exit 1 with structured errors and NO test files written", async () => {
 		const cwd = await freshWorkspace("g-invalid");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [],
@@ -859,7 +975,6 @@ describe("runCli generate — deterministic generation (build-spec §9)", () => 
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-os",
@@ -913,7 +1028,6 @@ describe("runCli generate — non-silent unplannable predicate warnings (VERSAIL
 	it("a genuinely unplannable predicate clause surfaces PREDICATE_UNPLANNABLE in warnings — never a silent zero, exit 0", async () => {
 		const cwd = await freshWorkspace("g-predicate-unplannable");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [],
@@ -938,7 +1052,6 @@ describe("runCli generate — non-silent unplannable predicate warnings (VERSAIL
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-order",
@@ -985,7 +1098,6 @@ describe("runCli generate — non-silent UNPLANNABLE_OPERATION warnings for stag
 	it("a staged operation absent from the component's manifest methods metadata surfaces UNPLANNABLE_OPERATION in warnings — never a dead static call, exit 0", async () => {
 		const cwd = await freshWorkspace("g-unplannable-operation");
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				Order: {
 					invariants: [],
@@ -1005,7 +1117,6 @@ describe("runCli generate — non-silent UNPLANNABLE_OPERATION warnings for stag
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				Order: {
 					sourceHash: "man-order",
@@ -1065,7 +1176,6 @@ describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for retai
 			propertyBased: { enabled: true, numRuns: 100 },
 		});
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				OrderService: {
 					invariants: [],
@@ -1100,7 +1210,6 @@ describe("runCli generate — non-silent PROPERTY_UNPLANNABLE warnings for retai
 			},
 		});
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "man-order",
@@ -1266,7 +1375,6 @@ describe("runCli check — zero-resolved sourceRoots must never false-green (Cen
 		// Genuine grounding the zero-root scan cannot verify: a stored
 		// manifest whose hash check must NOT be silently skipped.
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "deadbeef",
@@ -1301,7 +1409,6 @@ describe("runCli extract-manifests --prune — unusable roots must not silently 
 			sourceRoots: ["does-not-exist/**/*.ts"],
 		});
 		const stored = {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "deadbeef",
@@ -1508,7 +1615,6 @@ describe("runCli extract-manifests — sourcePath persists through the store (VE
 		// A stale covered entry (refreshed path must gain sourcePath) + a
 		// legacy uncovered entry (preserved path must not invent one).
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				OrderService: {
 					sourceHash: "deadbeef",
@@ -1600,7 +1706,6 @@ describe("runCli extract-manifests + generate — a zero-method component with a
 		await writeSource(cwd, "Order.ts", ZERO_METHOD_ORDER_SOURCE);
 		// Stage an operation that cannot exist in the zero-method source.
 		await writeWorkspaceFile(cwd, "contracts.json", {
-			version: "1.0",
 			contracts: {
 				Order: {
 					invariants: [],
@@ -1669,7 +1774,6 @@ async function seedGeneratorWorkspaceWithSourcePaths(
 ): Promise<string> {
 	const cwd = await seedGeneratorWorkspace(name);
 	await writeWorkspaceFile(cwd, "manifests.json", {
-		version: "1.0",
 		manifests: {
 			AccountService: {
 				sourceHash: "man-account",
@@ -1713,7 +1817,6 @@ describe("runCli generate — vitest module paths derive from manifest sourcePat
 		// Only AccountService carries sourcePath; CustomerService is a legacy
 		// entry without one and must fall back to the deterministic default.
 		await writeWorkspaceFile(cwd, "manifests.json", {
-			version: "1.0",
 			manifests: {
 				AccountService: {
 					sourceHash: "man-account",
@@ -1773,7 +1876,6 @@ export class OrderItem {
 
 function v24OrderContracts(): unknown {
 	return {
-		version: "1.0",
 		contracts: {
 			Order: {
 				invariants: [],

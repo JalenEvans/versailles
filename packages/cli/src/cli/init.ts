@@ -4,8 +4,7 @@ import { join } from "node:path";
 const WORKSPACE_DIR_NAME = ".versailles";
 
 const SEEDED_CONFIG = {
-	grammarVersion: "1.0",
-	schemaVersion: "1.0",
+	$schema: "../../config.schema.json",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -29,7 +28,8 @@ function writeJsonFile(
 
 /**
  * Scaffolds `<targetDir>/.versailles/` with the three jointly-loaded workspace
- * files (build-spec §2): a seeded default config plus versioned schema stores.
+ * files (build-spec §2): a seeded default config plus empty version-less
+ * schema stores (ADR-0018 — no file-level version fields, no version gates).
  *
  * ADR-0013 (Phase 3): predicates.json is retired. Predicates are now declared
  * inline in contracts.json's top-level `predicates` map.
@@ -43,6 +43,6 @@ export async function initWorkspace(targetDir: string): Promise<void> {
 
 	await writeJsonFile(workspaceDir, "config.json", SEEDED_CONFIG);
 	for (const fileName of EMPTY_SCHEMA_FILE_NAMES) {
-		await writeJsonFile(workspaceDir, fileName, { version: "1.0" });
+		await writeJsonFile(workspaceDir, fileName, {});
 	}
 }

@@ -3,6 +3,9 @@
 	"type": "object",
 	"additionalProperties": false,
 	"properties": {
+		"$schema": {
+			"type": "string"
+		},
 		"grammarVersion": {
 			"type": "string"
 		},
@@ -67,8 +70,6 @@
 		}
 	},
 	"required": [
-		"grammarVersion",
-		"schemaVersion",
 		"sourceRoots",
 		"language",
 		"testFramework",

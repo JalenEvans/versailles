@@ -7,7 +7,7 @@
 ## What this context does
 
 Workspace context owns the `.versailles/` directory — `config.json`, `contracts.json`
-(with its top-level `predicates` map), `manifests.json` — as a **versioned, jointly-loaded
+(with its top-level `predicates` map), `manifests.json` — as a **jointly-loaded
 unit**. Because contracts reference manifests and predicates by name, no file is ever valid
 to interpret on its own. The loader is the single shared entry point every component uses;
 nobody re-implements loading.
@@ -16,8 +16,10 @@ nobody re-implements loading.
 
 - All three data files are read and parsed together; one `VersaillesContext` object comes out with
   parsed ASTs, errors, warnings, and an aggregated `isValid` flag.
-- Version gates: `grammarVersion` / `schemaVersion` mismatches are **hard errors with an
-  upgrade-path message** — never a silent best-effort parse.
+- Format policy (ADR-0018): **no version gates** — `grammarVersion` / `schemaVersion` and the
+  per-file `version` fields are removed; `config.json` carries a `$schema` pointer to
+  `config.schema.json`; the tool version lives in the binary (`versailles -v` / `--version`);
+  deprecated fields still load permissively until `migrate` rewrites them.
 - Config is machine-checkable against the ADR-0009 matrix: `language` accepts
   `typescript | csharp | python`, `testFramework` accepts `vitest | xunit | pytest`.
   **`jest` is rejected; `vitest` is accepted.**
@@ -32,7 +34,9 @@ nobody re-implements loading.
 
 ## What it forbids (must not)
 
-- No interpreting any file in isolation; no silent version-mismatch parsing.
+- No interpreting any file in isolation; no version-gate enforcement — deprecated
+  `grammarVersion` / `schemaVersion` / `version` fields load permissively until `migrate`
+  rewrites them (deprecate-don't-remove).
 - No accepting config values outside the ADR-0009 matrix.
 - No consumer re-implementing loading; no whole-file returns from scoped extraction.
 - No failing `check` on staleness when `blockOnStale` is false; no LLM anywhere in loading
@@ -41,4 +45,4 @@ nobody re-implements loading.
 ## Grounding
 
 [build-spec §2, §3.1, §6, §8](../build-spec.md) · ADR-0009 (language/framework matrix) ·
-ADR-0010 (no in-tool LLM)
+ADR-0010 (no in-tool LLM) · ADR-0018 (additive-only format policy)

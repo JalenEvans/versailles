@@ -8,7 +8,11 @@ import { existsSync, statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { VersaillesContext } from "../../../core/src/loader/workspace.js";
+import {
+	type VersaillesContext,
+	type WorkspaceConfig,
+	loadWorkspace,
+} from "../../../core/src/loader/workspace.js";
 import type { ExtractorWarning } from "../../../frontend-ts/src/extractors/types.js";
 import type { CliError, CliResult } from "./types.js";
 
@@ -44,6 +48,58 @@ export function extractorWarnings(warnings: ExtractorWarning[]): CliError[] {
 		field: warning.field,
 		detail: warning.detail,
 	}));
+}
+
+/**
+ * Workspace-gate guard shared by check / generate / extract-manifests
+ * (VERSAILLES-171): loads the workspace once and returns { ok: true, context }
+ * only when the config is present and the context is valid. Every failure path
+ * returns a structured CliResult with exit 1 and the standardized empty
+ * `output: {}` — the pre-Phase-3 failure envelopes ({ staleIds: [] }, { files:
+ * [] }, no output key) are gone. A null config surfaces CONFIG_INVALID (not
+ * the loader's MISSING_FILE for the absent config.json) so a missing config
+ * is reported as a config problem, matching the handlers' config-null branch.
+ */
+export async function requireValidWorkspace(
+	cwd: string,
+): Promise<
+	| { ok: true; context: VersaillesContext & { config: WorkspaceConfig } }
+	| { ok: false; result: CliResult }
+> {
+	const context = await loadWorkspace(join(cwd, ".versailles"));
+	if (context.config === null) {
+		return {
+			ok: false,
+			result: {
+				ok: false,
+				errors: [
+					{
+						code: "CONFIG_INVALID",
+						field: "config.json",
+						detail: "Workspace config is missing",
+					},
+				],
+				warnings: [],
+				exitCode: 1,
+				output: {},
+			},
+		};
+	}
+	if (!context.isValid) {
+		return {
+			ok: false,
+			result: {
+				ok: false,
+				errors: contextErrors(context),
+				warnings: contextWarnings(context),
+				exitCode: 1,
+				output: {},
+			},
+		};
+	}
+	// config is non-null here (checked above); rebuild the context so the
+	// success branch's type carries config: WorkspaceConfig (not | null).
+	return { ok: true, context: { ...context, config: context.config } };
 }
 
 /**

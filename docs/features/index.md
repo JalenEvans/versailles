@@ -9,7 +9,7 @@ User-visible capabilities mapped from the [build spec](../build-spec.md). Each c
 | Deterministic generation | `versailles generate` | deterministic-generation, workspace-context | §9 | [deterministic-generation.md](deterministic-generation.md) |
 | Staleness check (CI lint) | `versailles check` | workspace-context, contract-language, manifest-extraction | §8 | [staleness-check.md](staleness-check.md) |
 | Predicate declarations | declared inline in `contracts.json`; verified by `validate` | predicate-registry, contract-language, workspace-context | §3.4, §13 m8 | [predicate-registry.md](predicate-registry.md) |
-| Rejected-command output | any command on an invalid/stale/version-mismatched context | cross-cutting (CLI) | §4.4, §5.2, §8, §12 | [command-rejection.md](command-rejection.md) |
+| Rejected-command output | any command on an invalid/stale context | cross-cutting (CLI) | §4.4, §5.2, §8, §12 | [command-rejection.md](command-rejection.md) |
 | Manifest extraction | `versailles extract-manifests` | manifest-extraction, workspace-context | §7 | [manifest-extraction.md](manifest-extraction.md) |
 | Workspace init | `versailles init` | workspace-context | §12 | (scaffolds `.versailles/`; see [workspace-context](../domains/workspace-context.md)) |
 

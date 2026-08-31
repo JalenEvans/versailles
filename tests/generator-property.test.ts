@@ -81,8 +81,6 @@ function makeGeneratedContext(
 ): VersaillesContext {
 	return {
 		config: {
-			grammarVersion: "1.0",
-			schemaVersion: "1.0",
 			sourceRoots: ["src/**/*.ts"],
 			language: "typescript",
 			testFramework: "vitest",
@@ -90,7 +88,6 @@ function makeGeneratedContext(
 			staleness: { blockOnStale: false },
 		},
 		contracts: {
-			version: "1.0",
 			contracts: {
 				Gen: {
 					invariants: [{ id: "Gen.inv0", expr: "balance >= 0" }],
@@ -124,12 +121,11 @@ function makeGeneratedContext(
 			},
 		},
 		manifests: {
-			version: "1.0",
 			manifests: {
 				Gen: { sourceHash: "man-gen", fields: { balance: "number" } },
 			},
 		},
-		predicates: { version: "1.0", predicates: {} },
+		predicates: { predicates: {} },
 		parsedContracts: {
 			"Gen.withdraw.pre0": parseAst(pre0, "preconditions", "Gen.withdraw.pre0"),
 			"Gen.withdraw.pre1": parseAst(pre1, "preconditions", "Gen.withdraw.pre1"),

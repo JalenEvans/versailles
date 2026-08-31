@@ -1,6 +1,5 @@
 {
-  "grammarVersion": "1.0",
-  "schemaVersion": "1.0",
+  "$schema": "../../config.schema.json",
   "sourceRoots": [
     "src/**/*.ts"
   ],

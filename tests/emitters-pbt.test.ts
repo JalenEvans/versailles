@@ -1283,9 +1283,8 @@ describe("emitters-pbt fixture integrity", () => {
 
 const EXEC_REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const EXEC_EMPTY_MANIFESTS: ManifestsFile = { version: "1.0", manifests: {} };
+const EXEC_EMPTY_MANIFESTS: ManifestsFile = { manifests: {} };
 const EXEC_EMPTY_PREDICATES: PredicatesFile = {
-	version: "1.0",
 	predicates: {},
 };
 
@@ -1293,8 +1292,6 @@ function execConfig(
 	propertyBased: WorkspaceConfig["propertyBased"],
 ): WorkspaceConfig {
 	return {
-		grammarVersion: "1.0",
-		schemaVersion: "1.0",
 		sourceRoots: ["src/**/*.ts"],
 		language: "typescript",
 		testFramework: "vitest",
@@ -1348,7 +1345,6 @@ function execContext(
 /** The runnable single-param compound: `x >= 0 and x <= 1000` → `(x) => ...`. */
 function execSingleParamContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -1385,7 +1381,6 @@ function execSingleParamContext(): VersaillesContext {
  */
 function execMultiParamContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],

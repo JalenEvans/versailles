@@ -70,6 +70,8 @@ must:
   - "Set verifiedPure only through a human's manual lint/review: the author asserts purity as data in contracts.json (build-spec §14 default, ADR-0006); the tool itself never performs purity or termination analysis."
   - "Return structured results from every registry operation and never throw unstructured exceptions (ADR-0010)."
   - "Load the predicates map through the workspace-context shared loader whenever reading; never re-implement loading (build-spec §6)."
+  - "Emit predicateReferences under validate --verbose deterministically (ADR-0002): exactly one entry per declared predicate — declared-but-unused ones included with clauses: [] — entries sorted by predicate name, clauses sorted by clause id, and singleUse exactly clauses.length === 1 (VERSAILLES-173)."
+  - "Keep the reverse-reference index additive and detail-only: the non-verbose output shape and every error/warning shape are unchanged; predicateReferences appears only under --verbose (VERSAILLES-173)."
 
 must_not:
   - "Must not perform automated purity or termination analysis to set verifiedPure — the flag is a human-set data field (ADR-0006, build-spec §14 default)."
@@ -83,6 +85,7 @@ must_not:
 
 can:
   - "May surface the resolved sourceRef and derived hash for transparency via validate --verbose."
+  - "May emit a reverse-reference index (verbose.predicateReferences) under validate --verbose: one entry per declared predicate mapping its name and declaration source to the sorted ids of parsed clauses whose expressions call it, with singleUse exactly clauses.length === 1 (VERSAILLES-168 Phase 5, VERSAILLES-173)."
   - "May offer an inspection or listing view of declared predicates to aid authors."
   - "May include human-friendly hints in structured predicate-related errors."
 
@@ -103,6 +106,8 @@ asserts:
   - "assert: verify_predicate_reference returns a hard error whenever a contract references a predicate with verifiedPure missing or false (ADR-0006)."
   - "assert: no code path in predicate-registry parses contract expressions or invokes an LLM."
   - "assert: no stored sourceHash is maintained for any predicate (ADR-0013)."
+  - "assert: when predicateReferences is present under validate --verbose, it includes every declared predicate exactly once (unused predicates with clauses: [], singleUse: false), entries sorted by predicate name, clauses sorted by clause id, and singleUse exactly clauses.length === 1."
+  - "assert: predicateReferences appears only under --verbose; the non-verbose output remains the existing { valid: boolean } shape with no error-shape change."
 
 ---
 ## Changelog
@@ -111,3 +116,4 @@ asserts:
 |------|--------|--------|
 | 2026-08-14 | general-manager | Initial contract from docs/specs/predicate-registry.md; build-spec §3.4, §13 milestone 8, §14; ADR-0003/0006/0010 |
 | 2026-08-22 | power-forward | Rewritten for declarative predicates (ADR-0013): predicates declared inline in contracts.json; registration CLI removed; sourceHash dropped; validate verifies declarations (resolve-or-warn, name validity, verifiedPure gate preserved) |
+| 2026-08-30 | general-manager | Reverse-reference discoverability index (VERSAILLES-168 Phase 5, VERSAILLES-173): can — validate --verbose may emit verbose.predicateReferences; must — deterministic (ADR-0002), one entry per declared predicate (unused included with clauses: []), entries and clauses sorted, singleUse = clauses.length === 1, additive/detail-only with no error-shape change; asserts added |

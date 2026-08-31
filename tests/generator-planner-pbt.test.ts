@@ -107,11 +107,15 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  *    after its clauses.
  * 4. Seed wiring: EVERY descriptor carries `seed` =
  *    config.propertyBased.seed ?? derivePropertySeed(descriptor.traces,
- *    context.config.grammarVersion). Per-block, over the block's OWN covered
- *    clause ids — the contract's "distinct property blocks carry distinct
- *    seed literals (derived per-block from the covered clause IDs + grammar
- *    version, or the explicit config override)". The override wins; the
- *    derived seed stays an int32 (fast-check's `seed | 0` round-trip).
+ *    "1.0"). ADR-0018 removed context.config.grammarVersion from
+ *    WorkspaceConfig; the planner pins the constant `"1.0"` (planner.ts:
+ *    "ADR-0018: the config grammarVersion field is removed; pin \"1.0\" so
+ *    the PBT seed derivation input stays byte-identical (ADR-0002)") so the
+ *    derivation input stays byte-identical. Per-block, over the block's OWN
+ *    covered clause ids — the contract's "distinct property blocks carry
+ *    distinct seed literals (derived per-block from the covered clause IDs +
+ *    grammar version, or the explicit config override)". The override wins;
+ *    the derived seed stays an int32 (fast-check's `seed | 0` round-trip).
  * 5. Per-param arbitraries (ArbitrarySpec): number → kind "number" with
  *    bounds from numericConstraintBounds — and for COMPOUND clauses the
  *    planner must extract the numeric sub-expression bounds too (the flagship
@@ -276,15 +280,13 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
 
 // ── Fixture helpers (mirroring tests/generator.test.ts conventions) ────────
 
-const EMPTY_MANIFESTS: ManifestsFile = { version: "1.0", manifests: {} };
-const EMPTY_PREDICATES: PredicatesFile = { version: "1.0", predicates: {} };
+const EMPTY_MANIFESTS: ManifestsFile = { manifests: {} };
+const EMPTY_PREDICATES: PredicatesFile = { predicates: {} };
 
 function makeConfig(
 	propertyBased?: WorkspaceConfig["propertyBased"],
 ): WorkspaceConfig {
 	const config: WorkspaceConfig = {
-		grammarVersion: "1.0",
-		schemaVersion: "1.0",
 		sourceRoots: ["src/**/*.ts"],
 		language: "typescript",
 		testFramework: "vitest",
@@ -410,7 +412,6 @@ function renderOracle(ctx: VersaillesContext, clauseId: string): string {
 // numeric-bound sub-expressions) and is the flagship accept-side property.
 function compoundPbtContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -493,7 +494,6 @@ describe("planPropertyBlocks — flagship compound precondition → property des
 // ── Fixture: top-level `in` clause → example (no property) ──────────────────
 function inClauseContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -524,7 +524,6 @@ function inClauseContext(): VersaillesContext {
 // ── Fixture: numeric single-bound precondition → example (no property) ──────
 function numericSingleBoundContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -578,7 +577,6 @@ describe("planPropertyBlocks — strategy gating: example-shaped clauses yield N
 // property.
 function predicateCallContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -598,14 +596,12 @@ function predicateCallContext(): VersaillesContext {
 		},
 	};
 	const predicates: PredicatesFile = {
-		version: "1.0",
 		predicates: {
 			isPositive: {
 				params: ["amount"],
 				paramTypes: ["number"],
 				returnType: "boolean",
 				sourceRef: "src/predicates.ts",
-				sourceHash: "",
 				verifiedPure: true,
 			},
 		},
@@ -654,7 +650,6 @@ describe("planPropertyBlocks — predicateCall precondition → property-with-fa
 // enum members, list/optional defaults).
 function multiParamPbtContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -700,7 +695,6 @@ function multiParamPbtContext(): VersaillesContext {
 // this fixture pins the SINGLE-param per-arbitrary mapping in isolation.)
 function allKindsSingleParamContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -878,7 +872,6 @@ function accountPbtContext(
 	propertyBased?: WorkspaceConfig["propertyBased"],
 ): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			AccountService: {
 				invariants: [{ id: "AccountService.inv0", expr: "balance >= 0" }],
@@ -926,7 +919,6 @@ function accountPbtContext(
 		},
 	};
 	const manifests: ManifestsFile = {
-		version: "1.0",
 		manifests: {
 			AccountService: {
 				sourceHash: "man-account",
@@ -1052,7 +1044,6 @@ function paramParamEqualityContext(
 	propertyBased?: WorkspaceConfig["propertyBased"],
 ): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			AccountService: {
 				invariants: [],
@@ -1289,7 +1280,6 @@ describe("planPropertyBlocks — seed wiring (ADR-0017)", () => {
 // unplannable for PBT.
 function unplannableCompoundContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -1364,7 +1354,6 @@ describe("planPropertyBlocks — unplannable clause: non-silent warning, skipped
 // so the clause stays PROPERTY_UNPLANNABLE (VERSAILLES-165).
 function nonMirrorableInequalityContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			AccountService: {
 				invariants: [],
@@ -1392,7 +1381,6 @@ function nonMirrorableInequalityContext(): VersaillesContext {
 		},
 	};
 	const manifests: ManifestsFile = {
-		version: "1.0",
 		manifests: {
 			AccountService: {
 				sourceHash: "man-account-ne",
@@ -1414,7 +1402,6 @@ function nonMirrorableInequalityContext(): VersaillesContext {
 // (VERSAILLES-165).
 function equalityOfSumsContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -1455,7 +1442,6 @@ function equalityOfSumsContext(): VersaillesContext {
 // `b >= 0`) DO provide the lower bounds and the same leaf is planned.
 function unboundableCouplingContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			OrderService: {
 				invariants: [],
@@ -1602,7 +1588,6 @@ describe("planPropertyBlocks — retained unplannable shapes (VERSAILLES-165)", 
 
 function mixedGuardSetContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			MergeService: {
 				invariants: [],
@@ -1626,7 +1611,6 @@ function mixedGuardSetContext(): VersaillesContext {
 		},
 	};
 	const manifests: ManifestsFile = {
-		version: "1.0",
 		manifests: {
 			MergeService: {
 				sourceHash: "man-merge",
@@ -1723,7 +1707,6 @@ describe("planPropertyBlocks — MIXED guard set: field-bound equality + mirror 
 
 function zeroParamFieldEqualityContext(): VersaillesContext {
 	const contracts: ContractsFile = {
-		version: "1.0",
 		contracts: {
 			RegistryService: {
 				invariants: [],
@@ -1746,7 +1729,6 @@ function zeroParamFieldEqualityContext(): VersaillesContext {
 		},
 	};
 	const manifests: ManifestsFile = {
-		version: "1.0",
 		manifests: {
 			RegistryService: {
 				sourceHash: "man-registry",

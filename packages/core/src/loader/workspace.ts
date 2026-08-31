@@ -1,11 +1,11 @@
 /**
  * The joint `.versailles/` loader — the single shared path into a workspace
  * (build-spec §6). Loads and JSON-parses the three jointly-loaded files
- * (config.json, contracts.json, manifests.json), applies the version gates
- * (build-spec §3.1) BEFORE any other processing, parses every expr string in
- * contracts.json into an AST via parseExpression, validates config.json against
- * config.schema.json, and returns ONE VersaillesContext with an aggregated
- * isValid flag (build-spec §6.5).
+ * (config.json, contracts.json, manifests.json) — version-less stores since
+ * ADR-0018, so no version gates and no VERSION_MISMATCH — parses every expr
+ * string in contracts.json into an AST via parseExpression, validates
+ * config.json against config.schema.json, and returns ONE VersaillesContext
+ * with an aggregated isValid flag (build-spec §6.5).
  *
  * ADR-0013 (Phase 3): predicates are now declared inline in contracts.json's
  * top-level `predicates` map. predicates.json is retired and no longer loaded.
@@ -18,9 +18,9 @@
  * recorded as INVALID_SHAPE LoaderErrors (chunk 3.4a, ADR-0010). After
  * parsing, the semantic validator (build-spec §5) runs over every
  * successfully-parsed clause with its clauseKind + owning scope; semantic
- * errors join loader-level errors (VERSION_MISMATCH / MISSING_FILE /
- * INVALID_JSON / CONFIG_INVALID / INVALID_SHAPE) in validationErrors, and
- * ADR-0004 warnings land in validationWarnings without flipping isValid.
+ * errors join loader-level errors (MISSING_FILE / INVALID_JSON /
+ * CONFIG_INVALID / INVALID_SHAPE) in validationErrors, and ADR-0004 warnings
+ * land in validationWarnings without flipping isValid.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -36,12 +36,7 @@ import type { ValidationError, ValidatorScope } from "../core/validator.js";
 import { isValidPredicateName } from "../predicates/registry.js";
 import { resolvePredicateSource } from "../predicates/source.js";
 
-export const SUPPORTED_GRAMMAR_VERSION = "1.0";
-export const SUPPORTED_SCHEMA_VERSION = "1.0";
-
 export type WorkspaceConfig = {
-	grammarVersion: string;
-	schemaVersion: string;
 	sourceRoots: string[];
 	language: "typescript" | "csharp" | "python";
 	testFramework: "vitest" | "xunit" | "pytest";
@@ -72,7 +67,6 @@ export type ComponentContract = {
 };
 
 export type ContractsFile = {
-	version: string;
 	/**
 	 * ADR-0013 (Phase 3): predicates are now declared inline in contracts.json's
 	 * top-level `predicates` map. Each entry carries: source, params, paramTypes,
@@ -92,7 +86,6 @@ export type ContractsFile = {
 };
 
 export type ManifestsFile = {
-	version: string;
 	manifests: Record<
 		string,
 		{
@@ -122,7 +115,6 @@ export type ManifestsFile = {
 };
 
 export type PredicatesFile = {
-	version: string;
 	predicates: Record<
 		string,
 		{
@@ -130,14 +122,12 @@ export type PredicatesFile = {
 			paramTypes: string[];
 			returnType: string;
 			sourceRef: string;
-			sourceHash: string;
 			verifiedPure: boolean;
 		}
 	>;
 };
 
 export type LoaderErrorCode =
-	| "VERSION_MISMATCH"
 	| "MISSING_FILE"
 	| "INVALID_JSON"
 	| "CONFIG_INVALID"
@@ -304,8 +294,8 @@ function isClauseEntry(value: unknown): boolean {
  *
  * A missing file (null) is NOT a shape violation — MISSING_FILE/INVALID_JSON
  * already cover it, and an absent record key is deliberately tolerated
- * (withRecordKey defaults it to {}, matching init.ts seeding of bare
- * { "version": "1.0" } stores).
+ * (withRecordKey defaults it to {}, matching init.ts seeding of empty {}
+ * stores).
  *
  * Field naming (documented by the SG in tests/loader.test.ts):
  * - top-level file primitive:            "<file>.json"
@@ -594,16 +584,17 @@ function validatePredicatesShape(
 
 /**
  * The schema-store types declare their record keys as required (build-spec
- * §3.2–§3.4), but init.ts seeds the three stores as bare `{ "version": "1.0" }`
- * without the key. The semantic validator indexes `manifests.manifests`
- * unguarded (validator.ts getManifestEntry), so a degenerate shape would crash
- * it — violating the loader's never-throws promise (ADR-0010). Default an
- * absent record key to an empty record so downstream consumers always see the
- * declared shape. `key in file` throws on primitives (chunk 3.4a, F1), so a
- * non-object file is returned untouched — the shape-guard pass has already
- * flagged it as INVALID_SHAPE and loadWorkspace skips downstream use.
+ * §3.2–§3.4), but init.ts seeds the three stores as empty `{}` without the key
+ * (version-less since ADR-0018). The semantic validator indexes
+ * `manifests.manifests` unguarded (validator.ts getManifestEntry), so a
+ * degenerate shape would crash it — violating the loader's never-throws
+ * promise (ADR-0010). Default an absent record key to an empty record so
+ * downstream consumers always see the declared shape. `key in file` throws on
+ * primitives (chunk 3.4a, F1), so a non-object file is returned untouched —
+ * the shape-guard pass has already flagged it as INVALID_SHAPE and
+ * loadWorkspace skips downstream use.
  */
-function withRecordKey<T extends { version: string }, K extends string>(
+function withRecordKey<T extends object, K extends string>(
 	file: T | null,
 	key: K,
 ): T | null {
@@ -751,7 +742,6 @@ export async function loadWorkspace(
 					paramTypes: string[];
 					returnType: string;
 					sourceRef: string;
-					sourceHash: string;
 					verifiedPure: boolean;
 				}
 			> = {};
@@ -784,15 +774,14 @@ export async function loadWorkspace(
 							? entry.verifiedPure
 							: false;
 
-					// ADR-0013: sourceHash is dropped from the declaration, but we
-					// keep it in the PredicatesFile shape for backward compatibility
-					// with the validator. Set it to empty string.
+					// ADR-0013: sourceHash is dropped from the declaration;
+					// ADR-0018 removes the vestige from the PredicatesFile
+					// shape too.
 					predicateMap[name] = {
 						params,
 						paramTypes,
 						returnType,
 						sourceRef: source,
-						sourceHash: "",
 						verifiedPure,
 					};
 
@@ -822,7 +811,6 @@ export async function loadWorkspace(
 			}
 
 			predicatesFile = {
-				version: "1.0",
 				predicates: predicateMap,
 			};
 		}
@@ -840,29 +828,10 @@ export async function loadWorkspace(
 		isValid: false,
 	};
 
-	// Version gates (build-spec §3.1): checked before config validation and
-	// expr parsing; a mismatch short-circuits all downstream processing.
-	let versionOk = true;
+	// Config validation (build-spec §5 / config.schema.json) runs
+	// unconditionally whenever config.json is present — no version gates
+	// precede it since ADR-0018.
 	if (context.config !== null) {
-		if (context.config.grammarVersion !== SUPPORTED_GRAMMAR_VERSION) {
-			validationErrors.push({
-				code: "VERSION_MISMATCH",
-				field: "grammarVersion",
-				detail: `config.grammarVersion "${context.config.grammarVersion}" is not supported — upgrade to "${SUPPORTED_GRAMMAR_VERSION}"`,
-			});
-			versionOk = false;
-		}
-		if (context.config.schemaVersion !== SUPPORTED_SCHEMA_VERSION) {
-			validationErrors.push({
-				code: "VERSION_MISMATCH",
-				field: "schemaVersion",
-				detail: `config.schemaVersion "${context.config.schemaVersion}" is not supported — upgrade to "${SUPPORTED_SCHEMA_VERSION}"`,
-			});
-			versionOk = false;
-		}
-	}
-
-	if (versionOk && context.config !== null) {
 		const configValidator = getConfigValidator();
 		if (!configValidator.validate(context.config)) {
 			for (const error of configValidator.errors ?? []) {
@@ -875,7 +844,7 @@ export async function loadWorkspace(
 		}
 	}
 
-	if (versionOk && context.contracts !== null && shape.contracts) {
+	if (context.contracts !== null && shape.contracts) {
 		const result = parseContracts(context.contracts);
 		context.parsedContracts = result.parsedContracts;
 		context.parseErrors = result.parseErrors;

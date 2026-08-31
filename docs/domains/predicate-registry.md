@@ -24,6 +24,8 @@ are allowed to call (build-spec §3.4, ADR-0013):
 
 **DeclarationVerification** (process) — validate-time verification of every predicate declaration: name validity (IDENT), `sourceRef` resolution (resolve-or-warn).
 
+**PredicateReferenceIndex** (artifact) — the reverse-reference index emitted under `validate --verbose` (`verbose.predicateReferences`): one entry per declared predicate mapping it to the sorted clause ids whose expressions call it, with `singleUse`; entries sorted by predicate name — deterministic (ADR-0002, VERSAILLES-173).
+
 ## Ubiquitous language
 
 Uses from [glossary](../glossary.md): *predicate, verifiedPure, sourceRef, declarative predicate, audit trail*. "The map of callable functions" is the *predicate map*; "marking pure" is *setting verifiedPure as data*; "verifying a declaration" is *validate-time resolution*.
@@ -38,7 +40,7 @@ Uses from [glossary](../glossary.md): *predicate, verifiedPure, sourceRef, decla
 |---|---|---|
 | Downstream of | workspace-context | The predicates map is loaded only as part of the joint workspace unit; predicate data is read through the shared loader. |
 | Upstream of | contract-language | The semantic validator cross-references the predicates map (existence, arity, arg types, `verifiedPure === true`) — the registry provides the data, never the validation. |
-| Upstream of | (CLI) | `validate` is the single gate that verifies predicate declarations (ADR-0013). |
+| Upstream of | (CLI) | `validate` is the single gate that verifies predicate declarations (ADR-0013) and, under `--verbose`, emits the reverse-reference index for author discoverability (VERSAILLES-173). |
 
 ## Business rules
 
@@ -46,6 +48,7 @@ Uses from [glossary](../glossary.md): *predicate, verifiedPure, sourceRef, decla
 - Every entry's `source` field is resolved by `validate` under `config.sourceRoots`; an unresolvable `source` produces a `PREDICATE_SOURCE_UNRESOLVED` warning (ADR-0005, ADR-0013).
 - Predicate declarations are authored inline in `contracts.json` — no separate `predicates.json` file, no registration CLI (ADR-0013).
 - The context never parses or semantically validates contract expressions — that is contract-language, reached through the workspace-context loader.
+- Every declared predicate is discoverable: `validate --verbose` emits the reverse-reference index (`verbose.predicateReferences`) — one deterministic entry per declared predicate, unused predicates included with `clauses: []`, entries sorted by predicate name and clauses by id, `singleUse` exactly `clauses.length === 1` (ADR-0002, VERSAILLES-173).
 
 ## Open questions
 

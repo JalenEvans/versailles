@@ -17,7 +17,6 @@ export type PredicateEntry = {
 	paramTypes: string[];
 	returnType: string;
 	sourceRef: string;
-	sourceHash: string;
 	verifiedPure: boolean;
 };
 

@@ -27,6 +27,13 @@
  * - Index segments ([N]/[]) are valid only on list<T> → strip to element.
  * - A predicateCall term resolves to its registered returnType; unresolvable
  *   terms suppress downstream type checks on that term only.
+ * - UNKNOWN_PREDICATE fuzzy suggestions (pinned decision 11): when the
+ *   referenced predicate is undeclared, the detail appends at most 2 declared
+ *   keys within Levenshtein distance ≤ 2 as " — did you mean "a" or "b"?"
+ *   (two suggestions join with " or "). Ordering is distance-then-
+ *   alphabetical: closest match first, ties alphabetical. No suggestion when
+ *   there are no declared predicates at all (empty map or null file) or no
+ *   declared key is within range. Suggestions live ONLY in the detail string.
  * - warnings dedupe by (code, field); valid === errors.length === 0.
  */
 import type { VersaillesContext } from "../loader/workspace.js";
@@ -338,7 +345,7 @@ function resolvePredicate(
 			state,
 			"UNKNOWN_PREDICATE",
 			descriptor,
-			`Predicate "${node.name}" is not declared in contracts.json`,
+			`Predicate "${node.name}" is not declared in contracts.json${predicateSuggestionsSuffix(node.name, Object.keys(registry))}`,
 		);
 		return { resolved: null, descriptor };
 	}
@@ -388,6 +395,69 @@ function resolvePredicate(
 
 	const returnType = parseTypeRef(entry.returnType ?? "");
 	return { resolved: returnType, descriptor };
+}
+
+/**
+ * "Did you mean" suggestions for an undeclared predicate name (VERSAILLES-172,
+ * pinned decision 11). Returns the suffix appended to the UNKNOWN_PREDICATE
+ * detail — "" when no declared key is within Levenshtein distance ≤ 2 (which
+ * also covers an empty registry, since there is nothing to compare). The top 2
+ * candidates sort distance-then-alphabetically — closest match first, ties
+ * alphabetical, NOT declaration order — and two suggestions join as "a" or
+ * "b".
+ */
+function predicateSuggestionsSuffix(
+	name: string,
+	declaredKeys: string[],
+): string {
+	const candidates = declaredKeys
+		.map((key) => ({ key, distance: levenshtein(name, key) }))
+		.filter((candidate) => candidate.distance <= 2)
+		.sort(
+			(a, b) =>
+				a.distance - b.distance || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
+		)
+		.slice(0, 2);
+	if (candidates.length === 0) {
+		return "";
+	}
+	const joined = candidates
+		.map((candidate) => `"${candidate.key}"`)
+		.join(" or ");
+	return ` — did you mean ${joined}?`;
+}
+
+/**
+ * Classic Levenshtein edit distance (O(n*m) DP) between two strings. Predicate
+ * names are short (tens of characters), so the full DP row is negligible; the
+ * single-row form keeps the allocation constant regardless of name length.
+ */
+function levenshtein(a: string, b: string): number {
+	const m = a.length;
+	const n = b.length;
+	if (m === 0) {
+		return n;
+	}
+	if (n === 0) {
+		return m;
+	}
+	// dp[j] = distance between a[0..i) and b[0..j) for the current row i.
+	const dp: number[] = Array.from({ length: n + 1 }, (_, j) => j);
+	for (let i = 1; i <= m; i++) {
+		let previous = dp[0];
+		dp[0] = i;
+		for (let j = 1; j <= n; j++) {
+			const current = dp[j];
+			const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1;
+			dp[j] = Math.min(
+				dp[j] + 1, // deletion from a
+				dp[j - 1] + 1, // insertion into a
+				previous + substitutionCost, // substitution
+			);
+			previous = current;
+		}
+	}
+	return dp[n];
 }
 
 /**

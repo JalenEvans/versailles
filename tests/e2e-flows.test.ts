@@ -162,7 +162,6 @@ export class OrderService {
 				// Step 4: Author contracts.json — the OrderService contract WITH the
 				// inline predicates map declaring isPositive.
 				const contractsJson = {
-					version: "1.0",
 					predicates: {
 						isPositive: {
 							source: "OrderService.isPositive",
@@ -279,7 +278,8 @@ describe("VERSAILLES-156 — E2E Flow 2: TDD FLOW (greenfield)", () => {
 			const cwd = await mkdtemp(join(tmpdir(), "versailles-e2e-flow2-"));
 			try {
 				// Step 1: node bin/versailles init → exit 0.
-				// The init command seeds an empty manifests.json (`{ version: "1.0" }`)
+				// The init command seeds an empty manifests.json (`{}` — ADR-0018:
+				// no version envelope)
 				// alongside config.json and contracts.json. This is the TRUE user flow:
 				// the validator must tolerate this empty manifests.json and NOT emit
 				// UNKNOWN_FIELD errors for field references in greenfield contracts
@@ -294,7 +294,6 @@ describe("VERSAILLES-156 — E2E Flow 2: TDD FLOW (greenfield)", () => {
 
 				// Step 2: Author contracts.json — the Cart contract (from contract-first.test.ts fixtures).
 				const contractsJson = {
-					version: "1.0",
 					contracts: {
 						Cart: {
 							invariants: [],
