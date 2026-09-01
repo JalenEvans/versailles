@@ -36,6 +36,7 @@ import type {
 	PropertyDescriptor,
 	PropertyPlan,
 } from "../ir.js";
+import { oracleParamsOf } from "../oracle.js";
 import { sanitizeId } from "./shared.js";
 
 /** Tool-owned generated output directory (config default, build-spec §9.4). */
@@ -364,23 +365,6 @@ type GuardOracle = {
 	code: string;
 	oracleParams: string[];
 };
-
-/**
- * Parses the codegen'd clause predicate's parameter list from its byte-pinned
- * `(<params>) => <expr>` form. codegen.ts output never mangles the head —
- * split at the first `) => `, then the params on ", ".
- */
-function oracleParamsOf(code: string): string[] {
-	const arrow = code.indexOf(") => ");
-	if (arrow === -1) {
-		return [];
-	}
-	const head = code.slice(1, arrow);
-	if (head.trim() === "") {
-		return [];
-	}
-	return head.split(", ").map((param) => param.trim());
-}
 
 /**
  * Escapes regex metacharacters in a predicate name before it is embedded in
