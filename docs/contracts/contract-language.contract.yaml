@@ -10,9 +10,9 @@ context: contract-language
 owns:
   - "The boolean-valued expression grammar (build-spec §4.1) and its structural constraints (build-spec §4.2)"
   - "The parser: clause expr strings → the frozen AST node set (build-spec §4.3)"
-  - "The semantic validator checks (build-spec §5.1): field resolution, type compatibility, in-operand shape, predicate existence/arity/arg-types, verifiedPure gate"
+  - "The semantic validator checks (build-spec §5.1): field resolution, type compatibility, in-operand shape, predicate existence/arity/arg-types"
   - "The structured error contract: parse errors (build-spec §4.4) and validation results (build-spec §5.2)"
-  - "Predicate registry integration: predicate calls resolve only to the top-level predicates map in contracts.json with verifiedPure: true (ADR-0006)"
+  - "Predicate registry integration: predicate calls resolve only to declared entries in the top-level predicates map in contracts.json — existence, arity, and argument types are checked; no purity attestation is required (ADR-0019)"
 
 purpose: |
   contract-language is the validation kernel of Versailles. It owns the boolean-valued expression
@@ -21,8 +21,9 @@ purpose: |
   time — old(field) is valid only inside postconditions[] entries and the grammar never produces
   assignments, loops, or statements. The semantic validator then checks every parsed expression
   against the full workspace context: field and nested field resolution, type compatibility,
-  in-operand shape, and predicate calls resolving only to registered predicates with
-  verifiedPure: true. Both parser and validator return typed, structured error objects — never
+  in-operand shape, and predicate calls resolving only to declared entries in the top-level
+  predicates map — with existence, arity, and argument-type checks, and no purity attestation
+  required (ADR-0019). Both parser and validator return typed, structured error objects — never
   unstructured throws — so CI and external tooling can consume and re-inject them
   programmatically. The context is language-agnostic (ADR-0008) and never invokes an LLM
   (ADR-0010).
@@ -31,7 +32,7 @@ invariants:
   - "Only expressions that have passed parse and semantic validation are consumed downstream; nothing downstream sees an unparsed or invalid expression."
   - "The AST node set is exactly the frozen build-spec §4.3 set (or | and | not | compare | arithmetic | old | predicateCall | fieldRef | literal); it never drifts without a build-spec change."
   - "old(...) appears only inside postconditions[] entries — enforced as a parse error and re-asserted by the validator as defense-in-depth."
-  - "Every predicate call in a validated contract resolves to an entry in the top-level predicates map of contracts.json with verifiedPure === true (ADR-0006)."
+  - "Every predicate call in a validated contract resolves to a declared entry in the top-level predicates map of contracts.json — existence, arity, and argument types are checked; no purity attestation is required (ADR-0019)."
   - "Parser and validator never raise unstructured exceptions on malformed input; all failure surfaces are structured error objects."
 
 operations:
@@ -58,7 +59,8 @@ operations:
     ensures:
       - "Returns a validator result of the build-spec §5.2 shape { valid, errors: [{ contractId, code, field, detail }], warnings: [] }"
       - "Root and transitive nested field refs resolve against manifest fields and operation params, else a hard error"
-      - "A predicate call resolving to an entry in the top-level predicates map with verifiedPure missing or false is a hard error (ADR-0006)"
+      - "A predicate call resolving to an undeclared predicate, to a declared predicate with the wrong arity, or to a declared predicate whose paramTypes reject the call's argument types is a hard error (UNKNOWN_PREDICATE / arity / arg-type tiers)"
+      - "No purity attestation is required for a predicate call to validate — an impure or non-terminating predicate is surfaced by the generated test suite at run time, not by semantic validation (ADR-0019)"
       - "Inferred/low-confidence field refs emit a non-blocking warning in warnings[] and never flip valid to false (ADR-0004)"
       - "valid === true iff there are no hard errors"
     examples:
@@ -69,15 +71,15 @@ operations:
       - "predicateName is an identifier appearing in a parsed predicateCall node"
       - "registry is the top-level predicates map from contracts.json loaded as part of the workspace context"
     ensures:
-      - "Returns the registered predicate entry when registry[predicateName].verifiedPure === true"
-      - "Returns a hard validation error when the entry is missing, or verifiedPure is false, or verifiedPure is absent"
+      - "Returns the declared predicate entry when registry[predicateName] exists — no purity attestation is required (ADR-0019)"
+      - "Returns a hard validation error when the entry is missing (UNKNOWN_PREDICATE), when the call's argument count does not match the entry's declared params arity, or when the call's argument types are not compatible with the entry's declared paramTypes"
       - "For a missing entry (UNKNOWN_PREDICATE), appends at most 2 'did you mean' suggestions to the error detail when declared keys are within Levenshtein distance ≤ 2 of predicateName; ordering is distance-then-alphabetical (closest first, ties alphabetical); no suggestion when no predicates are declared or no key is within range; suggestions never add fields to the error object (VERSAILLES-172)"
     examples:
-      - input: "resolve_predicate('isAvailable', { isAvailable: { verifiedPure: true, params: [], paramTypes: [], returnType: 'boolean' } })"
-        output: "the isAvailable entry"
-      - input: "resolve_predicate('isAvailable', { isAvailable: { verifiedPure: false } })"
-        output: "hard error — the contract cannot reference an unverified predicate"
-      - input: "resolve_predicate('isAvailabl', { isAvailable: { verifiedPure: true }, isPositive: { verifiedPure: true } })"
+      - input: "resolve_predicate('isAvailable', { isAvailable: { source: 'Inventory.isAvailable', params: [], paramTypes: [], returnType: 'boolean' } })"
+        output: "the isAvailable entry — no verifiedPure field required (ADR-0019)"
+      - input: "resolve_predicate('isPositive', { isPositive: { params: ['amount'], paramTypes: ['number'], returnType: 'boolean' } }, called with 2 arguments)"
+        output: "hard error — arity mismatch: isPositive declares 1 param but the call passes 2"
+      - input: "resolve_predicate('isAvailabl', { isAvailable: { params: [], paramTypes: [], returnType: 'boolean' } })"
         output: "hard error (UNKNOWN_PREDICATE) — detail: Predicate \"isAvailabl\" is not declared in contracts.json — did you mean \"isAvailable\"?"
 
 must:
@@ -85,10 +87,10 @@ must:
   - "Enforce structural constraints at parse time: old(field) is accepted only when parsing a postconditions[] entry, and is rejected as a structured parse error when parsing preconditions[] or invariants[] entries."
   - "Reject any assignment, loop, statement, or token outside the grammar as a structured parse error that lists the expected alternatives (for example, a single '=' token is reported with expected alternatives such as '==')."
   - "Return every parse failure as a structured error of the build-spec §4.4 shape { contractId, field, position, found, expected, message }."
-  - "After a successful parse, run the semantic validations of build-spec §5.1 against the full workspace context: root and transitive nested field resolution, type compatibility, in-operand shape, predicate existence, predicate arity, predicate argument types, and predicate purity."
+  - "After a successful parse, run the semantic validations of build-spec §5.1 against the full workspace context: root and transitive nested field resolution, type compatibility, in-operand shape, predicate existence, predicate arity, and predicate argument types — with no purity attestation required (ADR-0019)."
   - "Return validation results of the build-spec §5.2 shape { valid, errors: [{ contractId, code, field, detail }], warnings: [] }."
-  - "Hard-error every predicate call that resolves to an entry in the top-level predicates map whose verifiedPure is missing or false; such a contract cannot pass validation (ADR-0006)."
   - "Hard-error every predicate call that references an undeclared predicate name with an UNKNOWN_PREDICATE error whose detail appends at most 2 'did you mean' suggestions for declared keys within Levenshtein distance ≤ 2, ordered distance-then-alphabetically (VERSAILLES-172)."
+  - "Hard-error every predicate call whose argument count does not match the declared predicate's params arity, and every predicate call whose argument types are not compatible with the declared predicate's paramTypes — predicate resolution checks existence, arity, and arg-types, never purity (ADR-0019)."
   - "Emit low-confidence or inferred-field notices as non-blocking warnings in warnings[], leaving valid true when no hard error exists (ADR-0004)."
   - "Block contracts with hard errors from passing validation and from passing CI in the lint flow (build-spec §5.2)."
 
@@ -96,7 +98,7 @@ must_not:
   - "Must not produce assignments, loops, statements, or any side-effecting construct — the grammar is boolean-valued expressions only (build-spec §4.2)."
   - "Must not accept old(...) in preconditions[] or invariants[] — the rejection is a parse-time error, never deferred to semantic validation (build-spec §4.2)."
   - "Must not resolve predicate calls at parse time — only the call-shape is checked; resolution happens in semantic validation (build-spec §4.2)."
-  - "Must not allow a contract to reference a predicate unless the top-level predicates map entry has verifiedPure === true (ADR-0006)."
+  - "Must not require a purity attestation for a contract to reference a declared predicate — predicate resolution checks existence, arity, and arg-types only (ADR-0019)."
   - "Must not add fields to the validation error object to carry fuzzy-match suggestions — 'did you mean' suggestions live only inside the UNKNOWN_PREDICATE detail string; the error shape stays { contractId, code, field, detail } (VERSAILLES-172)."
   - "Must not throw unstructured exceptions on malformed input — parser and validator always return structured error results (build-spec §4.4, §5.2)."
   - "Must not fork per target language — the grammar, parser, and validator stay language-agnostic (ADR-0008)."
@@ -114,13 +116,14 @@ limits:
   - "No test emission, test execution, or any other consumer of validated ASTs — this context only produces parse and validation results."
   - "No loading of the .versailles/ file set — workspace-context owns joint loading; this context consumes the full context."
   - "No source-side manifest derivation — manifest-extraction owns that."
-  - "No automated purity or termination analysis — verifiedPure is a manual registration-time gate (ADR-0006)."
+  - "No automated purity or termination analysis, and no purity gate on predicate references — predicate resolution checks existence, arity, and argument types; impurity/non-termination is surfaced by the generated test suite at run time (ADR-0019)."
   - "No per-language grammar variants (ADR-0008) and no LLM-assisted authoring inside the tool (ADR-0010)."
 
 asserts:
   - "assert: every node in a parse result has a type that is a member of the build-spec §4.3 node set."
   - "assert: parsing a preconditions[] or invariants[] clause containing old(...) yields a structured parse error before semantic validation."
-  - "assert: semantic_validate returns valid: false whenever any predicate call resolves to an entry with verifiedPure missing or false."
+  - "assert: semantic_validate returns valid: false whenever any predicate call resolves to an undeclared predicate, to a declared predicate with a mismatched argument count, or to a declared predicate whose paramTypes reject the call's argument types."
+  - "assert: a predicate call referencing a declared predicate with no purity attestation passes resolution — no verifiedPure field is required (ADR-0019)."
   - "assert: an undeclared predicate call yields an UNKNOWN_PREDICATE error with exactly the { contractId, code, field, detail } shape — suggestions never add fields."
   - "assert: a missing predicate name within Levenshtein distance ≤ 2 of a declared key appends a 'did you mean' suggestion to the UNKNOWN_PREDICATE detail (at most 2, distance-then-alphabetical); no suggestion when no predicates are declared or no key is within range."
   - "assert: feeding malformed input (assignment, loop, statement, stray token) to the parser never throws a raw exception; it always produces a structured error result."
@@ -131,5 +134,6 @@ asserts:
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-09-01 | general-manager | Removed the verifiedPure purity gate (ADR-0019): resolve_predicate now resolves to any declared predicate by existence, checking arity and argument types against the entry's params/paramTypes — no purity attestation required; removed all UNVERIFIED_PREDICATE / ADR-0006 hard-error-on-false language from owns/purpose/invariants/operations/must/must_not/limits/asserts; retained UNKNOWN_PREDICATE existence checks with 'did you mean' suggestions |
 | 2026-08-11 | general-manager | Initial contract from docs/specs/contract-language.md; build-spec §4–§5; ADR-0004/0006/0008/0010 |
 | 2026-08-30 | general-manager | VERSAILLES-172: UNKNOWN_PREDICATE 'did you mean' fuzzy suggestions spec'd (Levenshtein ≤ 2, at most 2, distance-then-alphabetical, detail-only) |

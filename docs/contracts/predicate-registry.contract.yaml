@@ -8,26 +8,28 @@ schema_version: 1
 context: predicate-registry
 
 owns:
-  - "The top-level predicates map in contracts.json (build-spec §3.4, ADR-0013): each entry { source, params, paramTypes, returnType, verifiedPure }"
+  - "The top-level predicates map in contracts.json (build-spec §3.4, ADR-0013): each entry { source, params, paramTypes, returnType }"
   - "Validator-time predicate declaration verification (ADR-0013): predicate name validity (IDENT grammar), sourceRef resolution under config.sourceRoots (resolve-or-warn → PREDICATE_SOURCE_UNRESOLVED warning)"
-  - "The verifiedPure gate (ADR-0006, build-spec §14 default): verifiedPure is a human-set boolean; the validator hard-errors on any contract reference to a predicate with verifiedPure missing or false"
   - "sourceRef recording: every entry's source field traces to a real function; validate resolves it on every run (ADR-0005 'nothing invented' via validate-time resolution)"
 
 purpose: |
   predicate-registry owns the declarative predicate declarations in contracts.json — the named,
-  verified-pure functions contract expressions are allowed to call (build-spec §3.4, ADR-0013).
+  pure functions contract expressions are allowed to call (build-spec §3.4, ADR-0013).
   Predicates are declared inline in a top-level predicates map; validate mechanically verifies
   every declaration (name validity, sourceRef resolution as resolve-or-warn). The registration
   CLI (register-predicate / verify-purity / remind-unverified) and the stored sourceHash are
-  removed (ADR-0013). The verifiedPure gate is preserved (ADR-0006): a human sets it as data,
-  and the validator hard-errors on any contract reference to an unverified predicate. The
+  removed (ADR-0013). The declaration itself is the attestation (ADR-0019): no verifiedPure
+  field is required, and any declared predicate is referenceable — anti-hallucination is
+  enforced by sourceRef resolution against real source, while impurity or non-termination is
+  caught at generated-test run time in the one path where it is exercised (ADR-0017). The
   registry is data for the rest of the pipeline — the joint loader (workspace-context) reads
-  it and the semantic validator (contract-language) enforces that referenced predicates exist
-  and are verified — and the tool never invokes an LLM (ADR-0010).
+  it and the semantic validator (contract-language) enforces that referenced predicates exist,
+  have the right arity, and accept the argument types — and the tool never invokes an LLM
+  (ADR-0010).
 
 invariants:
-  - "Every entry in the top-level predicates map of contracts.json conforms to the build-spec §3.4 schema: predicate name → { source: string, params: string[], paramTypes: typeRef[], returnType: 'boolean', verifiedPure: boolean }."
-  - "verifiedPure is true only when a human asserted purity through manual lint/review; no automated purity or termination analysis ever sets it (ADR-0006, build-spec §14 default)."
+  - "Every entry in the top-level predicates map of contracts.json conforms to the build-spec §3.4 schema: predicate name → { source: string, params: string[], paramTypes: typeRef[], returnType: 'boolean' } (ADR-0019)."
+  - "No purity or termination attestation field exists in the predicate declaration schema — there is no verifiedPure and no requirement that a predicate be pre-verified to be referenceable (ADR-0019)."
   - "Every predicate declaration's source field traces to a real function: validate resolves sourceRef under config.sourceRoots on every run (ADR-0005 discipline applied to predicates). An unresolvable sourceRef produces a PREDICATE_SOURCE_UNRESOLVED warning, not a hard error."
   - "Predicate declarations are authored inline in contracts.json — no separate predicates.json file, no registration CLI (ADR-0013)."
   - "The predicates map is always consumed as part of the joint workspace load; this context never re-implements loading (workspace-context owns it) and never re-implements predicate-call validation (contract-language owns it)."
@@ -55,27 +57,28 @@ operations:
       - "predicateName is an identifier appearing in a parsed predicateCall node"
       - "predicates is the top-level predicates map from contracts.json"
     ensures:
-      - "Returns the declared predicate entry when predicates[predicateName].verifiedPure === true"
-      - "Returns a hard validation error when the entry is missing, or verifiedPure is false, or verifiedPure is absent (ADR-0006)"
+      - "Returns the declared predicate entry when predicates[predicateName] exists — no purity attestation is required (ADR-0019)"
+      - "Returns a hard UNKNOWN_PREDICATE-style validation error when the entry is missing (undeclared predicate)"
+      - "Arity and argument-type resolution are not performed here — they are contract-language's resolve_predicate concern operating on the entry this operation returns"
     examples:
-      - input: "verify_predicate_reference('isAvailable', { isAvailable: { verifiedPure: true, source: 'Inventory.isAvailable', params: [], paramTypes: [], returnType: 'boolean' } })"
-        output: "the isAvailable entry"
-      - input: "verify_predicate_reference('isAvailable', { isAvailable: { verifiedPure: false, ... } })"
-        output: "hard error — the contract cannot reference an unverified predicate"
+      - input: "verify_predicate_reference('isAvailable', { isAvailable: { source: 'Inventory.isAvailable', params: [], paramTypes: [], returnType: 'boolean' } })"
+        output: "the isAvailable entry — no verifiedPure field required (ADR-0019)"
+      - input: "verify_predicate_reference('isAvailabl', { isAvailable: { ... } })"
+        output: "hard error — the contract references an undeclared predicate (UNKNOWN_PREDICATE)"
 
 must:
-  - "Maintain the top-level predicates map in contracts.json exactly per the build-spec §3.4 schema: each entry { source: string, params: string[], paramTypes: typeRef[], returnType: 'boolean', verifiedPure: boolean } (ADR-0013)."
+  - "Maintain the top-level predicates map in contracts.json exactly per the build-spec §3.4 schema: each entry { source: string, params: string[], paramTypes: typeRef[], returnType: 'boolean' } (ADR-0013, ADR-0019)."
   - "Verify every predicate declaration's name is a valid IDENT at validate time; invalid names are INVALID_PREDICATE_NAME hard errors."
   - "Resolve every predicate declaration's source field under config.sourceRoots at validate time; unresolvable sources produce PREDICATE_SOURCE_UNRESOLVED warnings (resolve-or-warn, ADR-0005, ADR-0013)."
-  - "Set verifiedPure only through a human's manual lint/review: the author asserts purity as data in contracts.json (build-spec §14 default, ADR-0006); the tool itself never performs purity or termination analysis."
+  - "Treat every declared predicate as referenceable without any purity attestation — no verifiedPure gate is applied (ADR-0019)."
   - "Return structured results from every registry operation and never throw unstructured exceptions (ADR-0010)."
   - "Load the predicates map through the workspace-context shared loader whenever reading; never re-implement loading (build-spec §6)."
   - "Emit predicateReferences under validate --verbose deterministically (ADR-0002): exactly one entry per declared predicate — declared-but-unused ones included with clauses: [] — entries sorted by predicate name, clauses sorted by clause id, and singleUse exactly clauses.length === 1 (VERSAILLES-173)."
   - "Keep the reverse-reference index additive and detail-only: the non-verbose output shape and every error/warning shape are unchanged; predicateReferences appears only under --verbose (VERSAILLES-173)."
 
 must_not:
-  - "Must not perform automated purity or termination analysis to set verifiedPure — the flag is a human-set data field (ADR-0006, build-spec §14 default)."
-  - "Must not default verifiedPure to true, or set it to true without a human's manual lint/review."
+  - "Must not perform automated purity or termination analysis — no such analysis is required or performed, because no purity attestation field exists (ADR-0019)."
+  - "Must not reject a predicate reference on purity grounds — there is no verifiedPure field to be missing or false (ADR-0019)."
   - "Must not maintain a stored sourceHash for predicates (ADR-0013)."
   - "Must not provide a predicate registration CLI (register-predicate / verify-purity / remind-unverified) — predicate registration is part of authoring (ADR-0013)."
   - "Must not maintain a separate predicates.json file — predicates are declared inline in contracts.json (ADR-0013)."
@@ -91,19 +94,18 @@ can:
 
 limits:
   - "No parsing, AST construction, or semantic validation of predicate_calls in contract expressions — contract-language owns those; this context only stores and maintains the predicate data."
-  - "No hard cross-referencing validation (a referenced predicate must exist with verifiedPure === true) — that is contract-language's semantic validator check, operating on the predicate data this context maintains."
+  - "No hard cross-referencing validation (a referenced predicate must exist, have the right arity, and accept the argument types) — that is contract-language's semantic validator check, operating on the predicate data this context maintains."
   - "No joint loading of the .versailles/ file set — workspace-context owns the loader; predicate data is read through it."
   - "No manifest derivation from source — manifest-extraction owns that; predicate sourceRef resolution reuses static-analysis seams without becoming manifest derivation."
-  - "No automated purity or termination analysis (ADR-0006, build-spec §14 default)."
+  - "No automated purity or termination analysis, and no purity gate on references — impurity/non-termination is surfaced by the generated test suite at run time, not by this registry (ADR-0019)."
   - "No staleness-check orchestration or exit-code semantics — workspace-context's check_staleness computes hash comparisons for manifests and contract operations; predicate sourceHash is dropped (ADR-0013)."
   - "No LLM client, prompt templates, or in-tool LLM invocation (ADR-0010)."
 
 asserts:
-  - "assert: every entry in the top-level predicates map of contracts.json has exactly the build-spec §3.4 fields with the declared types (source: string, params: string[], paramTypes: typeRef[], returnType: 'boolean', verifiedPure: boolean)."
+  - "assert: every entry in the top-level predicates map of contracts.json has exactly the build-spec §3.4 fields with the declared types (source: string, params: string[], paramTypes: typeRef[], returnType: 'boolean') — and no verifiedPure field (ADR-0019)."
   - "assert: validate_predicate_declarations emits INVALID_PREDICATE_NAME for every predicate name that is not a valid IDENT."
   - "assert: validate_predicate_declarations emits PREDICATE_SOURCE_UNRESOLVED (warning, not hard error) for every predicate whose source field does not resolve under config.sourceRoots."
-  - "assert: verifiedPure is never auto-set to true by any code path; it is set only by a human's manual assertion in contracts.json."
-  - "assert: verify_predicate_reference returns a hard error whenever a contract references a predicate with verifiedPure missing or false (ADR-0006)."
+  - "assert: verify_predicate_reference returns the declared entry for any declared predicate without requiring a purity attestation, and returns a hard UNKNOWN_PREDICATE error only when the entry is missing (ADR-0019)."
   - "assert: no code path in predicate-registry parses contract expressions or invokes an LLM."
   - "assert: no stored sourceHash is maintained for any predicate (ADR-0013)."
   - "assert: when predicateReferences is present under validate --verbose, it includes every declared predicate exactly once (unused predicates with clauses: [], singleUse: false), entries sorted by predicate name, clauses sorted by clause id, and singleUse exactly clauses.length === 1."
@@ -114,6 +116,7 @@ asserts:
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-09-01 | general-manager | Dropped the verifiedPure field and the ADR-0006 purity gate (ADR-0019): predicate declaration schema is now { source, params, paramTypes, returnType }; removed verifiedPure from schema/owns/purpose/invariants/must/must_not/limits/asserts and the verify_predicate_reference operation; any declared predicate is now referenceable, with anti-hallucination enforced by sourceRef resolution and impurity/non-termination surfaced by the generated suite at run time; existence-based UNKNOWN_PREDICATE hard error retained |
 | 2026-08-14 | general-manager | Initial contract from docs/specs/predicate-registry.md; build-spec §3.4, §13 milestone 8, §14; ADR-0003/0006/0010 |
 | 2026-08-22 | power-forward | Rewritten for declarative predicates (ADR-0013): predicates declared inline in contracts.json; registration CLI removed; sourceHash dropped; validate verifies declarations (resolve-or-warn, name validity, verifiedPure gate preserved) |
 | 2026-08-30 | general-manager | Reverse-reference discoverability index (VERSAILLES-168 Phase 5, VERSAILLES-173): can — validate --verbose may emit verbose.predicateReferences; must — deterministic (ADR-0002), one entry per declared predicate (unused included with clauses: []), entries and clauses sorted, singleUse = clauses.length === 1, additive/detail-only with no error-shape change; asserts added |
