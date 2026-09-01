@@ -685,7 +685,9 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165, 
 		].join("\n");
 		expect(order?.content).toContain(block);
 		// The rejects clause oracle is never embedded as a dead const.
-		expect(order?.content).not.toContain("(a) => a >= 10");
+		// ADR-0021: a dead const would carry the typed op-param head
+		// `(a: number) => a >= 10` — the negative pin checks the typed form.
+		expect(order?.content).not.toContain("(a: number) => a >= 10");
 		// The rejects block has no filter surface.
 		expect(order?.content).not.toContain(
 			"fc.record({ a: fc.integer({ min: 0, max: 9 })",

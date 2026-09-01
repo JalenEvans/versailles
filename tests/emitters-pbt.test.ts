@@ -990,9 +990,11 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		expect(account).toBeDefined();
 		// The rejects descriptor's clause code `(amount) => amount >= 10` is NOT
 		// embedded anywhere (the satisfies block embeds the compound variant
-		// `... && amount <= 100` — a different string).
+		// `... && amount <= 100` — a different string). ADR-0021: any dead const
+		// would carry the typed op-param head `(amount: number) => ...`, so the
+		// negative pin checks the typed form.
 		expect(account?.content).not.toContain(
-			"const AccountService_withdraw_pre0 = (amount) => amount >= 10;",
+			"const AccountService_withdraw_pre0 = (amount: number) => amount >= 10;",
 		);
 		// The rejects block's only assertion is the idiom.
 		expect(account?.content).toContain(
