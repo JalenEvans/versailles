@@ -110,6 +110,22 @@ export type ManifestsFile = {
 				string,
 				{ static: boolean; params: string[]; returnType?: string }
 			>;
+			/**
+			 * Per-field TypeScript access modifier (ADR-0021):
+			 * field name → "public" | "protected" | "private". Additive
+			 * optional sibling of `fields`; absent for legacy entries. The
+			 * loader surfaces the raw store key untouched — permissive
+			 * defaulting (absent → "public") is the CONSUMER's (emitter's)
+			 * job, not the loader's.
+			 */
+			fieldAccess?: Record<string, "public" | "protected" | "private">;
+			/**
+			 * Per-field readonly flag (ADR-0021): field name → boolean.
+			 * Additive optional sibling of `fields`; absent for legacy
+			 * entries. Surfaced untouched — defaulting (absent → false) is
+			 * the consumer's job, not the loader's.
+			 */
+			fieldReadonly?: Record<string, boolean>;
 		}
 	>;
 };
@@ -492,6 +508,11 @@ function validateManifestsShape(
 			);
 			ok = false;
 		}
+		// ADR-0021: fieldAccess/fieldReadonly are additive optional siblings
+		// of `fields` and are NOT shape-checked here — the guard only requires
+		// `fields`, so a covered entry carrying the new keys passes through
+		// untouched, and a legacy entry without them stays valid (no
+		// INVALID_SHAPE, no invented keys). The loader surfaces them verbatim.
 	}
 	return ok;
 }

@@ -15,6 +15,12 @@
           ],
           "returnType": "void"
         }
+      },
+      "fieldAccess": {
+        "balance": "private"
+      },
+      "fieldReadonly": {
+        "balance": false
       }
     }
   }

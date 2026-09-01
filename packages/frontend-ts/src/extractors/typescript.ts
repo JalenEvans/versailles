@@ -272,10 +272,42 @@ function sourcePathOf(
 }
 
 /**
+ * Per-field TS access modifier from the member's modifier list (ADR-0021).
+ * The permissive policy (ADR-0004): an unresolvable or absent access modifier
+ * defaults to "public" — never omitted, never a hard error.
+ */
+function accessOf(member: FieldMember): "public" | "protected" | "private" {
+	const modifiers = ts.canHaveModifiers(member)
+		? ts.getModifiers(member)
+		: undefined;
+	if (modifiers?.some((m) => m.kind === ts.SyntaxKind.PrivateKeyword)) {
+		return "private";
+	}
+	if (modifiers?.some((m) => m.kind === ts.SyntaxKind.ProtectedKeyword)) {
+		return "protected";
+	}
+	return "public";
+}
+
+/**
+ * Per-field readonly flag from the member's modifier list (ADR-0021). Under
+ * the permissive policy an absent readonly modifier defaults to false.
+ */
+function readonlyOf(member: FieldMember): boolean {
+	const modifiers = ts.canHaveModifiers(member)
+		? ts.getModifiers(member)
+		: undefined;
+	return (
+		modifiers?.some((m) => m.kind === ts.SyntaxKind.ReadonlyKeyword) ?? false
+	);
+}
+
+/**
  * Resolves a field member to a FieldEntry: declared types resolve from the
  * declared type node (so optionality comes from the question token, not an
  * implicit | undefined); inferred-only fields resolve from the initializer,
  * are flagged low-confidence, and emit a non-blocking warning (ADR-0004).
+ * Per-field access/readonly come from the TS modifiers (ADR-0021).
  */
 function resolveField(
 	checker: ts.TypeChecker,
@@ -308,7 +340,16 @@ function resolveField(
 
 	if (optional) typeRef = `optional<${typeRef}>`;
 
-	return { name, typeRef, confidence };
+	return {
+		name,
+		typeRef,
+		confidence,
+		// ADR-0021: per-field access/readonly from the TS modifiers. Under the
+		// permissive policy (ADR-0004) an unresolvable modifier defaults to
+		// "public" / not readonly — never omitted.
+		access: accessOf(member),
+		readonly: readonlyOf(member),
+	};
 }
 
 /**

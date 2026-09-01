@@ -8,11 +8,25 @@
 /** Per-field / per-entry confidence. Low = the type could only be inferred. */
 export type Confidence = "high" | "low";
 
+/** Per-field TypeScript access modifier (ADR-0021). Absent → default "public". */
+export type FieldAccess = "public" | "protected" | "private";
+
 /** A single manifest field: name, typeRef-grammar type, extraction confidence. */
 export type FieldEntry = {
 	name: string;
 	typeRef: string;
 	confidence: "high" | "low";
+	/**
+	 * Per-field TS access modifier (public/protected/private). Under the
+	 * permissive policy (ADR-0004, ADR-0021) an unresolvable modifier defaults
+	 * to "public" — never omitted. Drives emitter reachability decisions.
+	 */
+	access: FieldAccess;
+	/**
+	 * Per-field readonly flag (ADR-0021). Under the permissive policy an
+	 * unresolvable modifier defaults to false — never omitted.
+	 */
+	readonly: boolean;
 };
 
 /**
