@@ -1539,3 +1539,89 @@ describe("loadWorkspace — surfaces sourcePath on manifests store entries (VERS
 		expect(legacy.sourcePath).toBeUndefined();
 	});
 });
+
+/**
+ * ADR-0021 (VERSAILLES-179) manifest access/readonly — the loader side.
+ * The additive store format keeps `fields: Record<string, string>` unchanged
+ * and adds two optional sibling keys per entry: `fieldAccess: Record<string,
+ * "public"|"protected"|"private">` and `fieldReadonly: Record<string,
+ * boolean>`. The loader must surface these keys on the loaded ManifestsFile
+ * entry when present (pass-through, exactly like sourcePath/methods), and —
+ * per the permissive legacy default (ADR-0004/0018, manifest-extraction
+ * contract) — an entry WITHOUT them (a preserved legacy entry) must load
+ * normally with no INVALID_SHAPE error and no invented keys. Defaulting to
+ * access "public" / not readonly is the *consumer's* (emitter's) job; the
+ * loader only surfaces the raw store keys.
+ *
+ * Note: the shape guard only requires `fields` on a manifest entry and does
+ * not reject unknown keys, so the loader already tolerates fieldAccess/
+ * fieldReadonly (additive). The RED signal for ADR-0021 lives in the
+ * extractor tests — these pin the loader-side surface + legacy tolerance.
+ */
+describe("loadWorkspace — surfaces fieldAccess/fieldReadonly on manifests store entries (ADR-0021)", () => {
+	it("surfaces fieldAccess and fieldReadonly on a manifest store entry exactly as stored", async () => {
+		const ws = await seedWorkspace("ar1-surfaced");
+		await writeWorkspaceFile(ws, "manifests.json", {
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order",
+					fields: {
+						balance: "number",
+						name: "string",
+						status: "string",
+					},
+					fieldAccess: {
+						balance: "private",
+						name: "public",
+						status: "public",
+					},
+					fieldReadonly: {
+						balance: false,
+						name: false,
+						status: true,
+					},
+				},
+			},
+		});
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.isValid).toBe(true);
+		expect(context.validationErrors).toEqual([]);
+		expect(context.manifests?.manifests.OrderService).toMatchObject({
+			sourceHash: "man-order",
+			fields: { balance: "number", name: "string", status: "string" },
+			fieldAccess: { balance: "private", name: "public", status: "public" },
+			fieldReadonly: { balance: false, name: false, status: true },
+		});
+	});
+
+	it("loads a legacy manifest entry WITHOUT fieldAccess/fieldReadonly permissively — no INVALID_SHAPE, no invented keys (ADR-0004/0018)", async () => {
+		const ws = await seedWorkspace("ar2-legacy-no-access-readonly");
+		await writeWorkspaceFile(ws, "manifests.json", {
+			manifests: {
+				Legacy: {
+					sourceHash: "legacy-hash",
+					fields: { note: "string" },
+				},
+			},
+		});
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.isValid).toBe(true);
+		expect(context.validationErrors).toEqual([]);
+		const legacy = context.manifests?.manifests.Legacy as Record<
+			string,
+			unknown
+		>;
+		expect(legacy).toEqual({
+			sourceHash: "legacy-hash",
+			fields: { note: "string" },
+		});
+		// The loader surfaces the raw store keys; absent keys stay absent —
+		// the permissive default (public / not readonly) is the consumer's job.
+		expect(legacy.fieldAccess).toBeUndefined();
+		expect(legacy.fieldReadonly).toBeUndefined();
+	});
+});

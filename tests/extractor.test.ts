@@ -244,11 +244,16 @@ describe("extractManifests — basic typeRef resolution (build-spec §3.3)", () 
 			name: "balance",
 			typeRef: "number",
 			confidence: "high",
+			// ADR-0021: an unmodified class field defaults to public / not readonly.
+			access: "public",
+			readonly: false,
 		});
 		expect(fieldOf(account, "owner")).toEqual({
 			name: "owner",
 			typeRef: "string",
 			confidence: "high",
+			access: "public",
+			readonly: false,
 		});
 	});
 
@@ -262,6 +267,8 @@ describe("extractManifests — basic typeRef resolution (build-spec §3.3)", () 
 			name: "tags",
 			typeRef: "list<string>",
 			confidence: "high",
+			access: "public",
+			readonly: false,
 		});
 	});
 
@@ -277,11 +284,15 @@ describe("extractManifests — basic typeRef resolution (build-spec §3.3)", () 
 			name: "id",
 			typeRef: "number",
 			confidence: "high",
+			access: "public",
+			readonly: false,
 		});
 		expect(fieldOf(customer, "status")).toEqual({
 			name: "status",
 			typeRef: "enum<ACTIVE,FROZEN>",
 			confidence: "high",
+			access: "public",
+			readonly: false,
 		});
 	});
 
@@ -299,11 +310,15 @@ describe("extractManifests — basic typeRef resolution (build-spec §3.3)", () 
 			name: "id",
 			typeRef: "number",
 			confidence: "high",
+			access: "public",
+			readonly: false,
 		});
 		expect(fieldOf(order, "items")).toEqual({
 			name: "items",
 			typeRef: "list<OrderItem>",
 			confidence: "high",
+			access: "public",
+			readonly: false,
 		});
 
 		const orderItem = result.manifests.OrderItem;
@@ -312,11 +327,15 @@ describe("extractManifests — basic typeRef resolution (build-spec §3.3)", () 
 			name: "sku",
 			typeRef: "string",
 			confidence: "high",
+			access: "public",
+			readonly: false,
 		});
 		expect(fieldOf(orderItem, "qty")).toEqual({
 			name: "qty",
 			typeRef: "number",
 			confidence: "high",
+			access: "public",
+			readonly: false,
 		});
 	});
 
@@ -332,11 +351,15 @@ describe("extractManifests — basic typeRef resolution (build-spec §3.3)", () 
 			name: "name",
 			typeRef: "string",
 			confidence: "high",
+			access: "public",
+			readonly: false,
 		});
 		expect(fieldOf(member, "nickname")).toEqual({
 			name: "nickname",
 			typeRef: "optional<string>",
 			confidence: "high",
+			access: "public",
+			readonly: false,
 		});
 	});
 });
@@ -344,8 +367,8 @@ describe("extractManifests — basic typeRef resolution (build-spec §3.3)", () 
 // ── Describe 2: computeSourceHash structural hash (build-spec §7) ─────────
 
 const HASH_FIELDS: FieldEntry[] = [
-	{ name: "balance", typeRef: "number", confidence: "high" },
-	{ name: "owner", typeRef: "string", confidence: "high" },
+	{ name: "balance", typeRef: "number", confidence: "high", access: "public", readonly: false },
+	{ name: "owner", typeRef: "string", confidence: "high", access: "public", readonly: false },
 ];
 
 describe("computeSourceHash — structural hash over sorted field name+type pairs (build-spec §7)", () => {
@@ -376,7 +399,7 @@ describe("computeSourceHash — structural hash over sorted field name+type pair
 	it("changes when a field is added", () => {
 		const extended = [
 			...HASH_FIELDS,
-			{ name: "tags", typeRef: "list<string>", confidence: "high" },
+			{ name: "tags", typeRef: "list<string>", confidence: "high", access: "public", readonly: false },
 		];
 
 		expect(computeSourceHash(HASH_FIELDS)).not.toBe(
@@ -478,11 +501,17 @@ describe("extractManifests — permissive typing, inferred fields warn but never
 			name: "name",
 			typeRef: "string",
 			confidence: "high",
+			access: "public",
+			readonly: false,
 		});
 		const balance = fieldOf(profile, "balance");
 		expect(balance).toBeDefined();
 		expect(balance?.typeRef).toBe("number");
 		expect(balance?.confidence).toBe("low");
+		// ADR-0021: an inferred (untyped initializer) field still records access
+		// public / readonly false — the permissive default, never omitted.
+		expect(balance?.access).toBe("public");
+		expect(balance?.readonly).toBe(false);
 		expect(profile.confidence).toBe("low");
 
 		// A non-blocking warning surfaces the uncertainty (ADR-0004).
@@ -502,12 +531,28 @@ describe("extractManifests — permissive typing, inferred fields warn but never
 const EXISTING_MAP: ManifestMap = {
 	Covered: manifestEntry(
 		"Covered",
-		[{ name: "total", typeRef: "number", confidence: "high" }],
+		[
+			{
+				name: "total",
+				typeRef: "number",
+				confidence: "high",
+				access: "public",
+				readonly: false,
+			},
+		],
 		"old-cover-hash",
 	),
 	Uncovered: manifestEntry(
 		"Uncovered",
-		[{ name: "legacy", typeRef: "string", confidence: "high" }],
+		[
+			{
+				name: "legacy",
+				typeRef: "string",
+				confidence: "high",
+				access: "public",
+				readonly: false,
+			},
+		],
 		"uncovered-hash",
 	),
 };
@@ -516,8 +561,20 @@ const EXTRACTED_MAP: ManifestMap = {
 	Covered: manifestEntry(
 		"Covered",
 		[
-			{ name: "total", typeRef: "number", confidence: "high" },
-			{ name: "items", typeRef: "list<OrderItem>", confidence: "high" },
+			{
+				name: "total",
+				typeRef: "number",
+				confidence: "high",
+				access: "public",
+				readonly: false,
+			},
+			{
+				name: "items",
+				typeRef: "list<OrderItem>",
+				confidence: "high",
+				access: "public",
+				readonly: false,
+			},
 		],
 		"new-cover-hash",
 	),
@@ -765,6 +822,114 @@ export interface OrderService {
 	applyDiscount(pct: number): number;
 }
 `;
+
+// ── ADR-0021 access/readonly fixtures ──────────────────────────────────────
+// Every covered field records its TS access modifier (public | protected |
+// private) and readonly flag so the emitter can decide reachability. The
+// canonical example from ADR-0021 / the committed example: `private balance`
+// must record access "private", readonly false.
+const ORDER_SERVICE_FIELDS_SOURCE = `
+export class OrderService {
+	private balance: number;
+	public name: string;
+	owner: string;
+	readonly status: string;
+	protected x: number;
+	private readonly y: number;
+}
+`;
+
+describe("extractManifests — per-field access and readonly capture (ADR-0021)", () => {
+	it("records a private field as access: 'private', readonly: false", async () => {
+		const dir = await fixtureDir("ar1-private");
+		await writeFixture(dir, "order-service.ts", ORDER_SERVICE_FIELDS_SOURCE);
+
+		const result = extractManifests([dir]);
+
+		expect(fieldOf(result.manifests.OrderService, "balance")).toEqual({
+			name: "balance",
+			typeRef: "number",
+			confidence: "high",
+			access: "private",
+			readonly: false,
+		});
+	});
+
+	it("records an explicit public field as access: 'public'", async () => {
+		const dir = await fixtureDir("ar2-public-explicit");
+		await writeFixture(dir, "order-service.ts", ORDER_SERVICE_FIELDS_SOURCE);
+
+		const result = extractManifests([dir]);
+
+		expect(fieldOf(result.manifests.OrderService, "name")).toEqual({
+			name: "name",
+			typeRef: "string",
+			confidence: "high",
+			access: "public",
+			readonly: false,
+		});
+	});
+
+	it("defaults an unmodified field to access: 'public'", async () => {
+		const dir = await fixtureDir("ar3-public-default");
+		await writeFixture(dir, "order-service.ts", ORDER_SERVICE_FIELDS_SOURCE);
+
+		const result = extractManifests([dir]);
+
+		expect(fieldOf(result.manifests.OrderService, "owner")).toEqual({
+			name: "owner",
+			typeRef: "string",
+			confidence: "high",
+			access: "public",
+			readonly: false,
+		});
+	});
+
+	it("records a readonly field as readonly: true", async () => {
+		const dir = await fixtureDir("ar4-readonly");
+		await writeFixture(dir, "order-service.ts", ORDER_SERVICE_FIELDS_SOURCE);
+
+		const result = extractManifests([dir]);
+
+		expect(fieldOf(result.manifests.OrderService, "status")).toEqual({
+			name: "status",
+			typeRef: "string",
+			confidence: "high",
+			access: "public",
+			readonly: true,
+		});
+	});
+
+	it("records a protected field as access: 'protected'", async () => {
+		const dir = await fixtureDir("ar5-protected");
+		await writeFixture(dir, "order-service.ts", ORDER_SERVICE_FIELDS_SOURCE);
+
+		const result = extractManifests([dir]);
+
+		expect(fieldOf(result.manifests.OrderService, "x")).toEqual({
+			name: "x",
+			typeRef: "number",
+			confidence: "high",
+			access: "protected",
+			readonly: false,
+		});
+	});
+
+	it("records a private readonly field as access: 'private', readonly: true", async () => {
+		const dir = await fixtureDir("ar6-private-readonly");
+		await writeFixture(dir, "order-service.ts", ORDER_SERVICE_FIELDS_SOURCE);
+
+		const result = extractManifests([dir]);
+
+		expect(fieldOf(result.manifests.OrderService, "y")).toEqual({
+			name: "y",
+			typeRef: "number",
+			confidence: "high",
+			access: "private",
+			readonly: true,
+		});
+	});
+});
 
 describe("extractManifests — method metadata recording (VERSAILLES-20 F1, build-spec §7)", () => {
 	it("records instance/static flags, ordered param names, and returnType for every class method", async () => {

@@ -1658,6 +1658,58 @@ describe("runCli extract-manifests — sourcePath persists through the store (VE
 	});
 });
 
+// ── ADR-0021 (VERSAILLES-179): the extract handler persists per-field access
+// and readonly into the store ───────────────────────────────────────────────
+// The additive store format keeps `fields: Record<string, string>` unchanged
+// and adds two optional sibling keys on COVERED entries: `fieldAccess:
+// Record<string, "public"|"protected"|"private">` and `fieldReadonly:
+// Record<string, boolean>`. The extract handler must write these for covered
+// entries so the emitter can decide field reachability (ADR-0021). Red today:
+// extract.ts only writes { sourceHash, fields, sourcePath?, methods? }, so the
+// on-disk entry lacks fieldAccess/fieldReadonly.
+
+const ACCESS_ORDER_SOURCE = `export class OrderService {
+	private balance: number;
+	public name: string;
+	readonly status: string;
+}
+`;
+
+describe("runCli extract-manifests — persists fieldAccess/fieldReadonly on covered entries (ADR-0021)", () => {
+	it("writes fieldAccess and fieldReadonly on a covered entry with non-public/readonly fields (Red today: the store omits them)", async () => {
+		const cwd = await freshWorkspace("x-access-readonly");
+		await writeSource(cwd, "OrderService.ts", ACCESS_ORDER_SOURCE);
+
+		const result = await runCli(["extract-manifests"], { cwd });
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+
+		const stored = JSON.parse(
+			await readFile(join(cwd, ".versailles", "manifests.json"), "utf8"),
+		) as {
+			manifests: Record<string, unknown>;
+		};
+		const entry = stored.manifests.OrderService as Record<string, unknown>;
+		// `fields` stays the additive, name → typeRef shape (unchanged).
+		expect(entry.fields).toEqual({
+			balance: "number",
+			name: "string",
+			status: "string",
+		});
+		// ADR-0021: covered entries carry per-field access/readonly.
+		expect(entry.fieldAccess).toEqual({
+			balance: "private",
+			name: "public",
+			status: "public",
+		});
+		expect(entry.fieldReadonly).toEqual({
+			balance: false,
+			name: false,
+			status: true,
+		});
+	});
+});
+
 // ── W3 (Center review finding): zero-method components — methods: {} must
 // survive the store, and generate must warn instead of emitting dead calls ──
 // workspace-context.contract.yaml + manifest-extraction.contract.yaml
