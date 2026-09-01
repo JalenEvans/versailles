@@ -33,7 +33,7 @@ How the [bounded contexts](../domains/index.md) interact. The vocabulary is the 
 | contract-language | Validation gate; structured error producer | Invalid contracts never reach generation |
 | manifest-extraction | Grounding edge; source → `manifests.json` | Manifests are derived by static analysis, never hallucinated |
 | deterministic-generation | The compiler; contracts → tests | Generation is a pure function; `generated/` is tool-owned |
-| predicate-registry | Declarative predicate data + validate-time verification | Declarations are verified by `validate`; purity is a human gate |
+| predicate-registry | Declarative predicate data + validate-time verification | Declarations are verified by `validate` (name validity, `sourceRef` resolution); no purity gate — the declaration is the attestation (ADR-0019) |
 
 The shared kernel pattern is deliberate: **workspace-context is upstream of every other context** (each reads the joint context). manifest-extraction writes `manifests.json` into the kernel; deterministic-generation writes `generated/` into it.
 

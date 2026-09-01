@@ -15,6 +15,8 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 
 Seeded property-based test (PBT) emission is an additive, opt-in capability (ADR-0017): when `config.propertyBased.enabled` is true, the generator additionally emits property blocks (vitest/fast-check first) whose per-param arbitraries derive from typeRefs and numeric constraint bounds, whose contract clauses are codegen'd into the test as the oracle, and whose runs are pinned by a seed derived deterministically from the context (clause IDs + grammar version) — so generation stays a pure function and regeneration stays byte-identical even though the emitted test explores many inputs at run time (ADR-0002 determinism re-scoped to generation-time only, ADR-0017).
 
+Emission is **total** (ADR-0021): for every valid workspace, the emitted suite type-checks under the documented baseline strict tsconfig — the example ships `strict: true` + `allowImportingTsExtensions` and its CI gate runs `tsc --noEmit` over the generated output — or the emitter surfaces a non-silent `EMISSION_UNRENDERABLE` warning (same tier as `UNPLANNABLE_OPERATION` / `PROPERTY_UNPLANNABLE`); silently type-broken output never ships. Soundness comes from a complete input model: the manifest carries per-field access (`fieldAccess`: public/protected/private) and `fieldReadonly`, PBT oracle lambdas are emitted with explicit param types from contract/manifest types (never implicit `any`), and non-public fields are reached through the deliberate, documented `(instance as any).<field>` cast decided from manifest access data — public fields are never cast. The planner is split into responsibility-bounded modules (ADR-0020) — `planner` (thin orchestrator), `concrete-cases`, `input-synthesis`, `clause-analysis`, `evaluator`, `property-planning`, and the shared `oracle` — so these emission decisions land in named, reviewable seams.
+
 ## Scope
 
 **In scope:**
@@ -110,6 +112,24 @@ Seeded property-based test (PBT) emission is an additive, opt-in capability (ADR
 - **Given** a static void-returning operation (e.g. `OrderService.reset()` with `static: true`, `returnType: "void"`) whose accept case carries assertions (e.g. asserting `subtotal`)
 - **When** the emitter renders the case
 - **Then** the case renders the bare static call — `OrderService.reset(...);` — with **no** `const instance = new OrderService();` binding and **no** `expect(instance.<field>)` assertion, because the static call never touches a constructed instance; asserting on one would be misleading (false red or false green) (build-spec §9.4; VERSAILLES-26 follow-up)
+
+### Emitted output type-checks or the emitter refuses loudly (totality of emission)
+
+- **Given** a valid workspace and the documented baseline strict tsconfig (the example ships `strict: true` + `allowImportingTsExtensions`, and its CI gate runs `tsc --noEmit` over the generated output)
+- **When** the generator emits a test suite
+- **Then** the emitted output type-checks under that baseline tsconfig, **or** the emitter surfaces a non-silent `EMISSION_UNRENDERABLE` warning (same tier as `UNPLANNABLE_OPERATION` / `PROPERTY_UNPLANNABLE` — `CliResult.warnings`, exit 0) — silently type-broken output never ships (ADR-0021)
+
+### PBT oracle lambdas carry explicit param types
+
+- **Given** a property block whose oracle lambdas are codegen'd from contract clauses (e.g. `sku != ""`, `isPositive(price)`, an invariant `balance >= 0`)
+- **When** the emitter renders the block
+- **Then** every oracle lambda param carries an explicit type annotation derived from the contract param type or manifest field typeRef — `(sku: string) => sku !== ""`, `(price: number) => isPositive(price)`, `(balance: number) => balance >= 0` — never an implicit `any` (ADR-0021)
+
+### Non-public fields are reached through a deliberate cast; public fields are never cast
+
+- **Given** a manifest entry carrying per-field access (`fieldAccess`: public/protected/private) and `fieldReadonly`
+- **When** the emitter renders instance-field reads/writes in a generated test
+- **Then** non-public (protected/private) field access renders as the deliberate, documented `(instance as any).<field>` cast — the standard white-box testing idiom, decided from the manifest access data — while public fields render as plain `instance.<field>` and are never cast (ADR-0021)
 
 ### Planned operations missing from source warn, never emit dead calls
 
@@ -212,6 +232,9 @@ Seeded property-based test (PBT) emission is an additive, opt-in capability (ADR
 - The generator `must_not` emit the legacy static options-object call (`<Component>.<op>({ ...inputs })`) for a planned operation with no matching method metadata and no resolvable source method — it must surface a non-silent `UNPLANNABLE_OPERATION` warning instead. The guard fires whenever the component's entry carries a `methods` key — empty or not — missing the planned op; only preserved legacy entries lacking the `methods` key entirely may keep the legacy default (build-spec §9.1; VERSAILLES-25, VERSAILLES-25 follow-up).
 - The generator `must_not` bind a result for a void-returning accept/invariant case and assert `result.<field>` — assertions target the component instance (`const instance = new <Component>(); instance.<field> = <captured>; instance.<op>(...); expect(instance.<field>)...`), never the void return value; and it `must_not` assert `instance.<field>` on a static void operation's accept case — the static call never touches a constructed instance, so the case renders the bare call without assertions (build-spec §9.4; VERSAILLES-26, VERSAILLES-26 follow-up).
 - The generator `must_not` emit an import specifier that fails to resolve to the real source file from the generated file's directory — resolvability is required, not just a matching extension or suffix (build-spec §9.4; VERSAILLES-24).
+- The generator `must_not` emit silently type-broken output — every emitted suite either type-checks under the documented baseline strict tsconfig (incl. `allowImportingTsExtensions`) or surfaces a non-silent `EMISSION_UNRENDERABLE` warning; a silent type error never ships (ADR-0021).
+- The generator `must_not` emit PBT oracle lambdas with implicit-`any` params — every oracle lambda param carries an explicit type derived from the contract/manifest types (ADR-0021).
+- The generator `must_not` cast public-field instance access — `(instance as any).<field>` is reserved for non-public (protected/private) fields, decided from the manifest `fieldAccess`/`fieldReadonly` data (ADR-0021).
 
 ## Non-Goals
 
@@ -227,6 +250,7 @@ Seeded property-based test (PBT) emission is an additive, opt-in capability (ADR
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-09-01 | general-manager | ADR-0021 emission soundness + ADR-0020 planner split reconciled (VERSAILLES-182): totality of emission — generated output type-checks under the documented baseline strict tsconfig (`strict: true` + `allowImportingTsExtensions`) or a non-silent `EMISSION_UNRENDERABLE` warning surfaces, never silently type-broken output; PBT oracle lambdas carry explicit param types from contract/manifest types (`(sku: string) => ...`), never implicit `any`; non-public fields are reached via the deliberate, documented `(instance as any).<field>` cast decided from manifest `fieldAccess`/`fieldReadonly` — public fields never cast; planner split into responsibility-bounded modules (`planner`, `concrete-cases`, `input-synthesis`, `clause-analysis`, `evaluator`, `property-planning`, `oracle`) |
 | 2026-08-29 | general-manager | Mirrored the FIELD-BOUND contract delta (VERSAILLES-165 final implementation, Center B1/B2 + W1 + Fix-1/Fix-2): new FIELD-BOUND scenario — a bothSideFieldRef equality with a manifest-FIELD operand (`status == newStatus`) is planned, never unplannable, rendering op-params only with the field mapped to `instance.<field>`; mirror scenario example corrected to param-param (`fromBalance == toBalance`); `PROPERTY_UNPLANNABLE` scenarios extended with field-operand couplings, inverted derived bounds, zero-param field-field equalities, and the field-referencing sibling-guard rule |
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §9, §2; ADR-0002/0007/0008/0009/0010 |
 | 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |

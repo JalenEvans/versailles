@@ -43,7 +43,7 @@ Full schema: [build-spec §3.1](../build-spec.md#31-configjson).
 
 ## What generated property blocks look like
 
-The generator picks a sampling strategy per clause automatically — you never write these by hand. There are four shipped layouts (all shown trimmed; the full rules are [build-spec §9.6](../build-spec.md#96-seeded-pbt-emission-opt-in-adr-0017)). Note each block carries a §9.3 traceability comment and a pinned `fc.assert(prop, { seed, numRuns })`.
+The generator picks a sampling strategy per clause automatically — you never write these by hand. There are four shipped layouts (all shown trimmed; the full rules are [build-spec §9.6](../build-spec.md#96-seeded-pbt-emission-opt-in-adr-0017)). Note each block carries a §9.3 traceability comment and a pinned `fc.assert(prop, { seed, numRuns })`, and every oracle lambda param carries an explicit type from the contract/manifest — `(sku: string) => sku !== ""` — never an implicit `any` (the emission-soundness guarantee, [ADR-0021](../decisions/0021-totality-of-emission.md)).
 
 ### 1. Per-param filter — single-param oracles
 
@@ -52,7 +52,7 @@ A single-param guard (e.g. `sku != ""`) samples that param and `.filter`s on the
 ```ts
 // traces: "OrderService.addItem.pre0"
 const sku = fc.string();
-const OrderService_addItem_pre0 = (sku) => sku !== "";
+const OrderService_addItem_pre0 = (sku: string) => sku !== "";
 const prop = fc.property(sku.filter(OrderService_addItem_pre0), (sku) => {
 	new OrderService().addItem(sku, 1);
 	expect(OrderService_addItem_pre0(sku)).toBe(true);
@@ -66,7 +66,7 @@ A bothSideFieldRef equality whose operands are **both operation params** (e.g. a
 
 ```ts
 const status = fc.string();
-const AccountService_setStatus_post0 = (status, newStatus) => status === newStatus;
+const AccountService_setStatus_post0 = (status: string, newStatus: string) => status === newStatus;
 const prop = fc.property(status, (status) => {
 	const newStatus = status;   // ← the mirror: target param mirrors the source
 	new AccountService().setStatus(newStatus);
@@ -80,7 +80,7 @@ fc.assert(prop, { seed: 777, numRuns: 100 });
 A coupled compound over multiple params (e.g. `a >= 0 and b >= 0 and a + b <= 100`) is sampled as a **joint region**: the planner derives per-param bounds first — including cross-param propagation from the sum/difference leaves (`a + b <= 100` with `a >= 0`, `b >= 0` → each bounded by `100 −` the other's lower bound) — so the space is bounded before any filter and the valid region stays healthy (~≥50%), never filter-sparse, never a hang ([glossary: record sampling](../glossary.md)):
 
 ```ts
-const OrderService_placeOrder_pre0 = (a, b) => a >= 0 && b >= 0 && a + b <= 100;
+const OrderService_placeOrder_pre0 = (a: number, b: number) => a >= 0 && b >= 0 && a + b <= 100;
 const prop = fc.property(
 	fc.record({ a: fc.integer({ min: 0, max: 100 }), b: fc.integer({ min: 0, max: 100 }) })
 		.filter(({ a, b }) => OrderService_placeOrder_pre0(a, b)),
@@ -94,11 +94,11 @@ fc.assert(prop, { seed: 808, numRuns: 100 });
 
 ### 4. FIELD-BOUND — field-source equality (`status == newStatus`)
 
-A bothSideFieldRef equality with a **manifest-field** operand (e.g. `status == newStatus` where `status` is instance state) is not mirrored and not recorded: the field is never a sampled arbitrary. The block samples **only the op-param**, binds the component instance, calls with the sampled param, and asserts the oracle with the field mapped to `instance.<field>` — a genuine post-state check ([build-spec §9.6](../build-spec.md#96-seeded-pbt-emission-opt-in-adr-0017)):
+A bothSideFieldRef equality with a **manifest-field** operand (e.g. `status == newStatus` where `status` is instance state) is not mirrored and not recorded: the field is never a sampled arbitrary. The block samples **only the op-param**, binds the component instance, calls with the sampled param, and asserts the oracle with the field mapped to `instance.<field>` — a genuine post-state check ([build-spec §9.6](../build-spec.md#96-seeded-pbt-emission-opt-in-adr-0017)); for a non-public field the field maps to the deliberate `(instance as any).<field>` cast instead ([ADR-0021](../decisions/0021-totality-of-emission.md)):
 
 ```ts
 const newStatus = fc.string();
-const AccountService_setStatus_post0 = (status, newStatus) => status === newStatus;
+const AccountService_setStatus_post0 = (status: string, newStatus: string) => status === newStatus;
 const prop = fc.property(newStatus, (newStatus) => {
 	const instance = new AccountService();
 	instance.setStatus(newStatus);

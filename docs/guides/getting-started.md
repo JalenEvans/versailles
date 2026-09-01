@@ -246,23 +246,23 @@ describe("addItem", () => {
 
 	it("OrderService.addItem.postcondition-satisfaction-0 — valid input asserting postconditions OrderService.addItem.post0", () => {
 		const instance = new OrderService();
-		instance.balance = 50;
+		(instance as any).balance = 50;
 		instance.addItem("initial", 1);
-		expect(instance.balance).toEqual(51);
+		expect((instance as any).balance).toEqual(51);
 	});
 });
 
 describe("OrderService invariants", () => {
 	it("OrderService.addItem.invariant-0 — call OrderService.addItem and assert invariant OrderService.inv0 still holds", () => {
 		const instance = new OrderService();
-		instance.balance = 50;
+		(instance as any).balance = 50;
 		instance.addItem("initial", 1);
-		expect(instance.balance).toBeGreaterThanOrEqual(0);
+		expect((instance as any).balance).toBeGreaterThanOrEqual(0);
 	});
 });
 ```
 
-Walk one concrete case — `postcondition-satisfaction-0`. The generator built a valid input (`sku = "initial"`, `price = 1`), **captured the pre-call state** (`instance.balance = 50`), called the operation, and asserted the postcondition with `old(balance)` resolved against that captured state: `51 == 50 + 1`. The `effects` declaration told it which field to assert.
+Walk one concrete case — `postcondition-satisfaction-0`. The generator built a valid input (`sku = "initial"`, `price = 1`), **captured the pre-call state** (`(instance as any).balance = 50`), called the operation, and asserted the postcondition with `old(balance)` resolved against that captured state: `51 == 50 + 1`. The `effects` declaration told it which field to assert. Note the cast: `balance` is declared `private` in source, the manifest records `fieldAccess: { balance: "private" }`, and the emitter reaches non-public state through the deliberate, documented `(instance as any).<field>` white-box idiom — public fields are never cast ([ADR-0021](../decisions/0021-totality-of-emission.md)).
 
 Then notice what the generator did with your two precondition styles: `pre0` (`isValidSku(sku)`) got its violation synthesized from the predicate's `paramTypes` (string → `""`), while `pre1` (`price > 0`) got the full boundary sweep (−1, 0, +1) because the comparison is grammar-expressible — the inline-first doctrine paying off in generated coverage.
 
@@ -285,7 +285,7 @@ Now the traceability. Every generated test carries a [traceability comment](../g
 
 Every clause is covered; nothing is silent. (The default suite is concrete cases only. Opt into seeded property-based blocks later — see the [PBT consumer guide](pbt-emission.md).)
 
-> **About the call shape you see here.** This is exactly the shape the committed example workspace emits (`bun run example:generate` regenerates it byte-identically): imports derived from the manifest's `sourcePath` (`../../src/OrderService.ts`), instance calls, and real matcher assertions. In a pure greenfield workspace with no manifests yet, calls fall back to the legacy static options-object form and imports to the default `../../src/<Component>.js` — either resolves through vitest's module resolution once `src/OrderService.ts` exists. Run `extract-manifests` (below) and regenerate to get the source-aware shape.
+> **About the call shape you see here.** This is exactly the shape the committed example workspace emits (`bun run example:generate` regenerates it byte-identically): imports derived from the manifest's `sourcePath` (`../../src/OrderService.ts`), instance calls, real matcher assertions, and the deliberate `(instance as any)` casts for the private `balance` field — decided from the manifest's `fieldAccess: { balance: "private" }`, never applied to public fields ([ADR-0021](../decisions/0021-totality-of-emission.md)). The committed example also enables `propertyBased`, so its generated file additionally shows **typed oracle lambdas** — `(sku: string) => sku !== ""`, `(price: number) => isPositive(price)` — explicit param types from the contract/manifest, never implicit `any`. In a pure greenfield workspace with no manifests yet, calls fall back to the legacy static options-object form and imports to the default `../../src/<Component>.js` — either resolves through vitest's module resolution once `src/OrderService.ts` exists. Run `extract-manifests` (below) and regenerate to get the source-aware shape.
 
 ## Step 5 — Implement the source (Red → Green)
 
@@ -353,7 +353,7 @@ The **git commit is the approval** ([ADR-0012](../decisions/0012-git-commit-as-a
 
 ## Brownfield? Run `extract-manifests` instead
 
-Everything above assumed you're starting from zero. If you have **existing source**, the on-ramp is different: run `versailles extract-manifests` first to derive `manifests.json` from source (field types, structural `sourceHash`, method metadata) — then the loop continues the same way, and staleness checking is live from day one. Static analysis first, never LLM-authored ([ADR-0005](../decisions/0005-static-analysis-first-manifest-extraction.md)). See [features/manifest-extraction](../features/manifest-extraction.md) for the full picture. The committed example workspace is exactly this path: `bun run example:generate` re-extracts and regenerates it, and the generated suite shows the source-aware shape (Step 4's note).
+Everything above assumed you're starting from zero. If you have **existing source**, the on-ramp is different: run `versailles extract-manifests` first to derive `manifests.json` from source (field types + per-field `fieldAccess`/`fieldReadonly`, structural `sourceHash`, method metadata) — then the loop continues the same way, and staleness checking is live from day one. Static analysis first, never LLM-authored ([ADR-0005](../decisions/0005-static-analysis-first-manifest-extraction.md)). See [features/manifest-extraction](../features/manifest-extraction.md) for the full picture. The committed example workspace is exactly this path: `bun run example:generate` re-extracts and regenerates it, and the generated suite shows the source-aware shape (Step 4's note).
 
 ## Next steps
 

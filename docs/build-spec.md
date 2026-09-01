@@ -181,6 +181,12 @@ Rules:
           "params": ["<paramName>", ...],
           "returnType": "<typeRef>"
         }
+      },
+      "fieldAccess": {
+        "<fieldName>": "public" | "protected" | "private"
+      },
+      "fieldReadonly": {
+        "<fieldName>": true | false
       }
     }
   }
@@ -207,6 +213,12 @@ Rules:
   "we know this component has zero methods" signal that distinguishes a freshly-extracted
   entry from a preserved legacy one; only preserved legacy entries the extractor never
   touched may lack the key (VERSAILLES-25 follow-up).
+- `fieldAccess` / `fieldReadonly` record per-field visibility and mutability from TS source
+  modifiers — `public` / `protected` / `private` and boolean readonly — so the emitter can
+  render instance-field access soundly: plain `instance.<field>` for public fields, the
+  deliberate `(instance as any).<field>` cast for non-public fields (ADR-0021). Legacy
+  entries without these keys load permissively and default to accessible/not-readonly
+  (ADR-0004, ADR-0018).
 - `sourceHash` covers the structural shape: sorted field name+type pairs plus sorted
   method-signature records. Method bodies are excluded, so body-only edits don't trigger
   false staleness.
@@ -464,6 +476,8 @@ CLI subcommand: `versailles generate` — only runs against a context where `isV
 
 Two entry points, distinguished by manifest presence (ADR-0011): **contract-first** (greenfield) — when no `manifests.json` exists, `generate` works from `contracts.json` alone (including its top-level `predicates` map); the module surface (import paths, method metadata) is derived from the contract, and generated tests fail at import until the module exists, a legitimate TDD Red. **extract-first** (brownfield) — `manifests.json` is required; full semantic validation, `sourceHash` staleness checks, and V-25 method-map gating apply. Manifests remain authoritative whenever present.
 
+**Emission is total (ADR-0021).** For every valid workspace, the emitted suite type-checks under the documented baseline strict tsconfig — the example ships `strict: true` + `allowImportingTsExtensions`, and its CI gate runs `tsc --noEmit` over the generated output — **or** the emitter surfaces a non-silent `EMISSION_UNRENDERABLE` warning (same tier as `UNPLANNABLE_OPERATION` / `PROPERTY_UNPLANNABLE`: exit 0, warning in `CliResult.warnings`). Silently type-broken output never ships. Soundness comes from a complete input model: the manifest carries per-field access (`fieldAccess`) and `fieldReadonly` (§3.3), PBT oracle lambdas are emitted with explicit param types from contract/manifest types (never implicit `any`, §9.6), and non-public fields are reached through the deliberate, documented `(instance as any).<field>` cast decided from manifest access data — public fields are never cast (§9.4). The guarantee is scoped to the documented baseline tsconfig, not arbitrary consumer configs.
+
 ### 9.1 Per-operation test cases (from preconditions/postconditions)
 
 For each operation:
@@ -543,6 +557,11 @@ For each operation:
   void operation with assertions, the case renders the bare call without any
   `instance.<field>` assertion — the static call never touches a constructed instance, so
   asserting on one would be misleading (VERSAILLES-26 follow-up).
+- **Non-public field access renders as a deliberate cast**: instance-field reads/writes
+  decide between plain `instance.<field>` (public fields — never cast) and the documented
+  white-box `(instance as any).<field>` cast (protected/private fields, and readonly-mutating
+  writes), decided from the manifest `fieldAccess` / `fieldReadonly` data (§3.3; ADR-0021).
+  Legacy manifest entries without access data default to accessible (ADR-0004, ADR-0018).
 - **Module paths**: emitters derive component import paths from the manifest `sourcePath`
   entry when present — a project-root-relative path (`src/order.ts`) joined against the
   workspace root and computed relative to the generated file's directory, so the emitted
@@ -599,6 +618,9 @@ reference.
   registered predicate functions. The property asserts the clause holds (postcondition-
   satisfaction, invariant-preservation) or rejects via the configured idiom
   (precondition-violation, expected-rejection, ADR-0007).
+- **Typed oracle lambdas** — every oracle lambda param carries an explicit type annotation
+  derived from the contract param type or manifest field typeRef — `(sku: string) => sku !== ""`,
+  `(price: number) => isPositive(price)` — never an implicit `any` (ADR-0021).
 - **Strategy selection summary** — property blocks are planned per case kind:
 
   | Case kind | Arbitrary strategy | Oracle |
@@ -637,7 +659,8 @@ reference.
       so the block samples ONLY the op-param arbitraries, binds the component instance
       (`const instance = new <Component>();`), calls with the sampled params (positional,
       matching the concrete-case call shape), and asserts the oracle with the field mapped
-      to `instance.<field>`. No mirror const, no record, no filter. A field-referencing
+      to `instance.<field>` — cast per ADR-0021 (`(instance as any).<field>`) when the field
+      is non-public. No mirror const, no record, no filter. A field-referencing
       multi-param guard in the operation's guard set makes every OTHER
       satisfies/invariant-preserving descriptor of the operation unplannable (the
       mirror/record layouts cannot reference manifest fields in their filters); only
@@ -813,7 +836,7 @@ layout above.
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-30 | general-manager | §3.1 version-gate text reconciled with ADR-0018 (Policy Foundation, VERSAILLES-168/169): removed `grammarVersion` / `schemaVersion` from the config example (replaced with a `$schema` pointer to `config.schema.json`) and rewrote the gate bullet to state the gates are removed — no version config fields, no file-level version fields, tool version in the binary (`versailles -v` / `--version`), additive-only format evolution, deprecate-don't-remove, tool-driven `migrate` policy; §3.2–3.4 `version` fields and seed-literal grammar-version references intentionally left for Phase 2 |
+| 2026-09-01 | general-manager | Emission-soundness reconciliation (ADR-0021, VERSAILLES-182): §3.3 manifests.json schema gained `fieldAccess` (public/protected/private) + `fieldReadonly` (boolean) with permissive legacy defaults; §9 new "Emission is total" paragraph — output type-checks under the documented baseline strict tsconfig (strict + allowImportingTsExtensions) or a non-silent EMISSION_UNRENDERABLE warning; §9.4 non-public field access renders as the deliberate `(instance as any).<field>` cast decided from manifest access data, public fields never cast; §9.6 typed oracle lambdas (`(sku: string) => ...`, never implicit any) and FIELD-BOUND cast note; §3.4 predicates.json schema confirmed post-ADR-0019 (declaration is the attestation, no purity gate) |
 | 2026-08-30 | general-manager | Phase 2 sweep follow-through (VERSAILLES-168): dropped the legacy `"version": "1.0"` envelope from the §3.2/§3.3/§3.4 example snippets, reconciled the §2 layout comment and §6 loader responsibility #2 with ADR-0018 (no version gate; the loader no longer checks versions), and removed `VERSION_MISMATCH` from the §6 LoaderError code set; seed-literal grammar-version references (§3.1 `propertyBased.seed`, §9.6) remain deferred |
 | 2026-08-29 | general-manager | §9.6 FIELD-BOUND layout (VERSAILLES-165 final rounds, Center B1/B2 + W1 + Fix-1/Fix-2): the sampling strategy becomes THREE joint-sampling strategies — the equality-mirror, the record + bounded filter, and the NEW FIELD-BOUND layout for a bothSideFieldRef equality with a manifest-FIELD operand (`f == p`, e.g. `status == newStatus`): op-params only, component instance bound, the field mapped to `instance.<field>` in the assertion, no mirror/record/filter; a field-referencing multi-param guard in the guard set makes only the descriptor whose OWN clause is the field-bound equality plannable (siblings are PROPERTY_UNPLANNABLE); `PROPERTY_UNPLANNABLE` now also covers a coupling referencing a manifest-field operand (Center B2), a coupling whose propagation yields inverted bounds (unsatisfiable region), and a zero-param field-field equality (`f1 == f2`) — the FIELD-BOUND layout has no arbitrary to sample — alongside the existing non-mirrorable equality, equality-of-sums, unboundable couplings, unrenderable oracles, and component-typed params |
 | 2026-08-29 | general-manager | §9.6 joint sampling (VERSAILLES-165): the oracle-arity gate becomes a sampling-strategy routing — multi-param guard oracles are no longer blanket-unplannable; equality oracles (`p1 == p2` / `p1 === p2`, bothSideFieldRef) route to the equality-mirror strategy (emitted callback contains `const p2 = p1;` — no filter, zero filter sparsity) and coupled numeric compounds route to record + bounded filter (`fc.record({ a: ..., b: ... }).filter(({ a, b }) => <oracle>(a, b))`) with cross-param bounds derived from sum/difference leaves BEFORE any filter (`p1 + p2 <= C` with lower bounds L1, L2 → `p1 <= C − L2`, `p2 <= C − L1`; mirrored for `>=`/`>` with upper bounds) so the valid region stays healthy (~≥50%), never filter-sparse, never a hang; `PROPERTY_UNPLANNABLE` is retained only for genuinely unrepresentable shapes — unrenderable oracles, component-typed params, non-mirrorable equality (`!=`/`!==`, equality-of-sums `a + b == C`), unboundable couplings — and multi-param oracles are never emitted as a per-param `.filter` |

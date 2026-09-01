@@ -44,7 +44,7 @@ Uses from [glossary](../glossary.md): *predicate, sourceRef, declarative predica
 
 ## Business rules
 
-- Predicate declarations carry **no purity metadata** — no `verifiedPure`, no purity analysis, no gate; the declaration is the attestation (ADR-0019).
+- Predicate declarations carry **no purity metadata** — no purity analysis, no gate; the declaration is the attestation (ADR-0019).
 - Every entry's `source` field is resolved by `validate` under `config.sourceRoots`; an unresolvable `source` produces a `PREDICATE_SOURCE_UNRESOLVED` warning (ADR-0005, ADR-0013).
 - Predicate declarations are authored inline in `contracts.json` — no separate `predicates.json` file, no registration CLI (ADR-0013).
 - The context never parses or semantically validates contract expressions — that is contract-language, reached through the workspace-context loader.

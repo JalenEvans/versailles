@@ -105,4 +105,4 @@ The contract language is the boolean-valued expression grammar (build-spec §4.1
 | 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
 | 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
 | 2026-08-30 | general-manager | VERSAILLES-172: UNKNOWN_PREDICATE 'did you mean' fuzzy suggestion behavior spec'd (Levenshtein ≤ 2, at most 2, deterministic, detail-only) |
-| 2026-08-31 | associate-head-coach | Drop the verifiedPure gate (ADR-0019): predicate calls resolve to any declared predicate — existence, arity, arg types checked; no purity gate |
+| 2026-08-31 | associate-head-coach | Drop the purity gate (ADR-0019): predicate calls resolve to any declared predicate — existence, arity, arg types checked; no purity gate |
