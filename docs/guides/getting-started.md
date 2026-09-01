@@ -73,8 +73,7 @@ Open `.versailles/contracts.json` and write the whole contract. This is the arti
       "source": "OrderService.isValidSku",
       "params": ["sku"],
       "paramTypes": ["string"],
-      "returnType": "boolean",
-      "verifiedPure": true
+      "returnType": "boolean"
     }
   },
   "contracts": {
@@ -109,7 +108,7 @@ Open `.versailles/contracts.json` and write the whole contract. This is the arti
 
 What each piece means (vocabulary lives in the [glossary](../glossary.md); the grammar is [build-spec §4](../build-spec.md#4-contract-expression-grammar)):
 
-- **`predicates` map (top level)** — the [declarative predicate](../glossary.md) `isValidSku` is declared inline here, no separate registry file, no registration CLI ([ADR-0013](../decisions/0013-declarative-predicates-remove-registration-cli.md)). The full ceremony: `source` (`OrderService.isValidSku` — the qualified name of the real function, resolved under `config.sourceRoots`), `params`/`paramTypes` (arity and argument types), `returnType` (`boolean`), and `verifiedPure: true` — your human assertion that the function is side-effect-free and terminating. `validate` hard-errors on anything else ([ADR-0006](../decisions/0006-predicate-purity-registration-gate.md)).
+- **`predicates` map (top level)** — the [declarative predicate](../glossary.md) `isValidSku` is declared inline here, no separate registry file, no registration CLI ([ADR-0013](../decisions/0013-declarative-predicates-remove-registration-cli.md)). The declaration: `source` (`OrderService.isValidSku` — the qualified name of the real function, resolved under `config.sourceRoots`), `params`/`paramTypes` (arity and argument types), `returnType` (`boolean`). The declaration itself is the attestation — `validate` resolves the `sourceRef` against real source on every run, and no purity gate applies ([ADR-0019](../decisions/0019-drop-verified-pure-field.md)).
 - **Why `isValidSku`, not `isPositive`?** The two preconditions show the inline-vs-predicate judgment (sidebar below): `price > 0` is grammar-expressible, so it stays **inline**; `isValidSku(sku)` checks a string *format* (regex — the grammar has no pattern matching), so it cannot be inline and earns a named predicate. It is also named for the reusable property, not for this one consumer.
 - **`invariants`** — `balance >= 0` must hold for every instance at all times, before and after every operation call. A clause.
 - **`operations.addItem`** — one operation with a typed `params` list, two `preconditions` clauses (a predicate-call precondition and an inline comparison), a `postconditions` clause that compares against pre-call state via `old(balance)`, and an `effects` declaration saying `addItem` mutates `balance` (the generator uses effects to know which field a postcondition-satisfaction test should assert against).
@@ -117,13 +116,13 @@ What each piece means (vocabulary lives in the [glossary](../glossary.md); the g
 
 > **Inline vs predicate — the judgment call**
 >
-> **Inline** when the check is grammar-expressible **and** single-use: `price > 0`, `balance >= 0`, `sku != ""`, `status in ["OPEN", "CLOSED"]`. Promoting these to named predicates is a smell — you pay the declaration ceremony (sourceRef, paramTypes, `verifiedPure`) for logic the grammar already expresses.
+> **Inline** when the check is grammar-expressible **and** single-use: `price > 0`, `balance >= 0`, `sku != ""`, `status in ["OPEN", "CLOSED"]`. Promoting these to named predicates is a smell — you pay the declaration ceremony (sourceRef, paramTypes) for logic the grammar already expresses.
 >
 > **Predicate** when the check is **not** grammar-expressible — regex/string-format logic (`isValidSku`), cross-field computation, anything needing statements — and when the same non-grammar check is shared across components. Name it for the reusable property it checks (`isValidSku`), **never after a single consumer** (`addItemSkuIsOk` is a smell; the generic-naming rule).
 >
 > The reverse-reference index (`validate --verbose` → `predicateReferences`, Step 2) is what makes the shared predicate layer discoverable — including declared-but-unused predicates.
 
-Grammar gotchas worth knowing before you type: single `=` is a parse error (use `==`), `old(field)` is legal **only** in postconditions, and predicate calls must resolve to a declared predicate with `verifiedPure: true` (build-spec §4.1).
+Grammar gotchas worth knowing before you type: single `=` is a parse error (use `==`), `old(field)` is legal **only** in postconditions, and predicate calls must resolve to a declared predicate in the top-level `predicates` map (build-spec §4.1).
 
 One more thing worth knowing about how the generator treats your predicate: v1 does not solve predicates (no SMT, build-spec §9.5). It synthesizes the **violation** input deterministically from `paramTypes` (string → `""`, number → `-1`, boolean → `false`) and uses deterministic defaults on the **accept** side (string → `"initial"`, number → `1`). So `isValidSku` gets falsified with `""`, and the accept cases call `addItem` with `"initial"` — the Step 5 implementation accepts both, so the generated suite goes Green.
 

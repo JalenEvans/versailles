@@ -8,9 +8,9 @@ The contract specification language and everything needed to know whether a cont
 
 - The contract expression grammar (build-spec §4.1), its structural constraints, and the canonical AST (build-spec §4.3).
 - The parser: `expr` strings → AST, enforcing structural constraints at parse time (e.g. `old(...)` only in `postconditions[]`).
-- The semantic validator (build-spec §5.1): field resolution, nested field resolution, type compatibility, `in` operand shape, predicate existence/arity/arg-types, predicate purity, and the low-confidence warning tier.
+- The semantic validator (build-spec §5.1): field resolution, nested field resolution, type compatibility, `in` operand shape, predicate existence/arity/arg-types, and the low-confidence warning tier — no purity gate (ADR-0019).
 - The structured error contract (build-spec §4.4, §5.2) — machine-readable results, never unstructured throws.
-- The predicate registry (top-level `predicates` map in `contracts.json`): named predicates with the `verifiedPure` gate (ADR-0006, ADR-0013).
+- The predicate registry (top-level `predicates` map in `contracts.json`): named predicates declared with `source`, `params`, `paramTypes`, `returnType` — no purity gate (ADR-0013, ADR-0019).
 
 This context is **language-agnostic** (ADR-0008): the grammar, parser, and validator never fork per target language.
 
@@ -30,7 +30,7 @@ This context is **language-agnostic** (ADR-0008): the grammar, parser, and valid
 
 **AST** (value object) — the canonical node tree: `or | and | not | compare | arithmetic | old | predicateCall | fieldRef | literal` (build-spec §4.3).
 
-**Predicate** (entity in the registry) — entry in the top-level `predicates` map of `contracts.json`: params, paramTypes, returnType, source, `verifiedPure`.
+**Predicate** (entity in the registry) — entry in the top-level `predicates` map of `contracts.json`: `source`, `params`, `paramTypes`, `returnType`.
 
 **StructuredError** (value object) — parse form: `{ contractId, field, position, found, expected, message }`; validation form: `{ contractId, code, field, detail }`.
 
@@ -38,7 +38,7 @@ This context is **language-agnostic** (ADR-0008): the grammar, parser, and valid
 
 ## Ubiquitous language
 
-Uses from [glossary](../glossary.md): *contract, clause, invariant, precondition, postcondition, effect, expression, component, operation, AST, structured error, predicate, verifiedPure*. No synonyms — a "rule" is a *clause*, a "function check" is a *predicate call*, a "parse failure" is a *structured error*.
+Uses from [glossary](../glossary.md): *contract, clause, invariant, precondition, postcondition, effect, expression, component, operation, AST, structured error, predicate*. No synonyms — a "rule" is a *clause*, a "function check" is a *predicate call*, a "parse failure" is a *structured error*.
 
 ## Domain events
 
@@ -60,7 +60,7 @@ Uses from [glossary](../glossary.md): *contract, clause, invariant, precondition
 - `old(...)` is syntactically valid **only** when parsing a `postconditions[]` entry; encountering it in `preconditions[]` or `invariants[]` is a parse error, not a semantic one (build-spec §4.2). The validator re-asserts as defense-in-depth.
 - `predicate_call` identifiers are resolved at semantic validation, not parse time — the parser only checks the call-shape is well-formed.
 - An undeclared predicate call (`UNKNOWN_PREDICATE`) appends at most 2 "did you mean" suggestions to its detail for declared keys within Levenshtein distance ≤ 2, ordered distance-then-alphabetically; suggestions never add fields to the structured error (VERSAILLES-172).
-- Hard errors (unknown field, type mismatch, bad `in` shape, unknown predicate, arity/type mismatch, `verifiedPure !== true`) block the contract from passing validation, and block CI in the lint flow (build-spec §5.2).
+- Hard errors (unknown field, type mismatch, bad `in` shape, unknown predicate, arity/type mismatch) block the contract from passing validation, and block CI in the lint flow (build-spec §5.2).
 - Warnings are non-blocking and surfaced for awareness.
 - The parser and validator always return structured results — never throw unstructured exceptions (build-spec §4.4).
 
@@ -71,4 +71,4 @@ Uses from [glossary](../glossary.md): *contract, clause, invariant, precondition
 
 ## Source of authority
 
-[build-spec.md §4–§5](../build-spec.md) · [ADR-0006 predicate purity gate](../decisions/0006-predicate-purity-registration-gate.md) · [ADR-0008 language-agnostic core](../decisions/0008-language-agnostic-core-pluggable-plugins.md)
+[build-spec.md §4–§5](../build-spec.md) · [ADR-0008 language-agnostic core](../decisions/0008-language-agnostic-core-pluggable-plugins.md) · [ADR-0019 no purity gate](../decisions/0019-drop-verified-pure-field.md)

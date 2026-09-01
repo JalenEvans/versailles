@@ -13,7 +13,7 @@ A **rejected command** is a first-class, deterministic outcome — not a crash. 
 | Condition | Command examples | Result | Exit code |
 |---|---|---|---|
 | Parse error (e.g. `old(...)` in an invariant, `=` instead of `==`) | `validate`, `check`, `generate` | Structured parse errors; processing stops | `1` |
-| Semantic validation error (unknown field, type mismatch, unverified predicate) | `validate`, `check`, `generate` | Structured validation errors (`{ contractId, code, field, detail }`); processing stops | `1` |
+| Semantic validation error (unknown field, type mismatch, unknown predicate, arity/type mismatch) | `validate`, `check`, `generate` | Structured validation errors (`{ contractId, code, field, detail }`); processing stops | `1` |
 | Staleness while `config.staleness.blockOnStale: true` | `check` | List of stale IDs; processing stops | `2` |
 | Staleness while non-blocking | `check` | Warning report (CI annotation), continues | `0` |
 

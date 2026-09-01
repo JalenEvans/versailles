@@ -101,8 +101,7 @@ field paths    order.items[].sku             # [] = any element · [0] = by inde
 
 `old(field)` anywhere but a postcondition is a parse error; predicate calls must
 resolve to a predicate declared in the top-level `"predicates"` map of
-`contracts.json` with `verifiedPure: true`; single `=` is a parse error
-(`==` only).
+`contracts.json`; single `=` is a parse error (`==` only).
 
 ### Using in CI
 

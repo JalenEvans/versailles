@@ -2,9 +2,11 @@
 
 **ID:** ADR-0006
 **Date:** 2026-08-11
-**Status:** accepted
+**Status:** superseded
 **Owner:** associate-head-coach
 **Template:** MADR-derived decision record
+
+> **Superseded by [ADR-0019](0019-drop-verified-pure-field.md)** (2026-09-01): the `verifiedPure` gate is removed — the predicate declaration itself is the attestation. The decision body below is frozen.
 
 ---
 

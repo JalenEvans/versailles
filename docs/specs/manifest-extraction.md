@@ -114,7 +114,7 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 ## Non-Goals
 
 - No C# (Roslyn) or Python (`ast`) extractor implementations in the first milestone — TypeScript + vitest is sequenced first per ADR-0009; the seam exists for all three from day one.
-- No automated purity/termination analysis for predicates (that is the registration-time `verifiedPure` gate, contract-language / ADR-0006).
+- No automated purity/termination analysis for predicates — no purity gate exists; the declaration is the attestation (ADR-0019).
 - No SMT-backed generation or witness synthesis (v2, build-spec §9.5).
 - No LLM client, prompt templates, or in-tool LLM extraction (ADR-0010).
 

@@ -7,26 +7,24 @@
 ## What this context does
 
 The predicate registry owns the **declarative predicate declarations** in the top-level
-`predicates` map of `contracts.json` — the named, verified-pure functions contract
-expressions are allowed to call (build-spec §3.4, ADR-0013). Predicates are declared inline
-in `contracts.json`; `validate` mechanically verifies every declaration: predicate name
-validity (IDENT grammar), `sourceRef` resolution under `config.sourceRoots` (resolve-or-warn
-→ `PREDICATE_SOURCE_UNRESOLVED` warning), and the `verifiedPure` gate (ADR-0006 preserved —
-unverified predicates are a hard error when referenced by a contract). The registration CLI
-(`register-predicate` / `verify-purity` / `remind-unverified`) and the stored `sourceHash`
-are removed (ADR-0013).
+`predicates` map of `contracts.json` — the named functions contract expressions are allowed
+to call (build-spec §3.4, ADR-0013). Predicates are declared inline in `contracts.json`;
+`validate` mechanically verifies every declaration: predicate name validity (IDENT grammar),
+`sourceRef` resolution under `config.sourceRoots` (resolve-or-warn →
+`PREDICATE_SOURCE_UNRESOLVED` warning). The declaration itself is the attestation — no purity
+gate (ADR-0019). The registration CLI (`register-predicate` / `verify-purity` /
+`remind-unverified`) and the stored `sourceHash` are removed (ADR-0013).
 
 ## What it guarantees (must)
 
-- Every entry conforms to the §3.4 schema: `source`, `params`, `paramTypes`, `returnType`,
-  `verifiedPure`.
+- Every entry conforms to the §3.4 schema: `source`, `params`, `paramTypes`, `returnType`.
 - `validate` verifies every predicate declaration's name is a valid IDENT (invalid names are
   `INVALID_PREDICATE_NAME` hard errors).
 - `validate` resolves every predicate declaration's `source` field under `config.sourceRoots`
   (unresolvable sources produce `PREDICATE_SOURCE_UNRESOLVED` warnings — resolve-or-warn,
   ADR-0005, ADR-0013).
-- `verifiedPure: true` happens only through a human's manual lint/review, recorded as data
-  in `contracts.json`. The tool itself never analyzes purity.
+- No purity gate: the declaration (existence + shape + resolvable `sourceRef`) is the
+  attestation; purity is neither asserted nor analyzed (ADR-0019).
 - When `validate --verbose` emits `predicateReferences`, the reverse-reference index is
   deterministic (ADR-0002): exactly one entry per declared predicate — unused predicates
   included with `clauses: []` — entries sorted by predicate name, clauses by clause id,
@@ -43,7 +41,7 @@ are removed (ADR-0013).
 
 ## What it forbids (must not)
 
-- No automated purity/termination analysis; no defaulting `verifiedPure` to true.
+- No automated purity/termination analysis and no purity gate (ADR-0019).
 - No stored `sourceHash` for predicates (ADR-0013).
 - No predicate registration CLI (ADR-0013).
 - No separate `predicates.json` file — predicates are declared inline in `contracts.json`.
@@ -55,4 +53,4 @@ are removed (ADR-0013).
 
 [build-spec §3.4, §13 milestone 8, §14](../build-spec.md) · ADR-0002 (determinism) ·
 ADR-0003 (git audit trail) ·
-ADR-0006 (purity gate) · ADR-0010 (no in-tool LLM) · ADR-0013 (declarative predicates)
+ADR-0010 (no in-tool LLM) · ADR-0013 (declarative predicates) · ADR-0019 (no purity gate)

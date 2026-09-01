@@ -216,8 +216,7 @@ Rules:
 ### 3.4 Predicates (top-level `predicates` map in `contracts.json`)
 
 Predicates are declared inline in `contracts.json` as a top-level `predicates` map
-(ADR-0013). Each entry declares the predicate's source reference, parameter shape, and
-purity judgment:
+(ADR-0013). Each entry declares the predicate's source reference and parameter shape:
 
 ```json
 {
@@ -226,8 +225,7 @@ purity judgment:
       "source": "<Module.functionName>",
       "params": ["<paramName>"],
       "paramTypes": ["<typeRef>"],
-      "returnType": "boolean",
-      "verifiedPure": true
+      "returnType": "boolean"
     }
   },
   "contracts": { ... }
@@ -238,16 +236,17 @@ purity judgment:
   refers to. `validate` resolves it under `config.sourceRoots`; an unresolvable `source`
   produces a non-blocking `PREDICATE_SOURCE_UNRESOLVED` warning (ADR-0005 "nothing
   invented" is served by resolve-or-warn, not by a stored hash).
-- `verifiedPure` is a human-set boolean asserting the referenced function has no side
-  effects and always terminates. The validator treats `verifiedPure: false` or missing as
-  a hard error — unverified predicates cannot be referenced in contracts (ADR-0006).
+- **No purity gate** (ADR-0019): the declaration itself is the attestation — a predicate
+  cannot be referenced without being deliberately declared with a resolvable `sourceRef`.
+  Purity is neither asserted nor analyzed; an impure or non-terminating predicate surfaces
+  as a failing or hanging generated test on the first suite run.
 - `sourceHash` is **dropped** (ADR-0013): no stored hash is maintained, and no command
-  drift-checks predicate hashes. The purity judgment is recorded as data alongside the
-  contract, and the git commit is the approval.
+  drift-checks predicate hashes. The declaration sits alongside the contract, and the git
+  commit is the approval.
 - The registration CLI (`register-predicate` / `verify-purity` / `remind-unverified`) is
   removed (ADR-0013). Predicate registration is part of authoring — the declaration sits
   in `contracts.json` next to the contracts that use it, and `validate` is the single
-  gate that catches missing, unresolvable, and unverified predicates at once.
+  gate that catches missing and unresolvable declarations at once.
 
 ---
 
@@ -338,7 +337,6 @@ manifests + predicates) loaded together.
 | Predicate exists | Called name exists in the top-level `predicates` map of `contracts.json` | Hard |
 | Predicate arity | Number of args matches `predicates[name].params.length` | Hard |
 | Predicate arg types | Each arg's resolved type matches `predicates[name].paramTypes[i]` | Hard |
-| Predicate verified pure | `predicates[name].verifiedPure === true` | Hard |
 | Predicate sourceRef resolves | `predicates[name].source` resolves to a real function under `config.sourceRoots` | Warning (`PREDICATE_SOURCE_UNRESOLVED`) |
 | Predicate name is a valid IDENT | Predicate declaration key matches the `predicate_call` IDENT grammar | Hard (`INVALID_PREDICATE_NAME`) |
 | Field exists but manifest confidence low | Field resolves but manifest entry is flagged as inferred/low-confidence (extension point, not required in v1) | Warning |
@@ -774,7 +772,7 @@ ADR-0015 (§15).
 |---|---|
 | Type strictness in manifests for dynamically-typed languages | Permissive; low-confidence fields warn, don't block |
 | Manifest extraction method | Static analysis only; the tool never invokes an LLM (ADR-0010) |
-| Predicate purity enforcement | Manual lint/review by the author; recorded as `verifiedPure` data in `contracts.json` (ADR-0006, ADR-0013) |
+| Predicate purity enforcement | No gate — the predicate declaration (resolvable `sourceRef`) is the attestation; impurity surfaces as failing/hanging generated tests at runtime (ADR-0019) |
 | Test framework target for v1 | Single framework, config-driven, chosen up front |
 | Rejection idiom for precondition-violation tests | Configurable in `config.json`, default "throws" |
 | Multi-language support | Manifest extractor pluggable per-language; grammar/validator/generator stay language-agnostic |
