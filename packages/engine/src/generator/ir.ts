@@ -154,6 +154,53 @@ export type EmitOptions = {
 	 * ignore the field entirely.
 	 */
 	predicates?: Record<string, string>;
+	/**
+	 * Per-component per-field TypeScript access modifier (component → field →
+	 * "public" | "protected" | "private"), threaded through the emitter seam
+	 * exactly like methods / modulePaths (ADR-0021, deterministic-generation
+	 * totality of emission). Derived by the generate handler from
+	 * manifests.json `fieldAccess`. When a field is marked non-public every
+	 * rendered instance-field READ/WRITE site for that field renders through
+	 * the deliberate `(instance as any).<field>` escape — the standard
+	 * white-box testing idiom (external code cannot touch private state
+	 * type-safely by definition). PUBLIC fields NEVER cast, and an ABSENT
+	 * fieldAccess (legacy manifests) keeps `instance.<field>` byte-identical.
+	 */
+	fieldAccess?: Record<
+		string,
+		Record<string, "public" | "protected" | "private">
+	>;
+	/**
+	 * Per-component per-field TS type (component → field → typeRef), threaded
+	 * through the emitter seam exactly like methods / modulePaths (ADR-0021).
+	 * Derived by the generate handler from manifests.json `fields` (the
+	 * name → typeRef map). FIELD-param oracle lambda params are typed ONLY
+	 * when this map carries the field's type; an absent entry (legacy
+	 * manifests without a field model) keeps the field lambda param untyped —
+	 * the byte-identical legacy guarantee.
+	 */
+	fieldTypes?: Record<string, Record<string, string>>;
+	/**
+	 * Per-component per-field readonly flag (component → field → boolean),
+	 * threaded through the emitter seam exactly like methods / modulePaths
+	 * (ADR-0021). Derived by the generate handler from manifests.json
+	 * `fieldReadonly`. A readonly field is WRITTEN at its pre-state seeding
+	 * site through the same `(instance as any).<field>` cast — TS readonly is
+	 * compile-time-only, so the cast bypasses it at runtime and preserves the
+	 * seeding coverage. Never skipped.
+	 */
+	fieldReadonly?: Record<string, Record<string, boolean>>;
+	/**
+	 * OUT-PARAM emission-warning channel (ADR-0021): the emitter PUSHES
+	 * non-silent emission warnings ({ code, field, detail } — the
+	 * LoaderWarning shape, same tier as suite.warnings / propertyPlan.warnings,
+	 * ADR-0004: non-blocking, exit 0) for shapes it cannot render type-safely
+	 * — e.g. a field-bound oracle whose field type in fieldTypes is not
+	 * renderable to a TS type (EMISSION_UNRENDERABLE). The generate handler
+	 * merges these into CliResult.warnings alongside the planning warnings.
+	 * Absent/empty → the emitter renders without warnings.
+	 */
+	warnings?: LoaderWarning[];
 };
 
 /** Maps every source clause ID → the test IDs tracing it (§9.3). */

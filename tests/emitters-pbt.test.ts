@@ -121,8 +121,8 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  * 	it("OrderService.addItem.property-satisfies-0", () => {
  * 		const sku = fc.string();
  * 		const price = fc.integer();
- * 		const OrderService_addItem_pre0 = (sku) => sku !== "";
- * 		const OrderService_addItem_pre1 = (price) => isPositive(price);
+ * 		const OrderService_addItem_pre0 = (sku: string) => sku !== "";
+ * 		const OrderService_addItem_pre1 = (price: number) => isPositive(price);
  * 		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
  * 			new OrderService().addItem(sku, price);
  * 			expect(OrderService_addItem_pre0(sku)).toBe(true);
@@ -142,7 +142,7 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  * 		const reason = fc.string();
  * 		const tags = fc.constant([]);
  * 		const memo = fc.constant(0);
- * 		const AccountService_setStatus_pre0 = (newStatus) => newStatus === "ACTIVE" || newStatus === "FROZEN";
+ * 		const AccountService_setStatus_pre0 = (newStatus: string) => newStatus === "ACTIVE" || newStatus === "FROZEN";
  * 		const prop = fc.property(newStatus.filter(AccountService_setStatus_pre0), notify, reason, tags, memo, (newStatus, notify, reason, tags, memo) => {
  * 			AccountService.setStatus(newStatus, notify, reason, tags, memo);
  * 			expect(AccountService_setStatus_pre0(newStatus)).toBe(true);
@@ -159,7 +159,7 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  * 	// traces: "AccountService.inv0"
  * 	it("AccountService.withdraw.property-invariant-preserving-0", () => {
  * 		const amount = fc.integer({ min: 10, max: 100 });
- * 		const AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;
+ * 		const AccountService_withdraw_pre0 = (amount: number) => amount >= 10 && amount <= 100;
  * 		const AccountService_inv0 = (balance) => balance >= 0;
  * 		const prop = fc.property(amount.filter(AccountService_withdraw_pre0), (amount) => {
  * 			const instance = new AccountService();
@@ -212,6 +212,19 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  *   (`const instance = new <Component>(); instance.<op>(...);`) is emitted when
  *   any asserted oracle parameter is a field. Satisfies/invariant blocks render
  *   the BARE call (no `const result =` — void-safe; the clause IS the check).
+ * - Typed oracle lambdas (ADR-0021): every oracle CONST declaration embeds the
+ *   codegen'd `(<params>) => <expr>` body with a TYPE ANNOTATION on each op-param
+ *   lambda parameter, resolved from descriptor.params[].typeRef (number → number,
+ *   string → string, boolean → boolean, enum<...> → string). This is
+ *   UNCONDITIONAL — the emitter has the op-param types and must not drop them
+ *   (the TS7006 bug). A FIELD lambda parameter (a manifest field, not an op
+ *   param) is typed only when the field's type is known via the field model
+ *   (EmitOptions.fieldTypes) — without it the field lambda stays untyped.
+ * - Deliberate casts for non-public fields (ADR-0021): at every instance-field
+ *   read/write site (pre-state seeding, invariant assertions, FIELD-BOUND PBT
+ *   oracle mappings), a field the field model marks private/protected renders
+ *   `(instance as any).<field>`; a public field NEVER casts. Conditional on the
+ *   field model (EmitOptions.fieldAccess) — legacy mode keeps `instance.<field>`.
  * - Predicate imports (GAP 2): for each component file, `import { <name> } from
  *   "<specifier>"` for every predicate whose name appears in the component's
  *   property clause code strings, ordered by first appearance across the
@@ -753,24 +766,39 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		// Oracle consts are HOISTED to the it-body level (indent 2, one tab
 		// outside the fc.property callback) so the same const fills both the
 		// arbitrary filter and the in-callback assertion.
+		//
+		// ADR-0021: every ORACLE LAMBDA parameter that is a CONTRACT OP PARAM
+		// carries its declared type (from descriptor.params[].typeRef) —
+		// `(amount: number) => ...`, `(newStatus: string) => ...`,
+		// `(sku: string) => ...`, `(price: number) => ...` — never the implicit
+		// `(amount) => ...` (TS7006). This is UNCONDITIONAL: the emitter has the
+		// op-param type in the plan and must not drop it. A FIELD parameter
+		// (e.g. the invariant oracle's `balance`) is only typed when the field's
+		// type is known via the field model — without it the field lambda stays
+		// untyped (pinned below).
 		expect(account?.content).toContain(
-			"\t\tconst AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;",
+			"\t\tconst AccountService_withdraw_pre0 = (amount: number) => amount >= 10 && amount <= 100;",
 		);
 		expect(account?.content).toContain(
-			'\t\tconst AccountService_setStatus_pre0 = (newStatus) => newStatus === "ACTIVE" || newStatus === "FROZEN";',
+			'\t\tconst AccountService_setStatus_pre0 = (newStatus: string) => newStatus === "ACTIVE" || newStatus === "FROZEN";',
 		);
+		// Field-param oracle (balance is a manifest FIELD, not an op param): no
+		// field model passed in the legacy pbtOptions default, so the field type
+		// is unknowable and the lambda stays untyped (the access-data-mode test
+		// below pins the typed `(balance: number)` form).
 		expect(account?.content).toContain(
 			"\t\tconst AccountService_inv0 = (balance) => balance >= 0;",
 		);
 		expect(order?.content).toContain(
-			'\t\tconst OrderService_addItem_pre0 = (sku) => sku !== "";',
+			'\t\tconst OrderService_addItem_pre0 = (sku: string) => sku !== "";',
 		);
 		expect(order?.content).toContain(
-			"\t\tconst OrderService_addItem_pre1 = (price) => isPositive(price);",
+			"\t\tconst OrderService_addItem_pre1 = (price: number) => isPositive(price);",
 		);
-		// The codegen'd source string itself appears verbatim (no mangling).
+		// The codegen'd source string itself appears verbatim (no mangling),
+		// except the op-param type annotations the emitter injects into the head.
 		expect(account?.content).toContain(
-			"(amount) => amount >= 10 && amount <= 100",
+			"(amount: number) => amount >= 10 && amount <= 100",
 		);
 		// The oracle consts are HOISTED, never embedded inside the callback at
 		// indent 3 — the hoisting is what lets the same const fill both the
@@ -883,6 +911,79 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		expect(account?.content).toContain("\t\t\tinstance.withdraw(amount);");
 	});
 
+	// ── ADR-0021 access-data mode: deliberate casts + typed field oracles ────
+	//
+	// When the emitter is given the field model (EmitOptions.fieldAccess +
+	// fieldTypes, the shape the generate handler derives from manifests.json
+	// fieldAccess/fieldReadonly/fields), non-public fields render through the
+	// deliberate `(instance as any).<field>` escape AND field-referencing oracle
+	// lambdas carry their declared field type — `(balance: number) => ...`. This
+	// is the FIELD-BOUND oracle mapping requirement of ADR-0021 §Confirmation.
+	// Legacy mode (no field model) keeps `instance.balance` uncast and the field
+	// lambda untyped (pinned above) — the byte-identical guarantee.
+	it("access-data mode: FIELD-BOUND oracle mapping casts a private field to (instance as any).balance and types the field lambda", () => {
+		// The field model: AccountService.balance is private (per the manifest
+		// fieldAccess record), type number (per fields). Cast at the read site in
+		// the invariant oracle assertion; the oracle lambda param is typed.
+		const files = emitSuite(
+			pbtSuite(),
+			"vitest",
+			// EmitOptions will gain fieldAccess + fieldTypes (the ir.ts seam the
+			// implementer adds); the `as never` keeps the RED test compiling
+			// before that lands.
+			{
+				...pbtOptions(),
+				fieldAccess: {
+					[ACCOUNT]: { balance: "private" },
+				},
+				fieldTypes: {
+					[ACCOUNT]: { balance: "number" },
+				},
+			} as never,
+		);
+		const account = accountFile(files);
+		expect(account).toBeDefined();
+
+		// The invariant oracle's field param is typed from the manifest field
+		// type, and the assertion reads the private field through the deliberate
+		// cast — the standard white-box testing idiom (ADR-0021 Option A).
+		expect(account?.content).toContain(
+			"\t\tconst AccountService_inv0 = (balance: number) => balance >= 0;",
+		);
+		expect(account?.content).toContain(
+			"expect(AccountService_inv0((instance as any).balance)).toBe(true);",
+		);
+		// The instance binding + call remain unchanged — only the field access
+		// casts.
+		expect(account?.content).toContain(
+			"\t\t\tconst instance = new AccountService();",
+		);
+		expect(account?.content).toContain("\t\t\tinstance.withdraw(amount);");
+	});
+
+	it("access-data mode: a PUBLIC field is NEVER cast in the FIELD-BOUND oracle mapping — instance.name stays", () => {
+		// A public field (absent from fieldAccess, or explicitly "public") must
+		// keep the plain instance.<field> read — Option C (always cast) is
+		// rejected by ADR-0021.
+		const files = emitSuite(pbtSuite(), "vitest", {
+			...pbtOptions(),
+			fieldAccess: {
+				[ACCOUNT]: { balance: "public" },
+			},
+			fieldTypes: {
+				[ACCOUNT]: { balance: "number" },
+			},
+		} as never);
+		const account = accountFile(files);
+		expect(account).toBeDefined();
+		expect(account?.content).toContain(
+			"expect(AccountService_inv0(instance.balance)).toBe(true);",
+		);
+		expect(account?.content).not.toContain(
+			"expect(AccountService_inv0((instance as any).balance)).toBe(true);",
+		);
+	});
+
 	it("rejects blocks embed NO dead oracle consts — the clause is never embedded unused; only the configured idiom asserts", () => {
 		const files = emitPbt();
 		const account = accountFile(files);
@@ -962,7 +1063,7 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 			'\t// traces: "AccountService.withdraw.pre0"',
 			'\tit("AccountService.withdraw.property-satisfies-0", () => {',
 			"\t\tconst amount = fc.integer({ min: 10, max: 100 });",
-			"\t\tconst AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;",
+			"\t\tconst AccountService_withdraw_pre0 = (amount: number) => amount >= 10 && amount <= 100;",
 			"\t\tconst prop = fc.property(amount.filter(AccountService_withdraw_pre0), (amount) => {",
 			"\t\t\tnew AccountService().withdraw(amount);",
 			"\t\t\texpect(AccountService_withdraw_pre0(amount)).toBe(true);",
@@ -987,7 +1088,7 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 			"\t\tconst reason = fc.string();",
 			"\t\tconst tags = fc.constant([]);",
 			"\t\tconst memo = fc.constant(0);",
-			'\t\tconst AccountService_setStatus_pre0 = (newStatus) => newStatus === "ACTIVE" || newStatus === "FROZEN";',
+			'\t\tconst AccountService_setStatus_pre0 = (newStatus: string) => newStatus === "ACTIVE" || newStatus === "FROZEN";',
 			"\t\tconst prop = fc.property(newStatus.filter(AccountService_setStatus_pre0), notify, reason, tags, memo, (newStatus, notify, reason, tags, memo) => {",
 			"\t\t\tAccountService.setStatus(newStatus, notify, reason, tags, memo);",
 			"\t\t\texpect(AccountService_setStatus_pre0(newStatus)).toBe(true);",
@@ -1011,8 +1112,8 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 			'\tit("OrderService.addItem.property-satisfies-0", () => {',
 			"\t\tconst sku = fc.string();",
 			"\t\tconst price = fc.integer();",
-			'\t\tconst OrderService_addItem_pre0 = (sku) => sku !== "";',
-			"\t\tconst OrderService_addItem_pre1 = (price) => isPositive(price);",
+			'\t\tconst OrderService_addItem_pre0 = (sku: string) => sku !== "";',
+			"\t\tconst OrderService_addItem_pre1 = (price: number) => isPositive(price);",
 			"\t\tconst prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {",
 			"\t\t\tnew OrderService().addItem(sku, price);",
 			"\t\t\texpect(OrderService_addItem_pre0(sku)).toBe(true);",
@@ -1030,8 +1131,8 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 			'\tit("OrderService.addItem.property-satisfies-1", () => {',
 			"\t\tconst sku = fc.string();",
 			"\t\tconst price = fc.integer();",
-			'\t\tconst OrderService_addItem_pre0 = (sku) => sku !== "";',
-			"\t\tconst OrderService_addItem_pre1 = (price) => isPositive(price);",
+			'\t\tconst OrderService_addItem_pre0 = (sku: string) => sku !== "";',
+			"\t\tconst OrderService_addItem_pre1 = (price: number) => isPositive(price);",
 			"\t\tconst prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {",
 			"\t\t\tnew OrderService().addItem(sku, price);",
 			"\t\t\texpect(OrderService_addItem_pre1(price)).toBe(true);",

@@ -477,7 +477,7 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165, 
 			'\t// traces: "AccountService.setStatus.post0"',
 			'\tit("AccountService.setStatus.property-satisfies-0", () => {',
 			"\t\tconst status = fc.string();",
-			"\t\tconst AccountService_setStatus_post0 = (status, newStatus) => status === newStatus;",
+			"\t\tconst AccountService_setStatus_post0 = (status: string, newStatus: string) => status === newStatus;",
 			"\t\tconst prop = fc.property(status, (status) => {",
 			"\t\t\tconst newStatus = status;",
 			"\t\t\tnew AccountService().setStatus(status, newStatus);",
@@ -499,7 +499,10 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165, 
 			'\t// traces: "AccountService.setStatus.post0"',
 			'\tit("AccountService.setStatus.property-satisfies-0", () => {',
 			"\t\tconst newStatus = fc.string();",
-			"\t\tconst AccountService_setStatus_post0 = (status, newStatus) => status === newStatus;",
+			// status is a MANIFEST FIELD (not an op param) — with no field model
+			// in this fixture its lambda param stays untyped; the op param
+			// newStatus is typed unconditionally (ADR-0021).
+			"\t\tconst AccountService_setStatus_post0 = (status, newStatus: string) => status === newStatus;",
 			"\t\tconst prop = fc.property(newStatus, (newStatus) => {",
 			"\t\t\tconst instance = new AccountService();",
 			"\t\t\tinstance.setStatus(newStatus);",
@@ -542,7 +545,7 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165, 
 		const block = [
 			'\t// traces: "OrderService.placeOrder.pre0"',
 			'\tit("OrderService.placeOrder.property-satisfies-0", () => {',
-			"\t\tconst OrderService_placeOrder_pre0 = (a, b) => a >= 0 && b >= 0 && a + b <= 100;",
+			"\t\tconst OrderService_placeOrder_pre0 = (a: number, b: number) => a >= 0 && b >= 0 && a + b <= 100;",
 			"\t\tconst prop = fc.property(",
 			"\t\t\tfc.record({ a: fc.integer({ min: 0, max: 100 }), b: fc.integer({ min: 0, max: 100 }) })",
 			"\t\t\t\t.filter(({ a, b }) => OrderService_placeOrder_pre0(a, b)),",
@@ -569,8 +572,8 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165, 
 		const pre0Block = [
 			'\t// traces: "OrderService.shipOrder.pre0"',
 			'\tit("OrderService.shipOrder.property-satisfies-0", () => {',
-			"\t\tconst OrderService_shipOrder_pre0 = (a, b) => a >= 0 && b >= 0 && a + b <= 100;",
-			"\t\tconst OrderService_shipOrder_pre1 = (b) => b >= 1 && b <= 100;",
+			"\t\tconst OrderService_shipOrder_pre0 = (a: number, b: number) => a >= 0 && b >= 0 && a + b <= 100;",
+			"\t\tconst OrderService_shipOrder_pre1 = (b: number) => b >= 1 && b <= 100;",
 			"\t\tconst prop = fc.property(",
 			"\t\t\tfc.record({ a: fc.integer({ min: 0, max: 99 }), b: fc.integer({ min: 1, max: 100 }) })",
 			"\t\t\t\t.filter(({ a, b }) => OrderService_shipOrder_pre0(a, b) && OrderService_shipOrder_pre1(b)),",
@@ -593,8 +596,8 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165, 
 		const pre1Block = [
 			'\t// traces: "OrderService.shipOrder.pre1"',
 			'\tit("OrderService.shipOrder.property-satisfies-1", () => {',
-			"\t\tconst OrderService_shipOrder_pre0 = (a, b) => a >= 0 && b >= 0 && a + b <= 100;",
-			"\t\tconst OrderService_shipOrder_pre1 = (b) => b >= 1 && b <= 100;",
+			"\t\tconst OrderService_shipOrder_pre0 = (a: number, b: number) => a >= 0 && b >= 0 && a + b <= 100;",
+			"\t\tconst OrderService_shipOrder_pre1 = (b: number) => b >= 1 && b <= 100;",
 			"\t\tconst prop = fc.property(",
 			"\t\t\tfc.record({ a: fc.integer({ min: 0, max: 99 }), b: fc.integer({ min: 1, max: 100 }) })",
 			"\t\t\t\t.filter(({ a, b }) => OrderService_shipOrder_pre0(a, b) && OrderService_shipOrder_pre1(b)),",
@@ -619,9 +622,13 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165, 
 
 		// Mirror target: NO independent arbitrary declaration.
 		expect(account?.content).not.toContain("const newStatus = fc.string();");
-		// Mirror target: never filtered, never a record key.
+		// Mirror target: never filtered, never a record key. (ADR-0021: the
+		// mirror oracle's op-param lambda params are now typed — `(status:
+		// string, newStatus: string)` — so the "newStatus:" substring appears
+		// in the type annotation; the record-key intent is covered by the
+		// fc.record( and newStatus.filter( pins above.)
 		expect(account?.content).not.toContain("newStatus.filter(");
-		expect(account?.content).not.toContain("newStatus:");
+		expect(account?.content).not.toContain("newStatus: fc.");
 		// Mirror-satisfied oracle: never a filter — the source passes bare.
 		expect(account?.content).not.toContain("status.filter(");
 		// The mirror block is not a record layout.
@@ -780,7 +787,7 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165, 
 		expect(merge?.content).toContain("const a = fc.string();");
 		expect(merge?.content).toContain("const b = fc.string();");
 		expect(merge?.content).toContain(
-			"const MergeService_merge_pre0 = (f, a) => f === a;",
+			"const MergeService_merge_pre0 = (f, a: string) => f === a;",
 		);
 		expect(merge?.content).toContain(
 			"const prop = fc.property(a, b, (a, b) => {",
@@ -799,7 +806,7 @@ describe("emitSuite vitest — joint-sampling property layouts (VERSAILLES-165, 
 			'"MergeService.merge.property-satisfies-1"',
 		);
 		expect(merge?.content).not.toContain(
-			"const MergeService_merge_pre1 = (a, b) => a === b;",
+			"const MergeService_merge_pre1 = (a: string, b: string) => a === b;",
 		);
 		expect(merge?.content).not.toContain("fc.record(");
 	});
