@@ -15,8 +15,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  *    - reads predicates from contracts.json (top-level `predicates` map)
  *    - does NOT read predicates.json (retired)
  *    - a workspace WITHOUT predicates.json validates clean
- *    - predicate entries carry: source, params, paramTypes, returnType,
- *      verifiedPure. sourceHash is DROPPED.
+ *    - predicate entries carry: source, params, paramTypes, returnType.
+ *      sourceHash is DROPPED. verifiedPure is DROPPED (ADR-0019) — any
+ *      declared predicate is referenceable; a legacy `verifiedPure` field is
+ *      silently ignored by the loader.
  *    - declaration name must be a valid IDENT
  *      (/^[A-Za-z_][A-Za-z0-9_]*$/, not a reserved keyword) — invalid names
  *      are a hard error (code: INVALID_PREDICATE_NAME).
@@ -28,8 +30,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * 2. Validator (src/core/validator.ts):
  *    - existing cross-check gate preserved: contract reference to a missing
  *      predicate → UNKNOWN_PREDICATE hard error.
- *    - contract reference to a predicate with verifiedPure !== true →
- *      UNVERIFIED_PREDICATE hard error.
+ *    - ADR-0019: there is NO verifiedPure purity gate. A predicate declared
+ *      WITHOUT verifiedPure (or with verifiedPure: false) is referenceable and
+ *      resolves — the UNVERIFIED_PREDICATE error tier is removed.
  *    - arity (PREDICATE_ARITY) and arg-type (PREDICATE_ARG_TYPE) checks keep
  *      working from the declared params.
  *
@@ -138,7 +141,6 @@ describe("declarative predicates — loader reads predicates from contracts.json
 					params: ["amount"],
 					paramTypes: ["number"],
 					returnType: "boolean",
-					verifiedPure: true,
 				},
 			},
 			contracts: {
@@ -181,19 +183,19 @@ describe("declarative predicates — loader reads predicates from contracts.json
 	});
 });
 
-// ── 2. Validator gate preserved: verifiedPure: false → UNVERIFIED_PREDICATE ─
+// ── 2. No purity gate: a predicate WITHOUT verifiedPure resolves (ADR-0019) ─
 
-describe("declarative predicates — validator gate preserved (verifiedPure: false → UNVERIFIED_PREDICATE)", () => {
-	it("contract referencing a predicate with verifiedPure: false (declared in contracts.json) → UNVERIFIED_PREDICATE hard error, exit 1", async () => {
-		const cwd = await freshWorkspaceNoPredicatesFile("dp-unverified");
+describe("declarative predicates — no verifiedPure purity gate (ADR-0019)", () => {
+	it("contract referencing a predicate declared WITHOUT verifiedPure (declared in contracts.json) → resolves, validate ok, exit 0", async () => {
+		const cwd = await freshWorkspaceNoPredicatesFile("dp-no-verified-pure");
 		await writeWorkspaceFile(cwd, "contracts.json", {
 			predicates: {
 				isPositive: {
+					// No verifiedPure field at all — still referenceable (ADR-0019).
 					source: "OrderService.isPositive",
 					params: ["amount"],
 					paramTypes: ["number"],
 					returnType: "boolean",
-					verifiedPure: false, // NOT verified
 				},
 			},
 			contracts: {
@@ -225,9 +227,11 @@ describe("declarative predicates — validator gate preserved (verifiedPure: fal
 
 		const result = await runCli(["validate"], { cwd });
 
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(1);
-		expect(result.errors).toContainEqual(
+		// No UNVERIFIED_PREDICATE error: the predicate resolves.
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+		expect(result.errors).not.toContainEqual(
 			expect.objectContaining({ code: "UNVERIFIED_PREDICATE" }),
 		);
 	});
@@ -246,7 +250,6 @@ describe("declarative predicates — missing predicate → UNKNOWN_PREDICATE", (
 					params: ["amount"],
 					paramTypes: ["number"],
 					returnType: "boolean",
-					verifiedPure: true,
 				},
 			},
 			contracts: {
@@ -299,7 +302,6 @@ describe("declarative predicates — resolve-or-warn (source unresolvable → wa
 					params: ["amount"],
 					paramTypes: ["number"],
 					returnType: "boolean",
-					verifiedPure: true,
 				},
 			},
 			contracts: {
@@ -360,7 +362,6 @@ describe("declarative predicates — invalid declaration name → INVALID_PREDIC
 						params: ["amount"],
 						paramTypes: ["number"],
 						returnType: "boolean",
-						verifiedPure: true,
 					},
 				},
 				contracts: {},
@@ -420,7 +421,6 @@ describe("declarative predicates — arity/type checks still work (PREDICATE_ARI
 					params: ["amount"],
 					paramTypes: ["number"],
 					returnType: "boolean",
-					verifiedPure: true,
 				},
 			},
 			contracts: {
@@ -475,7 +475,6 @@ describe("declarative predicates — arity/type checks still work (PREDICATE_ARI
 					params: ["amount"],
 					paramTypes: ["number"],
 					returnType: "boolean",
-					verifiedPure: true,
 				},
 			},
 			contracts: {
@@ -528,7 +527,6 @@ describe("declarative predicates — malformed predicate declaration → INVALID
 					params: ["amount"],
 					paramTypes: ["number"],
 					returnType: "boolean",
-					verifiedPure: true,
 				},
 			},
 			contracts: {},
@@ -549,16 +547,16 @@ describe("declarative predicates — malformed predicate declaration → INVALID
 		);
 	});
 
-	it("a predicate declaration missing `verifiedPure` → INVALID_SHAPE error on contracts.predicates.<name>.verifiedPure, exit 1", async () => {
-		const cwd = await freshWorkspaceNoPredicatesFile("dp-malformed-pure");
+	it("a predicate declaration WITHOUT `verifiedPure` loads fine — no INVALID_SHAPE on verifiedPure, exit 0 (ADR-0019)", async () => {
+		const cwd = await freshWorkspaceNoPredicatesFile("dp-no-purity-field");
 		await writeWorkspaceFile(cwd, "contracts.json", {
 			predicates: {
 				isPositive: {
+					// No verifiedPure field — the shape check no longer requires it.
 					source: "OrderService.isPositive",
 					params: ["amount"],
 					paramTypes: ["number"],
 					returnType: "boolean",
-					// `verifiedPure` is missing entirely.
 				},
 			},
 			contracts: {},
@@ -569,9 +567,10 @@ describe("declarative predicates — malformed predicate declaration → INVALID
 
 		const result = await runCli(["validate"], { cwd });
 
-		expect(result.ok).toBe(false);
-		expect(result.exitCode).toBe(1);
-		expect(result.errors).toContainEqual(
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+		expect(result.errors).not.toContainEqual(
 			expect.objectContaining({
 				code: "INVALID_SHAPE",
 				field: "contracts.predicates.isPositive.verifiedPure",

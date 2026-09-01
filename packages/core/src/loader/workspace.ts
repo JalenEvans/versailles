@@ -70,7 +70,8 @@ export type ContractsFile = {
 	/**
 	 * ADR-0013 (Phase 3): predicates are now declared inline in contracts.json's
 	 * top-level `predicates` map. Each entry carries: source, params, paramTypes,
-	 * returnType, verifiedPure. The sourceHash field is dropped.
+	 * returnType. The sourceHash field is dropped (ADR-0013); verifiedPure is
+	 * dropped (ADR-0019) — a legacy verifiedPure field is silently ignored.
 	 */
 	predicates?: Record<
 		string,
@@ -79,7 +80,6 @@ export type ContractsFile = {
 			params: string[];
 			paramTypes: string[];
 			returnType: string;
-			verifiedPure: boolean;
 		}
 	>;
 	contracts: Record<string, ComponentContract>;
@@ -122,7 +122,6 @@ export type PredicatesFile = {
 			paramTypes: string[];
 			returnType: string;
 			sourceRef: string;
-			verifiedPure: boolean;
 		}
 	>;
 };
@@ -504,7 +503,10 @@ function validateManifestsShape(
  * - params (array of strings)
  * - paramTypes (array of strings)
  * - returnType (string)
- * - verifiedPure (boolean)
+ *
+ * ADR-0019: verifiedPure is no longer part of the schema — it is not
+ * required, not checked, and silently ignored when a legacy declaration
+ * still carries it.
  */
 function validatePredicatesShape(
 	raw: unknown,
@@ -532,7 +534,8 @@ function validatePredicatesShape(
 	}
 
 	// Per-entry shape check: each predicate declaration must have source (string),
-	// params (array), paramTypes (array), returnType (string), verifiedPure (boolean).
+	// params (array), paramTypes (array), returnType (string). verifiedPure is
+	// not required and not checked (ADR-0019).
 	let ok = true;
 	for (const [predicateName, entry] of Object.entries(raw.predicates)) {
 		if (!isRecord(entry)) {
@@ -568,13 +571,6 @@ function validatePredicatesShape(
 			pushShapeError(
 				`contracts.predicates.${predicateName}.returnType`,
 				`Predicate "${predicateName}" must have a string "returnType" field`,
-			);
-			ok = false;
-		}
-		if (typeof entry.verifiedPure !== "boolean") {
-			pushShapeError(
-				`contracts.predicates.${predicateName}.verifiedPure`,
-				`Predicate "${predicateName}" must have a boolean "verifiedPure" field`,
 			);
 			ok = false;
 		}
@@ -742,7 +738,6 @@ export async function loadWorkspace(
 					paramTypes: string[];
 					returnType: string;
 					sourceRef: string;
-					verifiedPure: boolean;
 				}
 			> = {};
 
@@ -769,20 +764,16 @@ export async function loadWorkspace(
 						: [];
 					const returnType =
 						typeof entry.returnType === "string" ? entry.returnType : "";
-					const verifiedPure =
-						typeof entry.verifiedPure === "boolean"
-							? entry.verifiedPure
-							: false;
 
 					// ADR-0013: sourceHash is dropped from the declaration;
 					// ADR-0018 removes the vestige from the PredicatesFile
-					// shape too.
+					// shape too. ADR-0019: verifiedPure is dropped — a legacy
+					// field is read but not carried into the normalized entry.
 					predicateMap[name] = {
 						params,
 						paramTypes,
 						returnType,
 						sourceRef: source,
-						verifiedPure,
 					};
 
 					// Resolve-or-warn: attempt to resolve the source under

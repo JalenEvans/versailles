@@ -246,14 +246,12 @@ function predicatesFixture(): PredicatesFile {
 				paramTypes: ["number"],
 				returnType: "boolean",
 				sourceRef: "Num.isPositive",
-				verifiedPure: true,
 			},
 			isNonEmpty: {
 				params: ["items"],
 				paramTypes: ["list<number>"],
 				returnType: "boolean",
 				sourceRef: "List.isNonEmpty",
-				verifiedPure: true,
 			},
 		},
 	};
@@ -462,7 +460,6 @@ function degeneratePredicateContext(): VersaillesContext {
 					paramTypes: ["number"],
 					returnType: "boolean",
 					sourceRef: "Num.isAnyNumber",
-					verifiedPure: true,
 				},
 			},
 		},

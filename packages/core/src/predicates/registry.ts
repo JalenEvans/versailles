@@ -4,8 +4,9 @@
  * logic: predicate-name validation against the §4.1 IDENT rule and the §3.4
  * entry shape. Framework-agnostic: no CLI surface, no file IO, no TS static
  * analysis (that lives in src/predicates/source.ts through the extractor
- * seam). verifiedPure is a human-only gate (ADR-0006, build-spec §14 default)
- * — no code path here ever auto-sets it.
+ * seam). No purity gate (ADR-0019): the declaration itself — sourceRef
+ * resolving against real source on every validate run — is the attestation;
+ * purity is not a registry concern.
  *
  * ADR-0013 (Phase 3): listUnverified is removed — the remind-unverified CLI
  * command is retired.
@@ -17,7 +18,6 @@ export type PredicateEntry = {
 	paramTypes: string[];
 	returnType: string;
 	sourceRef: string;
-	verifiedPure: boolean;
 };
 
 /**

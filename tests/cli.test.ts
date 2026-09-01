@@ -1073,7 +1073,6 @@ describe("runCli generate — non-silent unplannable predicate warnings (VERSAIL
 				params: ["items"],
 				paramTypes: ["list<number>"],
 				returnType: "boolean",
-				verifiedPure: true,
 			},
 		};
 		await writeWorkspaceFile(cwd, "contracts.json", contracts);

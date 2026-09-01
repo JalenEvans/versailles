@@ -147,7 +147,6 @@ function orderServicePredicates(): Record<string, unknown> {
 			params: ["value"],
 			paramTypes: ["number"],
 			returnType: "boolean",
-			verifiedPure: true,
 		},
 	};
 }
@@ -272,14 +271,12 @@ function orderServiceMultiPredicateDeclarations(): Record<string, unknown> {
 			params: ["value"],
 			paramTypes: ["string"],
 			returnType: "boolean",
-			verifiedPure: true,
 		},
 		isPositive: {
 			source: "Math.isPositive",
 			params: ["value"],
 			paramTypes: ["number"],
 			returnType: "boolean",
-			verifiedPure: true,
 		},
 	};
 }
@@ -295,14 +292,12 @@ function orderServicePredicatesWithUnused(): Record<string, unknown> {
 			params: ["value"],
 			paramTypes: ["number"],
 			returnType: "boolean",
-			verifiedPure: true,
 		},
 		isPositive: {
 			source: "Math.isPositive",
 			params: ["value"],
 			paramTypes: ["number"],
 			returnType: "boolean",
-			verifiedPure: true,
 		},
 	};
 }

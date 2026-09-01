@@ -168,7 +168,6 @@ export class OrderService {
 							params: ["amount"],
 							paramTypes: ["number"],
 							returnType: "boolean",
-							verifiedPure: true,
 						},
 					},
 					contracts: {
