@@ -367,8 +367,20 @@ describe("extractManifests — basic typeRef resolution (build-spec §3.3)", () 
 // ── Describe 2: computeSourceHash structural hash (build-spec §7) ─────────
 
 const HASH_FIELDS: FieldEntry[] = [
-	{ name: "balance", typeRef: "number", confidence: "high", access: "public", readonly: false },
-	{ name: "owner", typeRef: "string", confidence: "high", access: "public", readonly: false },
+	{
+		name: "balance",
+		typeRef: "number",
+		confidence: "high",
+		access: "public",
+		readonly: false,
+	},
+	{
+		name: "owner",
+		typeRef: "string",
+		confidence: "high",
+		access: "public",
+		readonly: false,
+	},
 ];
 
 describe("computeSourceHash — structural hash over sorted field name+type pairs (build-spec §7)", () => {
@@ -399,7 +411,13 @@ describe("computeSourceHash — structural hash over sorted field name+type pair
 	it("changes when a field is added", () => {
 		const extended = [
 			...HASH_FIELDS,
-			{ name: "tags", typeRef: "list<string>", confidence: "high", access: "public", readonly: false },
+			{
+				name: "tags",
+				typeRef: "list<string>",
+				confidence: "high",
+				access: "public",
+				readonly: false,
+			},
 		];
 
 		expect(computeSourceHash(HASH_FIELDS)).not.toBe(
