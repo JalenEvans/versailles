@@ -117,13 +117,13 @@ Emission is **total** (ADR-0021): for every valid workspace, the emitted suite t
 
 - **Given** a valid workspace and the documented baseline strict tsconfig (the example ships `strict: true` + `allowImportingTsExtensions`, and its CI gate runs `tsc --noEmit` over the generated output)
 - **When** the generator emits a test suite
-- **Then** the emitted output type-checks under that baseline tsconfig, **or** the emitter surfaces a non-silent `EMISSION_UNRENDERABLE` warning (same tier as `UNPLANNABLE_OPERATION` / `PROPERTY_UNPLANNABLE` — `CliResult.warnings`, exit 0) — silently type-broken output never ships (ADR-0021)
+- **Then** the emitted output type-checks under that baseline tsconfig, **or** the emitter surfaces a non-silent `EMISSION_UNRENDERABLE` warning (same tier as `UNPLANNABLE_OPERATION` / `PROPERTY_UNPLANNABLE` — `CliResult.warnings`, exit 0) — silently type-broken output never ships. The warning covers both an unrenderable field type and an unrenderable **op-param** typeRef (e.g. `list<Order>` — a component-typed container inner) that no renderable TS form exists for (ADR-0021, VERSAILLES-175)
 
 ### PBT oracle lambdas carry explicit param types
 
-- **Given** a property block whose oracle lambdas are codegen'd from contract clauses (e.g. `sku != ""`, `isPositive(price)`, an invariant `balance >= 0`)
+- **Given** a property block whose oracle lambdas are codegen'd from contract clauses (e.g. `sku != ""`, `isPositive(price)`, an invariant `balance >= 0`, a container op-param `list<string>`/`optional<number>`)
 - **When** the emitter renders the block
-- **Then** every oracle lambda param carries an explicit type annotation derived from the contract param type or manifest field typeRef — `(sku: string) => sku !== ""`, `(price: number) => isPositive(price)`, `(balance: number) => balance >= 0` — never an implicit `any` (ADR-0021)
+- **Then** every oracle lambda param carries an explicit type annotation derived from the contract param type or manifest field typeRef — `(sku: string) => sku !== ""`, `(price: number) => isPositive(price)`, `(balance: number) => balance >= 0`, with container op-param typeRefs rendering recursively (`(tags: string[]) => isNonEmpty(tags)`, `(count: number | undefined) => isNonNegative(count)`) — never an implicit `any`; an op-param with no renderable TS form even after the container extension (e.g. `list<Order>`) surfaces `EMISSION_UNRENDERABLE` and its oracles are omitted from the block (ADR-0021, VERSAILLES-175)
 
 ### Non-public fields are reached through a deliberate cast; public fields are never cast
 
@@ -250,6 +250,7 @@ Emission is **total** (ADR-0021): for every valid workspace, the emitted suite t
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-09-01 | general-manager | W1 emitter follow-up (VERSAILLES-175): container op-param typeRefs render recursively on oracle lambda params (`list<X>` → `X[]`, `optional<X>` → `X | undefined`, e.g. `(tags: string[]) => ...`), and an op-param with no renderable TS form even after the container extension (e.g. `list<Order>`) surfaces `EMISSION_UNRENDERABLE` with its oracles omitted from the block |
 | 2026-09-01 | general-manager | ADR-0021 emission soundness + ADR-0020 planner split reconciled (VERSAILLES-182): totality of emission — generated output type-checks under the documented baseline strict tsconfig (`strict: true` + `allowImportingTsExtensions`) or a non-silent `EMISSION_UNRENDERABLE` warning surfaces, never silently type-broken output; PBT oracle lambdas carry explicit param types from contract/manifest types (`(sku: string) => ...`), never implicit `any`; non-public fields are reached via the deliberate, documented `(instance as any).<field>` cast decided from manifest `fieldAccess`/`fieldReadonly` — public fields never cast; planner split into responsibility-bounded modules (`planner`, `concrete-cases`, `input-synthesis`, `clause-analysis`, `evaluator`, `property-planning`, `oracle`) |
 | 2026-08-29 | general-manager | Mirrored the FIELD-BOUND contract delta (VERSAILLES-165 final implementation, Center B1/B2 + W1 + Fix-1/Fix-2): new FIELD-BOUND scenario — a bothSideFieldRef equality with a manifest-FIELD operand (`status == newStatus`) is planned, never unplannable, rendering op-params only with the field mapped to `instance.<field>`; mirror scenario example corrected to param-param (`fromBalance == toBalance`); `PROPERTY_UNPLANNABLE` scenarios extended with field-operand couplings, inverted derived bounds, zero-param field-field equalities, and the field-referencing sibling-guard rule |
 | 2026-08-11 | associate-head-coach | Initial draft from build-spec §9, §2; ADR-0002/0007/0008/0009/0010 |

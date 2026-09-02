@@ -620,7 +620,14 @@ reference.
   (precondition-violation, expected-rejection, ADR-0007).
 - **Typed oracle lambdas** — every oracle lambda param carries an explicit type annotation
   derived from the contract param type or manifest field typeRef — `(sku: string) => sku !== ""`,
-  `(price: number) => isPositive(price)` — never an implicit `any` (ADR-0021).
+  `(price: number) => isPositive(price)` — never an implicit `any` (ADR-0021). Container
+  typeRefs render **recursively** on op-param lambda params: `list<X>` → `X[]`, `optional<X>` →
+  `X | undefined` (e.g. `(tags: string[]) => isNonEmpty(tags)`, `(count: number | undefined) =>
+  isNonNegative(count)`). An op-param whose typeRef still has no renderable TS form even after
+  the container extension (e.g. `list<Order>` — a component-typed inner) is covered by the same
+  `EMISSION_UNRENDERABLE` non-silent tier as an unrenderable field type: the warning names the
+  op-param as `<component>.<operation>.<param>` and oracles referencing it are omitted from the
+  emitted property block — never a bare untyped lambda (VERSAILLES-175).
 - **Strategy selection summary** — property blocks are planned per case kind:
 
   | Case kind | Arbitrary strategy | Oracle |
@@ -836,6 +843,7 @@ layout above.
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-09-01 | general-manager | W1 emitter follow-up (VERSAILLES-175): §9.6 typed oracle lambdas — container op-param typeRefs render recursively (list<X> → X[], optional<X> → X | undefined) on op-param lambda params, and an op-param with no renderable TS form even after the container extension (e.g. list<Order>) is covered by the EMISSION_UNRENDERABLE tier (warning names <component>.<operation>.<param>, oracles omitted from the block — never a bare untyped lambda) |
 | 2026-09-01 | general-manager | Emission-soundness reconciliation (ADR-0021, VERSAILLES-182): §3.3 manifests.json schema gained `fieldAccess` (public/protected/private) + `fieldReadonly` (boolean) with permissive legacy defaults; §9 new "Emission is total" paragraph — output type-checks under the documented baseline strict tsconfig (strict + allowImportingTsExtensions) or a non-silent EMISSION_UNRENDERABLE warning; §9.4 non-public field access renders as the deliberate `(instance as any).<field>` cast decided from manifest access data, public fields never cast; §9.6 typed oracle lambdas (`(sku: string) => ...`, never implicit any) and FIELD-BOUND cast note; §3.4 predicates.json schema confirmed post-ADR-0019 (declaration is the attestation, no purity gate) |
 | 2026-08-30 | general-manager | Phase 2 sweep follow-through (VERSAILLES-168): dropped the legacy `"version": "1.0"` envelope from the §3.2/§3.3/§3.4 example snippets, reconciled the §2 layout comment and §6 loader responsibility #2 with ADR-0018 (no version gate; the loader no longer checks versions), and removed `VERSION_MISMATCH` from the §6 LoaderError code set; seed-literal grammar-version references (§3.1 `propertyBased.seed`, §9.6) remain deferred |
 | 2026-08-29 | general-manager | §9.6 FIELD-BOUND layout (VERSAILLES-165 final rounds, Center B1/B2 + W1 + Fix-1/Fix-2): the sampling strategy becomes THREE joint-sampling strategies — the equality-mirror, the record + bounded filter, and the NEW FIELD-BOUND layout for a bothSideFieldRef equality with a manifest-FIELD operand (`f == p`, e.g. `status == newStatus`): op-params only, component instance bound, the field mapped to `instance.<field>` in the assertion, no mirror/record/filter; a field-referencing multi-param guard in the guard set makes only the descriptor whose OWN clause is the field-bound equality plannable (siblings are PROPERTY_UNPLANNABLE); `PROPERTY_UNPLANNABLE` now also covers a coupling referencing a manifest-field operand (Center B2), a coupling whose propagation yields inverted bounds (unsatisfiable region), and a zero-param field-field equality (`f1 == f2`) — the FIELD-BOUND layout has no arbitrary to sample — alongside the existing non-mirrorable equality, equality-of-sums, unboundable couplings, unrenderable oracles, and component-typed params |

@@ -43,7 +43,7 @@ Full schema: [build-spec §3.1](../build-spec.md#31-configjson).
 
 ## What generated property blocks look like
 
-The generator picks a sampling strategy per clause automatically — you never write these by hand. There are four shipped layouts (all shown trimmed; the full rules are [build-spec §9.6](../build-spec.md#96-seeded-pbt-emission-opt-in-adr-0017)). Note each block carries a §9.3 traceability comment and a pinned `fc.assert(prop, { seed, numRuns })`, and every oracle lambda param carries an explicit type from the contract/manifest — `(sku: string) => sku !== ""` — never an implicit `any` (the emission-soundness guarantee, [ADR-0021](../decisions/0021-totality-of-emission.md)).
+The generator picks a sampling strategy per clause automatically — you never write these by hand. There are four shipped layouts (all shown trimmed; the full rules are [build-spec §9.6](../build-spec.md#96-seeded-pbt-emission-opt-in-adr-0017)). Note each block carries a §9.3 traceability comment and a pinned `fc.assert(prop, { seed, numRuns })`, and every oracle lambda param carries an explicit type from the contract/manifest — `(sku: string) => sku !== ""` — never an implicit `any` (the emission-soundness guarantee, [ADR-0021](../decisions/0021-totality-of-emission.md)). Container op-param typeRefs render recursively: `list<X>` → `X[]` (e.g. `(tags: string[]) => isNonEmpty(tags)`), `optional<X>` → `X | undefined` (e.g. `(count: number | undefined) => isNonNegative(count)`). An op-param with no renderable TS form even then (e.g. `list<Order>`) surfaces the non-silent `EMISSION_UNRENDERABLE` warning and its oracles are omitted from the block.
 
 ### 1. Per-param filter — single-param oracles
 
