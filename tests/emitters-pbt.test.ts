@@ -10,6 +10,7 @@ import type { ClauseKind, Node } from "../packages/core/src/core/parser.js";
 import type {
 	ContractClause,
 	ContractsFile,
+	LoaderWarning,
 	ManifestsFile,
 	PredicatesFile,
 	VersaillesContext,
@@ -1258,6 +1259,249 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 				expect(file.content).not.toContain("import { isPositive }");
 			}
 		}
+	});
+});
+
+// ── ADR-0021 container-typed op-param oracle lambdas (VERSAILLES-175) ────────
+// The totality-of-emission guarantee (ADR-0021) says a generated oracle lambda
+// carries an explicit param type OR a non-silent EMISSION_UNRENDERABLE warning
+// surfaces — never silently type-broken output. The Center review found a hole:
+// typeRefToTs only rendered number|string|boolean|enum<>, so a container-typed
+// op-param (list<string>, optional<number>) in a single-param predicateCall
+// precondition emitted a SILENTLY UNTYPED lambda — `(tags) => isNonEmpty(tags)`
+// (TS7006 under strict) — with NO warning (the EMISSION_UNRENDERABLE loop only
+// covered fieldTypes, never op-params). The example workspace only uses
+// number/string params, so nothing caught it.
+//
+// The fix these pins demand: typeRefToTs renders containers (list<X> → X[],
+// optional<X> → X | undefined, recursing into the inner typeRef), and an
+// op-param typeRef with STILL no renderable form after the extension (e.g.
+// list<Order> — a component-typed inner, which the emitter cannot type) must
+// surface EMISSION_UNRENDERABLE on the same non-blocking tier as the
+// field-model path (tests/emitters.test.ts) — never a silent untyped lambda.
+//
+// The fixture is a minimal self-contained CartService (separate from the
+// heavily-pinned pbtSuite/pbtPlan) so these pins do not disturb the existing
+// byte-for-byte block pins.
+
+const CART = "CartService";
+
+const CART_METHODS: EmitOptions["methods"] = {
+	[CART]: {
+		applyTags: { static: false, params: ["tags"], returnType: "void" },
+		updateCount: { static: false, params: ["count"], returnType: "void" },
+		applyOrder: { static: false, params: ["order"], returnType: "void" },
+	},
+};
+
+const CART_PREDICATES: Record<string, string> = {
+	isNonEmpty: "../../src/CartService.js",
+	isNonNegative: "../../src/CartService.js",
+};
+
+/** A minimal PlannedSuite whose three operations carry the container-typed op-params. */
+function cartSuite(): PlannedSuite {
+	return {
+		clauseIds: [
+			`${CART}.applyTags.pre0`,
+			`${CART}.updateCount.pre0`,
+			`${CART}.applyOrder.pre0`,
+		],
+		operations: [
+			{ component: CART, operation: "applyTags", cases: [] },
+			{ component: CART, operation: "updateCount", cases: [] },
+			{ component: CART, operation: "applyOrder", cases: [] },
+		],
+		invariantCases: [],
+	};
+}
+
+/**
+ * The property plan: three single-param predicateCall satisfies descriptors —
+ * one list<string> op-param, one optional<number> op-param, and one list<Order>
+ * op-param (a component-typed inner with no renderable TS form even after the
+ * container extension — the EMISSION_UNRENDERABLE trigger).
+ */
+function cartPlan(): PropertyPlan {
+	return {
+		descriptors: [
+			{
+				id: `${CART}.applyTags.property-satisfies-0`,
+				component: CART,
+				operation: "applyTags",
+				params: [
+					{
+						param: "tags",
+						typeRef: "list<string>",
+						kind: "string",
+						default: [],
+					},
+				],
+				clauses: [
+					{
+						clauseId: `${CART}.applyTags.pre0`,
+						code: "(tags) => isNonEmpty(tags)",
+					},
+				],
+				outcome: "satisfies",
+				traces: [`${CART}.applyTags.pre0`],
+				seed: 303,
+			},
+			{
+				id: `${CART}.updateCount.property-satisfies-0`,
+				component: CART,
+				operation: "updateCount",
+				params: [
+					{
+						param: "count",
+						typeRef: "optional<number>",
+						kind: "number",
+						default: 0,
+					},
+				],
+				clauses: [
+					{
+						clauseId: `${CART}.updateCount.pre0`,
+						code: "(count) => isNonNegative(count)",
+					},
+				],
+				outcome: "satisfies",
+				traces: [`${CART}.updateCount.pre0`],
+				seed: 404,
+			},
+			{
+				id: `${CART}.applyOrder.property-satisfies-0`,
+				component: CART,
+				operation: "applyOrder",
+				params: [
+					{
+						param: "order",
+						typeRef: "list<Order>",
+						kind: "string",
+						default: [],
+					},
+				],
+				clauses: [
+					{
+						clauseId: `${CART}.applyOrder.pre0`,
+						code: "(order) => isNonEmpty(order)",
+					},
+				],
+				outcome: "satisfies",
+				traces: [`${CART}.applyOrder.pre0`],
+				seed: 505,
+			},
+		],
+		strategies: {},
+		warnings: [],
+	};
+}
+
+function cartOptions(overrides: Partial<EmitOptions> = {}): EmitOptions {
+	return {
+		methods: CART_METHODS,
+		predicates: CART_PREDICATES,
+		propertyPlan: cartPlan(),
+		propertyNumRuns: 100,
+		...overrides,
+	};
+}
+
+function emitCart(overrides: Partial<EmitOptions> = {}) {
+	return emitSuite(cartSuite(), "vitest", cartOptions(overrides));
+}
+
+/**
+ * A cart plan reduced to a single descriptor (by id) — each VERSAILLES-175
+ * pin emits ONLY the descriptor it tests, so the `warnings === []` assertions
+ * in the renderable-container tests are coherent (they must not see the
+ * applyOrder EMISSION_UNRENDERABLE warning, which only the applyOrder test
+ * asserts). No test emits the full three-descriptor cartPlan() directly — it
+ * survives only as the overridden default inside cartOptions().
+ */
+function cartPlanFor(descriptorId: string): PropertyPlan {
+	return {
+		...cartPlan(),
+		descriptors: cartPlan().descriptors.filter((d) => d.id === descriptorId),
+	};
+}
+
+function cartFile(files: ReturnType<typeof emitSuite>) {
+	return files.find((file) => file.path.endsWith("CartService.test.ts"));
+}
+
+describe("emitSuite vitest — container-typed op-param oracle lambdas (VERSAILLES-175)", () => {
+	it("renders a list<string> op-param predicateCall lambda TYPED — (tags: string[]) => isNonEmpty(tags), never the bare (tags) => form", () => {
+		const warnings: LoaderWarning[] = [];
+		const files = emitCart({
+			warnings,
+			propertyPlan: cartPlanFor(`${CART}.applyTags.property-satisfies-0`),
+		});
+		const cart = cartFile(files);
+		expect(cart).toBeDefined();
+
+		// The container typeRef renders to the TS array type on the op-param
+		// lambda parameter (ADR-0021: never the silently-untyped TS7006 form).
+		expect(cart?.content).toContain(
+			"\t\tconst CartService_applyTags_pre0 = (tags: string[]) => isNonEmpty(tags);",
+		);
+		// The silently-untyped form must never render.
+		expect(cart?.content).not.toContain(
+			"const CartService_applyTags_pre0 = (tags) => isNonEmpty(tags);",
+		);
+		// A renderable container is not an unrenderable shape — no warning.
+		expect(warnings).toEqual([]);
+	});
+
+	it("renders an optional<number> op-param predicateCall lambda TYPED — (count: number | undefined) => isNonNegative(count)", () => {
+		const warnings: LoaderWarning[] = [];
+		const files = emitCart({
+			warnings,
+			propertyPlan: cartPlanFor(`${CART}.updateCount.property-satisfies-0`),
+		});
+		const cart = cartFile(files);
+		expect(cart).toBeDefined();
+
+		// optional<X> renders the TS union with undefined on the op-param lambda
+		// parameter — the standard optional-type rendering (no established
+		// emitted-optional convention exists in the codebase; X | undefined is
+		// the TS-native form the finding pins).
+		expect(cart?.content).toContain(
+			"\t\tconst CartService_updateCount_pre0 = (count: number | undefined) => isNonNegative(count);",
+		);
+		// The silently-untyped form must never render.
+		expect(cart?.content).not.toContain(
+			"const CartService_updateCount_pre0 = (count) => isNonNegative(count);",
+		);
+		expect(warnings).toEqual([]);
+	});
+
+	it("surfaces EMISSION_UNRENDERABLE for an op-param typeRef with no renderable TS form (list<Order>) — never a silent untyped lambda", () => {
+		const warnings: LoaderWarning[] = [];
+		const files = emitCart({
+			warnings,
+			propertyPlan: cartPlanFor(`${CART}.applyOrder.property-satisfies-0`),
+		});
+		const cart = cartFile(files);
+		expect(cart).toBeDefined();
+
+		// The warning tier is non-blocking — files still emit (exit 0), but the
+		// unrenderable op-param shape is surfaced, never silent (the same
+		// { code, field, detail } LoaderWarning shape as the field-model path in
+		// tests/emitters.test.ts). The field identifies the op-param as
+		// <component>.<operation>.<param>.
+		expect(files.length).toBeGreaterThan(0);
+		expect(warnings).toContainEqual(
+			expect.objectContaining({
+				code: "EMISSION_UNRENDERABLE",
+				field: "CartService.applyOrder.order",
+			}),
+		);
+		// NO silently-untyped lambda may be emitted for the unrenderable
+		// op-param (the TS7006 bug shape).
+		expect(cart?.content).not.toContain(
+			"const CartService_applyOrder_pre0 = (order) => isNonEmpty(order);",
+		);
 	});
 });
 

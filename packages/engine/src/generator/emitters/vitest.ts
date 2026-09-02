@@ -191,6 +191,26 @@ function renderComponentFile(
 	const componentDescriptors = (propertyPlan?.descriptors ?? []).filter(
 		(descriptor) => descriptor.component === component,
 	);
+	// ADR-0021 (VERSAILLES-175): the op-param coverage of the same non-silent
+	// warning path — a descriptor op-param whose typeRef the emitter cannot
+	// render to a TS type even after the container extension (e.g. list<Order>)
+	// surfaces EMISSION_UNRENDERABLE on the same non-blocking tier as the
+	// field-model path above — never a silent untyped op-param oracle lambda
+	// (the TS7006 bug). The property block omits oracles referencing such a
+	// param (renderPropertyBlock's hasUnrenderableOpParam filter), so the bare
+	// lambda never renders; the warning names the op-param as
+	// <component>.<operation>.<param>.
+	for (const descriptor of componentDescriptors) {
+		for (const spec of descriptor.params) {
+			if (typeRefToTs(spec.typeRef) === null) {
+				warnings?.push({
+					code: "EMISSION_UNRENDERABLE",
+					field: `${descriptor.component}.${descriptor.operation}.${spec.param}`,
+					detail: `Op-param type "${spec.typeRef}" for ${descriptor.component}.${descriptor.operation}.${spec.param} has no renderable TS form — the emitter cannot type oracle lambdas referencing it type-safely; such oracles are omitted from emitted property blocks`,
+				});
+			}
+		}
+	}
 	if (componentDescriptors.length > 0) {
 		// GAP 2 (build-spec §9.6): every predicate the component's property
 		// clauses reference is imported after the component import, before
@@ -392,9 +412,14 @@ function fieldRead(
 /**
  * Maps a source typeRef to the TS type the emitter annotates on an oracle
  * lambda parameter (ADR-0021): number → number, string → string, boolean →
- * boolean, enum<...> → string. Returns null for any other typeRef — the
- * emitter cannot render it as a lambda param type, which is the
- * EMISSION_UNRENDERABLE trigger when the ref came from the field model.
+ * boolean, enum<...> → string, and containers (VERSAILLES-175) render
+ * RECURSIVELY — list<X> → `X[]`, optional<X> → `X | undefined` (the inner
+ * typeRef is recursed, e.g. list<string> → string[], optional<number> →
+ * number | undefined, list<list<string>> → string[][]). Returns null for any
+ * other typeRef — including a container whose INNER typeRef is itself
+ * unrenderable (e.g. list<Order> — a component-typed inner the emitter cannot
+ * type) — which is the EMISSION_UNRENDERABLE trigger when the ref came from
+ * the field model or a descriptor op-param.
  */
 function typeRefToTs(typeRef: string): string | null {
 	if (typeRef === "number" || typeRef === "string" || typeRef === "boolean") {
@@ -402,6 +427,14 @@ function typeRefToTs(typeRef: string): string | null {
 	}
 	if (typeRef.startsWith("enum<")) {
 		return "string";
+	}
+	if (typeRef.startsWith("list<") && typeRef.endsWith(">")) {
+		const inner = typeRefToTs(typeRef.slice("list<".length, -1).trim());
+		return inner === null ? null : `${inner}[]`;
+	}
+	if (typeRef.startsWith("optional<") && typeRef.endsWith(">")) {
+		const inner = typeRefToTs(typeRef.slice("optional<".length, -1).trim());
+		return inner === null ? null : `${inner} | undefined`;
 	}
 	return null;
 }
@@ -466,6 +499,44 @@ function renderOracleCode(
 	// `") => "` is 5 chars — slice past the whole arrow so the body keeps its
 	// exact leading space (a +4 slice would leave a doubled space).
 	return `(${typed.join(", ")}) => ${code.slice(arrow + 5)}`;
+}
+
+/**
+ * VERSAILLES-175: true when an oracle's lambda parameter list includes a
+ * CONTRACT OP PARAM (a descriptor param) whose typeRef has no renderable TS
+ * form even after the container extension (e.g. list<Order> — a
+ * component-typed inner the emitter cannot type). Embedding such an oracle
+ * would force a bare untyped lambda parameter (the TS7006 bug) — the
+ * totality-of-emission discipline (ADR-0021) instead DROPS the oracle from the
+ * block (its filter/assert never render) and surfaces EMISSION_UNRENDERABLE in
+ * renderComponentFile. FIELD params never trigger this: legacy keeps them
+ * untyped by design (the byte-identical guarantee, pinned in
+ * tests/emitters-pbt.test.ts as `(balance) => balance >= 0`).
+ */
+function hasUnrenderableOpParam(
+	code: string,
+	descriptor: PropertyDescriptor,
+): boolean {
+	return oracleParamsOf(code).some((param) => {
+		const spec = descriptor.params.find((s) => s.param === param);
+		return spec !== undefined && typeRefToTs(spec.typeRef) === null;
+	});
+}
+
+/**
+ * The descriptor's own asserted clauses that can be embedded type-safely
+ * (VERSAILLES-175): a clause whose oracle references an unrenderable op-param
+ * is dropped from the assertion set — never embedded as a bare untyped lambda
+ * (the block still emits; the EMISSION_UNRENDERABLE warning already surfaced
+ * the shape).
+ */
+function assertableClauses(descriptor: PropertyDescriptor) {
+	return descriptor.clauses
+		.filter((clause) => !hasUnrenderableOpParam(clause.code, descriptor))
+		.map((clause) => ({
+			constName: sanitizeId(clause.clauseId),
+			oracleParams: oracleParamsOf(clause.code),
+		}));
 }
 
 function renderCase(
@@ -763,12 +834,22 @@ function renderPropertyBlock(
 	const guardOracles: GuardOracle[] = [];
 	for (const sibling of guardDescriptors) {
 		for (const clause of sibling.clauses) {
-			guardOracles.push({
+			const oracle: GuardOracle = {
 				constName: sanitizeId(clause.clauseId),
 				clauseId: clause.clauseId,
 				code: clause.code,
 				oracleParams: oracleParamsOf(clause.code),
-			});
+			};
+			// VERSAILLES-175: an oracle referencing an op-param whose typeRef
+			// has no renderable TS form (e.g. list<Order>) cannot be embedded
+			// type-safely — dropping it here (its filter/assert never render)
+			// is the non-silent alternative to a bare untyped lambda (the
+			// TS7006 bug); the EMISSION_UNRENDERABLE warning for the op-param
+			// fires in renderComponentFile.
+			if (hasUnrenderableOpParam(oracle.code, descriptor)) {
+				continue;
+			}
+			guardOracles.push(oracle);
 		}
 	}
 
@@ -852,10 +933,7 @@ function renderPropertyBlock(
 				lines.push(`\t\t\tconst ${spec.param} = ${spec.mirrorOf};`);
 			}
 		}
-		const asserted = descriptor.clauses.map((clause) => ({
-			constName: sanitizeId(clause.clauseId),
-			oracleParams: oracleParamsOf(clause.code),
-		}));
+		const asserted = assertableClauses(descriptor);
 		const call = renderPropertyCall(descriptor, methods, false);
 		lines.push(`\t\t\t${call};`);
 		// Oracle assertion: mirror targets are in-scope locals — pass oracle
@@ -909,10 +987,7 @@ function renderPropertyBlock(
 		lines.push(`\t\t\t${call};`);
 		// Oracle assertion: params stay as callback locals; the field param is
 		// read from the bound instance (instance.<field>).
-		const asserted = descriptor.clauses.map((clause) => ({
-			constName: sanitizeId(clause.clauseId),
-			oracleParams: oracleParamsOf(clause.code),
-		}));
+		const asserted = assertableClauses(descriptor);
 		for (const a of asserted) {
 			const args = a.oracleParams
 				.map((p) =>
@@ -992,10 +1067,7 @@ function renderPropertyBlock(
 				lines.push(`\t\t\t\tconst ${spec.param} = ${spec.mirrorOf};`);
 			}
 		}
-		const asserted = descriptor.clauses.map((clause) => ({
-			constName: sanitizeId(clause.clauseId),
-			oracleParams: oracleParamsOf(clause.code),
-		}));
+		const asserted = assertableClauses(descriptor);
 		const instanceBound = asserted.some((a) =>
 			a.oracleParams.some((p) => !paramNames.has(p)),
 		);
@@ -1071,10 +1143,7 @@ function renderPropertyBlock(
 	// Oracle assertion (GAP 3): the block's own clauses. An oracle parameter
 	// that is not a callback param is a manifest FIELD — the block binds the
 	// component instance and asserts instance.<field> through the oracle.
-	const asserted = descriptor.clauses.map((clause) => ({
-		constName: sanitizeId(clause.clauseId),
-		oracleParams: oracleParamsOf(clause.code),
-	}));
+	const asserted = assertableClauses(descriptor);
 	const instanceBound = asserted.some((a) =>
 		a.oracleParams.some((p) => !paramNames.has(p)),
 	);

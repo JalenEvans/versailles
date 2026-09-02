@@ -16,8 +16,11 @@
  * a TypeScript identifier. The empty field set still yields a defined,
  * non-empty hash so empty components are comparable.
  *
- * fnv1aHex is the shared hash seam (predicate-registry reuses it for the
- * function-implementation hash without becoming manifest derivation).
+ * fnv1aHex is the shared hash primitive: computeSourceHash (the manifest
+ * structural hash) consumes it here, and seed.ts reuses it for
+ * derivePropertySeed (ADR-0017). The per-predicate function-implementation
+ * hash was dropped (ADR-0013/0019) — the predicate-registry no longer uses
+ * this seam.
  */
 import type { FieldEntry, MethodMetadata } from "./types.js";
 
@@ -26,9 +29,10 @@ const FNV_PRIME = 0x01000193;
 
 /**
  * FNV-1a digest over the UTF-8 bytes of a string, 8 lowercase hex chars —
- * the exact algorithm pinned by build-spec §7/§3.4 and the predicate-registry
- * contract (offset basis 0x811c9dc5, prime 0x01000193). Non-empty even for
- * the empty input.
+ * the exact algorithm behind the manifest structural hash (build-spec §7,
+ * manifest-extraction contract compute_source_hash) and the seeded-PBT seed
+ * derivation (ADR-0017, deterministic-generation contract) — offset basis
+ * 0x811c9dc5, prime 0x01000193. Non-empty even for the empty input.
  */
 export function fnv1aHex(input: string): string {
 	let hash = FNV_OFFSET_BASIS >>> 0;
