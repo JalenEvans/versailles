@@ -571,10 +571,9 @@ describe("planPropertyBlocks — strategy gating: example-shaped clauses yield N
 });
 
 // ── Fixture: predicateCall precondition → property-with-falsifier ───────────
-// isPositive is a REGISTERED predicate (verifiedPure), so the codegen'd
-// oracle resolves; the strategy keeps the deterministic example falsifier
-// (the concrete precondition-violation case) while planning an accept-side
-// property.
+// isPositive is a REGISTERED predicate, so the codegen'd oracle resolves; the
+// strategy keeps the deterministic example falsifier (the concrete
+// precondition-violation case) while planning an accept-side property.
 function predicateCallContext(): VersaillesContext {
 	const contracts: ContractsFile = {
 		contracts: {
@@ -602,7 +601,6 @@ function predicateCallContext(): VersaillesContext {
 				paramTypes: ["number"],
 				returnType: "boolean",
 				sourceRef: "src/predicates.ts",
-				verifiedPure: true,
 			},
 		},
 	};

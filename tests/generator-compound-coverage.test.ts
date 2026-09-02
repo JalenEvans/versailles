@@ -443,10 +443,11 @@ describe("planPropertyBlocks — the SINGLE-param compound IS planned + emitted 
 		const file = files.find((f) => f.path.endsWith("OrderService.test.ts"));
 		expect(file).toBeDefined();
 
-		// The single-param oracle is embedded verbatim as the filter/assert
-		// const — never a multi-param filter.
+		// The single-param oracle is embedded as the filter/assert const —
+		// never a multi-param filter. ADR-0021: the op-param lambda carries
+		// its declared type from the contract (amount: number).
 		expect(file?.content).toContain(
-			"\t\tconst OrderService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;",
+			"\t\tconst OrderService_withdraw_pre0 = (amount: number) => amount >= 10 && amount <= 100;",
 		);
 		expect(file?.content).toContain(
 			"fc.property(amount.filter(OrderService_withdraw_pre0), (amount) => {",

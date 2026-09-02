@@ -21,8 +21,8 @@ consume. Nothing downstream ever sees a raw, unparsed, or invalid expression.
 - Semantic validation resolves every field reference, checks type compatibility and `in`
   operands, and verifies every predicate call against the top-level `predicates` map of
   `contracts.json`.
-- Predicates may be referenced **only** if declared with `verifiedPure: true`; anything else
-  is a hard error.
+- Predicates may be referenced when declared in the top-level `predicates` map — the
+  declaration is the attestation; no purity gate applies (ADR-0019).
 - Undeclared predicate calls return an `UNKNOWN_PREDICATE` error whose detail suggests up to 2
   declared predicate names within edit distance ≤ 2 (` — did you mean "X"?`, two join as
   `"a" or "b"`), ordered closest-first; suggestions never change the structured error shape.
@@ -32,12 +32,13 @@ consume. Nothing downstream ever sees a raw, unparsed, or invalid expression.
 ## What it forbids (must not)
 
 - No `old(...)` acceptance outside postconditions; no assignments/loops/statements.
-- No predicate resolution at parse time (shape only), no unverified predicate references.
+- No predicate resolution at parse time (shape only); predicate calls resolve at semantic
+  validation against the declared `predicates` map.
 - No unstructured throws — never a raw exception on malformed input.
 - No per-language grammar variants; no LLM client, prompting, or retry anywhere in this
   context; no drifting AST node set without a build-spec change.
 
 ## Grounding
 
-[build-spec §4–§5](../build-spec.md) · ADR-0004 (permissive warnings) · ADR-0006 (verifiedPure
-gate) · ADR-0008 (language-agnostic core) · ADR-0010 (CLI never drives an LLM)
+[build-spec §4–§5](../build-spec.md) · ADR-0004 (permissive warnings) · ADR-0008
+(language-agnostic core) · ADR-0010 (CLI never drives an LLM) · ADR-0019 (no purity gate)

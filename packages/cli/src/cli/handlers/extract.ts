@@ -67,20 +67,63 @@ export async function handleExtractManifests(
 	// VERSAILLES-20 F1): a preserved legacy entry without them converts to ""
 	// / {} internally and is omitted from the store write — never an invented
 	// or empty persisted path.
+	//
+	// ADR-0021: per-field access/readonly (fieldAccess/fieldReadonly) flow
+	// through the same conversion. Preserved entries that carry the keys in
+	// the store surface them on their FieldEntry objects (defaulting to
+	// public / not-readonly internally for the required shape), and the store
+	// write round-trips the exact stored keys back for preserved entries —
+	// never inventing them where the store lacked them. Covered entries always
+	// write fresh fieldAccess/fieldReadonly from the extractor.
 	const existing: ManifestMap = {};
+	const existingAccess: Record<
+		string,
+		{
+			fieldAccess?: Record<string, string>;
+			fieldReadonly?: Record<string, boolean>;
+		}
+	> = {};
 	for (const [component, entry] of Object.entries(stored)) {
+		const storedAccess = entry.fieldAccess as
+			| Record<string, string>
+			| undefined;
+		const storedReadonly = entry.fieldReadonly as
+			| Record<string, boolean>
+			| undefined;
 		existing[component] = {
 			component,
 			fields: Object.entries(entry.fields).map(([name, typeRef]) => ({
 				name,
 				typeRef,
 				confidence: "high",
+				// ADR-0021 permissive default (internal shape requires the
+				// fields): absent store access → "public", absent readonly →
+				// false. The loader/emitter owns the real permissive default
+				// for legacy entries; the store write below omits the keys for
+				// preserved entries that never carried them.
+				access:
+					(storedAccess?.[name] as
+						| "public"
+						| "protected"
+						| "private"
+						| undefined) ?? "public",
+				readonly: storedReadonly?.[name] ?? false,
 			})),
 			methods: entry.methods ?? {},
 			sourceHash: entry.sourceHash,
 			sourcePath: entry.sourcePath ?? "",
 			confidence: "high",
 		};
+		// Preserve the exact stored access keys so the store write can
+		// round-trip them byte-for-byte on preserved entries (never invented).
+		if (entry.fieldAccess !== undefined || entry.fieldReadonly !== undefined) {
+			existingAccess[component] = {
+				fieldAccess: entry.fieldAccess as Record<string, string> | undefined,
+				fieldReadonly: entry.fieldReadonly as
+					| Record<string, boolean>
+					| undefined,
+			};
+		}
 	}
 
 	const merged = mergeManifests(existing, extracted.manifests, { prune });
@@ -112,6 +155,8 @@ export async function handleExtractManifests(
 				string,
 				{ static: boolean; params: string[]; returnType?: string }
 			>;
+			fieldAccess?: Record<string, string>;
+			fieldReadonly?: Record<string, boolean>;
 		}
 	> = {};
 	for (const [component, entry] of Object.entries(merged)) {
@@ -127,6 +172,8 @@ export async function handleExtractManifests(
 				string,
 				{ static: boolean; params: string[]; returnType?: string }
 			>;
+			fieldAccess?: Record<string, string>;
+			fieldReadonly?: Record<string, boolean>;
 		} = {
 			sourceHash: entry.sourceHash,
 			fields: Object.fromEntries(
@@ -148,11 +195,27 @@ export async function handleExtractManifests(
 			// full-legacy and silently emitting a dead static call. Today the
 			// key is dropped when the map is empty (the W3 hole).
 			storeEntry.methods = entry.methods ?? {};
+			// ADR-0021: covered entries always write per-field access/readonly
+			// so the emitter can decide field reachability. The additive shape
+			// keeps `fields` unchanged and adds fieldAccess/fieldReadonly.
+			storeEntry.fieldAccess = Object.fromEntries(
+				entry.fields.map((field) => [field.name, field.access]),
+			);
+			storeEntry.fieldReadonly = Object.fromEntries(
+				entry.fields.map((field) => [field.name, field.readonly]),
+			);
 		} else if (Object.keys(entry.methods ?? {}).length > 0) {
 			// Preserved legacy entries keep their stored shape exactly
 			// (byte-compat): a methods map persists only when non-empty, so
 			// an entry that never carried the key stays without it.
 			storeEntry.methods = entry.methods;
+		}
+		// Preserved entries round-trip their exact stored access keys when
+		// present (byte-compat); absent keys stay absent — never invented for
+		// a legacy entry that predates ADR-0021.
+		if (!covered && existingAccess[component] !== undefined) {
+			storeEntry.fieldAccess = existingAccess[component].fieldAccess;
+			storeEntry.fieldReadonly = existingAccess[component].fieldReadonly;
 		}
 		mergedStore[component] = storeEntry;
 	}

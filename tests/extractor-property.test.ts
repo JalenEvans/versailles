@@ -58,6 +58,10 @@ const fieldArb: fc.Arbitrary<FieldEntry> = fc.record({
 	),
 	typeRef: typeRefArb,
 	confidence: fc.constantFrom("high", "low"),
+	// ADR-0021: every covered field carries access + readonly. The hash is
+	// over (name, typeRef) only, so these extra fields never affect it.
+	access: fc.constantFrom("public", "protected", "private"),
+	readonly: fc.boolean(),
 });
 
 // minLength 0 by default: the empty field set is a first-class input.

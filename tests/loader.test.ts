@@ -79,7 +79,6 @@ import { loadWorkspace } from "../packages/core/src/loader/workspace.js";
  *     paramTypes: string[];
  *     returnType: string;
  *     sourceRef: string;
- *     verifiedPure: boolean;
  *   }>;
  * };
  *
@@ -229,7 +228,8 @@ function manifestsFixture(): unknown {
 /**
  * ADR-0013 (Phase 3): predicates are now declared inline in contracts.json's
  * top-level `predicates` map. Each entry carries: source, params, paramTypes,
- * returnType, verifiedPure. The sourceHash field is dropped.
+ * returnType. The sourceHash field is dropped; verifiedPure is dropped
+ * (ADR-0019) and a legacy `verifiedPure` field is silently ignored.
  */
 function predicatesFixture(): Record<string, unknown> {
 	return {
@@ -238,7 +238,6 @@ function predicatesFixture(): Record<string, unknown> {
 			params: ["email"],
 			paramTypes: ["string"],
 			returnType: "boolean",
-			verifiedPure: true,
 		},
 	};
 }
@@ -305,8 +304,9 @@ describe("loadWorkspace — joint loading of the three .versailles/ files", () =
 		expect(context.manifests).toEqual(manifestsFixture());
 		// ADR-0013 (Phase 3) + ADR-0018 (VERSAILLES-170): the loader builds a
 		// PredicatesFile from the inline predicates for backward compatibility
-		// with the validator. The shape carries no `version` and no `sourceHash`
-		// (the `""` vestige is removed); sourceRef = source.
+		// with the validator. The shape carries no `version`, no `sourceHash`
+		// (the `""` vestige is removed), and no `verifiedPure` (ADR-0019);
+		// sourceRef = source.
 		expect(context.predicates).toEqual({
 			predicates: {
 				isValidEmail: {
@@ -314,7 +314,6 @@ describe("loadWorkspace — joint loading of the three .versailles/ files", () =
 					paramTypes: ["string"],
 					returnType: "boolean",
 					sourceRef: "EmailUtils.isValidEmail",
-					verifiedPure: true,
 				},
 			},
 		});
@@ -354,6 +353,62 @@ describe("loadWorkspace — joint loading of the three .versailles/ files", () =
 		expect(
 			context.parsedContracts["CustomerService.register.pre0"],
 		).toMatchObject({ type: "predicateCall", name: "isValidEmail" });
+	});
+
+	it("loads a predicate declaration WITHOUT verifiedPure (ADR-0019) — no shape error, predicate present on context", async () => {
+		const ws = await seedWorkspace("a3-predicate-no-verified-pure");
+		const contracts = contractsFixture() as Record<string, unknown>;
+		contracts.predicates = {
+			isValidEmail: {
+				// No verifiedPure field at all — the shape check no longer
+				// requires it (ADR-0019); it is silently ignored.
+				source: "EmailUtils.isValidEmail",
+				params: ["email"],
+				paramTypes: ["string"],
+				returnType: "boolean",
+			},
+		};
+		await writeWorkspaceFile(ws, "contracts.json", contracts);
+		await writeWorkspaceFile(ws, "manifests.json", manifestsFixture());
+
+		const context = await loadWorkspace(ws);
+
+		// No INVALID_SHAPE on verifiedPure and the predicate resolves.
+		expect(context.validationErrors).toEqual([]);
+		expect(context.isValid).toBe(true);
+		expect(context.predicates?.predicates.isValidEmail).toMatchObject({
+			params: ["email"],
+			paramTypes: ["string"],
+			returnType: "boolean",
+			sourceRef: "EmailUtils.isValidEmail",
+		});
+	});
+
+	it("still loads a legacy predicate declaration WITH verifiedPure — the field is silently ignored (ADR-0019)", async () => {
+		const ws = await seedWorkspace("a4-predicate-legacy-verified-pure");
+		const contracts = contractsFixture() as Record<string, unknown>;
+		contracts.predicates = {
+			isValidEmail: {
+				source: "EmailUtils.isValidEmail",
+				params: ["email"],
+				paramTypes: ["string"],
+				returnType: "boolean",
+				verifiedPure: true, // legacy field — ignored, not rejected
+			},
+		};
+		await writeWorkspaceFile(ws, "contracts.json", contracts);
+		await writeWorkspaceFile(ws, "manifests.json", manifestsFixture());
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.validationErrors).toEqual([]);
+		expect(context.isValid).toBe(true);
+		expect(context.predicates?.predicates.isValidEmail).toMatchObject({
+			params: ["email"],
+			paramTypes: ["string"],
+			returnType: "boolean",
+			sourceRef: "EmailUtils.isValidEmail",
+		});
 	});
 });
 
@@ -842,7 +897,7 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 		expect(context.isValid).toBe(false);
 	});
 
-	it("b: a fully-valid workspace (all fields resolvable, predicates registered+verifiedPure) stays valid with no semantic errors", async () => {
+	it("b: a fully-valid workspace (all fields resolvable, predicates registered) stays valid with no semantic errors", async () => {
 		const ws = await seedWorkspace("b-semantic-clean");
 		// ADR-0013 (Phase 3): predicates are inline in contracts.json.
 		await writeWorkspaceFile(ws, "contracts.json", {
@@ -852,7 +907,6 @@ describe("loadWorkspace — semantic validation wiring (§6.5)", () => {
 					params: ["n"],
 					paramTypes: ["number"],
 					returnType: "boolean",
-					verifiedPure: true,
 				},
 			},
 			contracts: {
@@ -1483,5 +1537,91 @@ describe("loadWorkspace — surfaces sourcePath on manifests store entries (VERS
 			fields: { note: "string" },
 		});
 		expect(legacy.sourcePath).toBeUndefined();
+	});
+});
+
+/**
+ * ADR-0021 (VERSAILLES-179) manifest access/readonly — the loader side.
+ * The additive store format keeps `fields: Record<string, string>` unchanged
+ * and adds two optional sibling keys per entry: `fieldAccess: Record<string,
+ * "public"|"protected"|"private">` and `fieldReadonly: Record<string,
+ * boolean>`. The loader must surface these keys on the loaded ManifestsFile
+ * entry when present (pass-through, exactly like sourcePath/methods), and —
+ * per the permissive legacy default (ADR-0004/0018, manifest-extraction
+ * contract) — an entry WITHOUT them (a preserved legacy entry) must load
+ * normally with no INVALID_SHAPE error and no invented keys. Defaulting to
+ * access "public" / not readonly is the *consumer's* (emitter's) job; the
+ * loader only surfaces the raw store keys.
+ *
+ * Note: the shape guard only requires `fields` on a manifest entry and does
+ * not reject unknown keys, so the loader already tolerates fieldAccess/
+ * fieldReadonly (additive). The RED signal for ADR-0021 lives in the
+ * extractor tests — these pin the loader-side surface + legacy tolerance.
+ */
+describe("loadWorkspace — surfaces fieldAccess/fieldReadonly on manifests store entries (ADR-0021)", () => {
+	it("surfaces fieldAccess and fieldReadonly on a manifest store entry exactly as stored", async () => {
+		const ws = await seedWorkspace("ar1-surfaced");
+		await writeWorkspaceFile(ws, "manifests.json", {
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order",
+					fields: {
+						balance: "number",
+						name: "string",
+						status: "string",
+					},
+					fieldAccess: {
+						balance: "private",
+						name: "public",
+						status: "public",
+					},
+					fieldReadonly: {
+						balance: false,
+						name: false,
+						status: true,
+					},
+				},
+			},
+		});
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.isValid).toBe(true);
+		expect(context.validationErrors).toEqual([]);
+		expect(context.manifests?.manifests.OrderService).toMatchObject({
+			sourceHash: "man-order",
+			fields: { balance: "number", name: "string", status: "string" },
+			fieldAccess: { balance: "private", name: "public", status: "public" },
+			fieldReadonly: { balance: false, name: false, status: true },
+		});
+	});
+
+	it("loads a legacy manifest entry WITHOUT fieldAccess/fieldReadonly permissively — no INVALID_SHAPE, no invented keys (ADR-0004/0018)", async () => {
+		const ws = await seedWorkspace("ar2-legacy-no-access-readonly");
+		await writeWorkspaceFile(ws, "manifests.json", {
+			manifests: {
+				Legacy: {
+					sourceHash: "legacy-hash",
+					fields: { note: "string" },
+				},
+			},
+		});
+
+		const context = await loadWorkspace(ws);
+
+		expect(context.isValid).toBe(true);
+		expect(context.validationErrors).toEqual([]);
+		const legacy = context.manifests?.manifests.Legacy as Record<
+			string,
+			unknown
+		>;
+		expect(legacy).toEqual({
+			sourceHash: "legacy-hash",
+			fields: { note: "string" },
+		});
+		// The loader surfaces the raw store keys; absent keys stay absent —
+		// the permissive default (public / not readonly) is the consumer's job.
+		expect(legacy.fieldAccess).toBeUndefined();
+		expect(legacy.fieldReadonly).toBeUndefined();
 	});
 });

@@ -73,8 +73,7 @@ Open `.versailles/contracts.json` and write the whole contract. This is the arti
       "source": "OrderService.isValidSku",
       "params": ["sku"],
       "paramTypes": ["string"],
-      "returnType": "boolean",
-      "verifiedPure": true
+      "returnType": "boolean"
     }
   },
   "contracts": {
@@ -109,7 +108,7 @@ Open `.versailles/contracts.json` and write the whole contract. This is the arti
 
 What each piece means (vocabulary lives in the [glossary](../glossary.md); the grammar is [build-spec §4](../build-spec.md#4-contract-expression-grammar)):
 
-- **`predicates` map (top level)** — the [declarative predicate](../glossary.md) `isValidSku` is declared inline here, no separate registry file, no registration CLI ([ADR-0013](../decisions/0013-declarative-predicates-remove-registration-cli.md)). The full ceremony: `source` (`OrderService.isValidSku` — the qualified name of the real function, resolved under `config.sourceRoots`), `params`/`paramTypes` (arity and argument types), `returnType` (`boolean`), and `verifiedPure: true` — your human assertion that the function is side-effect-free and terminating. `validate` hard-errors on anything else ([ADR-0006](../decisions/0006-predicate-purity-registration-gate.md)).
+- **`predicates` map (top level)** — the [declarative predicate](../glossary.md) `isValidSku` is declared inline here, no separate registry file, no registration CLI ([ADR-0013](../decisions/0013-declarative-predicates-remove-registration-cli.md)). The declaration: `source` (`OrderService.isValidSku` — the qualified name of the real function, resolved under `config.sourceRoots`), `params`/`paramTypes` (arity and argument types), `returnType` (`boolean`). The declaration itself is the attestation — `validate` resolves the `sourceRef` against real source on every run, and no purity gate applies ([ADR-0019](../decisions/0019-drop-verified-pure-field.md)).
 - **Why `isValidSku`, not `isPositive`?** The two preconditions show the inline-vs-predicate judgment (sidebar below): `price > 0` is grammar-expressible, so it stays **inline**; `isValidSku(sku)` checks a string *format* (regex — the grammar has no pattern matching), so it cannot be inline and earns a named predicate. It is also named for the reusable property, not for this one consumer.
 - **`invariants`** — `balance >= 0` must hold for every instance at all times, before and after every operation call. A clause.
 - **`operations.addItem`** — one operation with a typed `params` list, two `preconditions` clauses (a predicate-call precondition and an inline comparison), a `postconditions` clause that compares against pre-call state via `old(balance)`, and an `effects` declaration saying `addItem` mutates `balance` (the generator uses effects to know which field a postcondition-satisfaction test should assert against).
@@ -117,13 +116,13 @@ What each piece means (vocabulary lives in the [glossary](../glossary.md); the g
 
 > **Inline vs predicate — the judgment call**
 >
-> **Inline** when the check is grammar-expressible **and** single-use: `price > 0`, `balance >= 0`, `sku != ""`, `status in ["OPEN", "CLOSED"]`. Promoting these to named predicates is a smell — you pay the declaration ceremony (sourceRef, paramTypes, `verifiedPure`) for logic the grammar already expresses.
+> **Inline** when the check is grammar-expressible **and** single-use: `price > 0`, `balance >= 0`, `sku != ""`, `status in ["OPEN", "CLOSED"]`. Promoting these to named predicates is a smell — you pay the declaration ceremony (sourceRef, paramTypes) for logic the grammar already expresses.
 >
 > **Predicate** when the check is **not** grammar-expressible — regex/string-format logic (`isValidSku`), cross-field computation, anything needing statements — and when the same non-grammar check is shared across components. Name it for the reusable property it checks (`isValidSku`), **never after a single consumer** (`addItemSkuIsOk` is a smell; the generic-naming rule).
 >
 > The reverse-reference index (`validate --verbose` → `predicateReferences`, Step 2) is what makes the shared predicate layer discoverable — including declared-but-unused predicates.
 
-Grammar gotchas worth knowing before you type: single `=` is a parse error (use `==`), `old(field)` is legal **only** in postconditions, and predicate calls must resolve to a declared predicate with `verifiedPure: true` (build-spec §4.1).
+Grammar gotchas worth knowing before you type: single `=` is a parse error (use `==`), `old(field)` is legal **only** in postconditions, and predicate calls must resolve to a declared predicate in the top-level `predicates` map (build-spec §4.1).
 
 One more thing worth knowing about how the generator treats your predicate: v1 does not solve predicates (no SMT, build-spec §9.5). It synthesizes the **violation** input deterministically from `paramTypes` (string → `""`, number → `-1`, boolean → `false`) and uses deterministic defaults on the **accept** side (string → `"initial"`, number → `1`). So `isValidSku` gets falsified with `""`, and the accept cases call `addItem` with `"initial"` — the Step 5 implementation accepts both, so the generated suite goes Green.
 
@@ -247,23 +246,23 @@ describe("addItem", () => {
 
 	it("OrderService.addItem.postcondition-satisfaction-0 — valid input asserting postconditions OrderService.addItem.post0", () => {
 		const instance = new OrderService();
-		instance.balance = 50;
+		(instance as any).balance = 50;
 		instance.addItem("initial", 1);
-		expect(instance.balance).toEqual(51);
+		expect((instance as any).balance).toEqual(51);
 	});
 });
 
 describe("OrderService invariants", () => {
 	it("OrderService.addItem.invariant-0 — call OrderService.addItem and assert invariant OrderService.inv0 still holds", () => {
 		const instance = new OrderService();
-		instance.balance = 50;
+		(instance as any).balance = 50;
 		instance.addItem("initial", 1);
-		expect(instance.balance).toBeGreaterThanOrEqual(0);
+		expect((instance as any).balance).toBeGreaterThanOrEqual(0);
 	});
 });
 ```
 
-Walk one concrete case — `postcondition-satisfaction-0`. The generator built a valid input (`sku = "initial"`, `price = 1`), **captured the pre-call state** (`instance.balance = 50`), called the operation, and asserted the postcondition with `old(balance)` resolved against that captured state: `51 == 50 + 1`. The `effects` declaration told it which field to assert.
+Walk one concrete case — `postcondition-satisfaction-0`. The generator built a valid input (`sku = "initial"`, `price = 1`), **captured the pre-call state** (`(instance as any).balance = 50`), called the operation, and asserted the postcondition with `old(balance)` resolved against that captured state: `51 == 50 + 1`. The `effects` declaration told it which field to assert. Note the cast: `balance` is declared `private` in source, the manifest records `fieldAccess: { balance: "private" }`, and the emitter reaches non-public state through the deliberate, documented `(instance as any).<field>` white-box idiom — public fields are never cast ([ADR-0021](../decisions/0021-totality-of-emission.md)).
 
 Then notice what the generator did with your two precondition styles: `pre0` (`isValidSku(sku)`) got its violation synthesized from the predicate's `paramTypes` (string → `""`), while `pre1` (`price > 0`) got the full boundary sweep (−1, 0, +1) because the comparison is grammar-expressible — the inline-first doctrine paying off in generated coverage.
 
@@ -286,7 +285,7 @@ Now the traceability. Every generated test carries a [traceability comment](../g
 
 Every clause is covered; nothing is silent. (The default suite is concrete cases only. Opt into seeded property-based blocks later — see the [PBT consumer guide](pbt-emission.md).)
 
-> **About the call shape you see here.** This is exactly the shape the committed example workspace emits (`bun run example:generate` regenerates it byte-identically): imports derived from the manifest's `sourcePath` (`../../src/OrderService.ts`), instance calls, and real matcher assertions. In a pure greenfield workspace with no manifests yet, calls fall back to the legacy static options-object form and imports to the default `../../src/<Component>.js` — either resolves through vitest's module resolution once `src/OrderService.ts` exists. Run `extract-manifests` (below) and regenerate to get the source-aware shape.
+> **About the call shape you see here.** This is exactly the shape the committed example workspace emits (`bun run example:generate` regenerates it byte-identically): imports derived from the manifest's `sourcePath` (`../../src/OrderService.ts`), instance calls, real matcher assertions, and the deliberate `(instance as any)` casts for the private `balance` field — decided from the manifest's `fieldAccess: { balance: "private" }`, never applied to public fields ([ADR-0021](../decisions/0021-totality-of-emission.md)). The committed example also enables `propertyBased`, so its generated file additionally shows **typed oracle lambdas** — `(sku: string) => sku !== ""`, `(price: number) => isPositive(price)` — explicit param types from the contract/manifest, never implicit `any`. In a pure greenfield workspace with no manifests yet, calls fall back to the legacy static options-object form and imports to the default `../../src/<Component>.js` — either resolves through vitest's module resolution once `src/OrderService.ts` exists. Run `extract-manifests` (below) and regenerate to get the source-aware shape.
 
 ## Step 5 — Implement the source (Red → Green)
 
@@ -354,7 +353,7 @@ The **git commit is the approval** ([ADR-0012](../decisions/0012-git-commit-as-a
 
 ## Brownfield? Run `extract-manifests` instead
 
-Everything above assumed you're starting from zero. If you have **existing source**, the on-ramp is different: run `versailles extract-manifests` first to derive `manifests.json` from source (field types, structural `sourceHash`, method metadata) — then the loop continues the same way, and staleness checking is live from day one. Static analysis first, never LLM-authored ([ADR-0005](../decisions/0005-static-analysis-first-manifest-extraction.md)). See [features/manifest-extraction](../features/manifest-extraction.md) for the full picture. The committed example workspace is exactly this path: `bun run example:generate` re-extracts and regenerates it, and the generated suite shows the source-aware shape (Step 4's note).
+Everything above assumed you're starting from zero. If you have **existing source**, the on-ramp is different: run `versailles extract-manifests` first to derive `manifests.json` from source (field types + per-field `fieldAccess`/`fieldReadonly`, structural `sourceHash`, method metadata) — then the loop continues the same way, and staleness checking is live from day one. Static analysis first, never LLM-authored ([ADR-0005](../decisions/0005-static-analysis-first-manifest-extraction.md)). See [features/manifest-extraction](../features/manifest-extraction.md) for the full picture. The committed example workspace is exactly this path: `bun run example:generate` re-extracts and regenerates it, and the generated suite shows the source-aware shape (Step 4's note).
 
 ## Next steps
 

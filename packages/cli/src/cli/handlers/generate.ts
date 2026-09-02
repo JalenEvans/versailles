@@ -15,6 +15,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 
 import type {
+	LoaderWarning,
 	ManifestsFile,
 	PredicatesFile,
 } from "../../../../core/src/loader/workspace.js";
@@ -48,6 +49,13 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 		// returns an EMPTY descriptors list, so the v1 output stays
 		// byte-identical (the enabled=false backward-compat pin).
 		const propertyPlan = planPropertyBlocks(suite, context);
+		// ADR-0021 (totality of emission): the emitter's out-param warning
+		// channel. The vitest emitter pushes non-silent EMISSION_UNRENDERABLE
+		// warnings here (a field-bound oracle whose field type is unresolvable
+		// from the field model) — merged into CliResult.warnings below on the
+		// same non-blocking tier as the planning warnings, never a silent
+		// type-broken emission.
+		const emissionWarnings: LoaderWarning[] = [];
 		const files = emitSuite(suite, context.config.testFramework, {
 			generatedDir: context.config.generatedDir,
 			modulePaths: deriveModulePaths(
@@ -60,6 +68,16 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 			// Absent for legacy entries → the emitter keeps the options-object
 			// static call (backward compatible).
 			methods: deriveMethods(context.manifests),
+			// ADR-0021 field model: derive per-field access/readonly from the
+			// manifest fieldAccess/fieldReadonly stores and fieldTypes from
+			// the fields name→typeRef map — the same emitter seam as
+			// methods/modulePaths. The emitter casts non-public/readonly
+			// instance-field sites and types field-bound oracle lambdas from
+			// these; legacy entries (no access data) contribute nothing and
+			// keep the byte-identical `instance.<field>` render.
+			fieldAccess: deriveFieldAccess(context.manifests),
+			fieldTypes: deriveFieldTypes(context.manifests),
+			fieldReadonly: deriveFieldReadonly(context.manifests),
 			// GAP-2 predicate resolution (ADR-0017 §9.6): derive the predicate
 			// import table (predicate name → module import specifier) from the
 			// contracts predicates registry and thread it through the emitter
@@ -74,6 +92,7 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 			),
 			propertyPlan,
 			propertyNumRuns: context.config.propertyBased?.numRuns ?? 100,
+			warnings: emissionWarnings,
 		});
 		for (const file of files) {
 			const target = join(cwd, file.path);
@@ -102,11 +121,13 @@ export async function handleGenerate(cwd: string): Promise<CliResult> {
 			// LoaderWarning is structurally compatible with CliError
 			// ({ code, field, detail }). B2: the property-plan warnings (the
 			// multi-param-oracle gate, B1) merge alongside suite.warnings so a
-			// skipped property block is never a silent zero either.
+			// skipped property block is never a silent zero either. ADR-0021:
+			// the emitter's EMISSION_UNRENDERABLE warnings ride the same tier.
 			warnings: [
 				...contextWarnings(context),
 				...(suite.warnings ?? []),
 				...(propertyPlan.warnings ?? []),
+				...emissionWarnings,
 			],
 			exitCode: 0,
 			output: {
@@ -183,6 +204,67 @@ function deriveMethods(
 		}
 	}
 	return methods;
+}
+
+/**
+ * Per-component per-field access modifiers for the emitter seam (ADR-0021,
+ * totality of emission): the manifest store carries each covered entry's
+ * optional `fieldAccess` (field name → "public" | "protected" | "private") —
+ * the generate handler maps them onto the emitSuite options shape exactly
+ * like modulePaths / methods. The emitter renders instance-field read/write
+ * sites for non-public fields through the deliberate `(instance as any)`
+ * escape; absent (legacy entries) contributes nothing → `instance.<field>`
+ * byte-identical.
+ */
+function deriveFieldAccess(
+	manifests: ManifestsFile | null,
+): EmitOptions["fieldAccess"] {
+	const fieldAccess: EmitOptions["fieldAccess"] = {};
+	for (const [component, entry] of Object.entries(manifests?.manifests ?? {})) {
+		if (entry.fieldAccess !== undefined) {
+			fieldAccess[component] = entry.fieldAccess;
+		}
+	}
+	return fieldAccess;
+}
+
+/**
+ * Per-component per-field TS types for the emitter seam (ADR-0021): derived
+ * from the manifest `fields` name → typeRef map — the same map the extractor
+ * records (e.g. { balance: "number" }). The emitter types FIELD-param oracle
+ * lambda params from these (op-param lambda params are typed unconditionally
+ * from the contract); absent entries keep field lambdas untyped.
+ */
+function deriveFieldTypes(
+	manifests: ManifestsFile | null,
+): EmitOptions["fieldTypes"] {
+	const fieldTypes: EmitOptions["fieldTypes"] = {};
+	for (const [component, entry] of Object.entries(manifests?.manifests ?? {})) {
+		if (entry.fields !== undefined && Object.keys(entry.fields).length > 0) {
+			fieldTypes[component] = entry.fields;
+		}
+	}
+	return fieldTypes;
+}
+
+/**
+ * Per-component per-field readonly flags for the emitter seam (ADR-0021): the
+ * manifest store carries each covered entry's optional `fieldReadonly` (field
+ * name → boolean) — mapped onto the emitSuite options shape exactly like
+ * modulePaths / methods. A readonly field is WRITTEN at its pre-state seeding
+ * site through the same `(instance as any)` cast (readonly is compile-time
+ * only; the cast bypasses it at runtime, coverage preserved — never skipped).
+ */
+function deriveFieldReadonly(
+	manifests: ManifestsFile | null,
+): EmitOptions["fieldReadonly"] {
+	const fieldReadonly: EmitOptions["fieldReadonly"] = {};
+	for (const [component, entry] of Object.entries(manifests?.manifests ?? {})) {
+		if (entry.fieldReadonly !== undefined) {
+			fieldReadonly[component] = entry.fieldReadonly;
+		}
+	}
+	return fieldReadonly;
 }
 
 /**

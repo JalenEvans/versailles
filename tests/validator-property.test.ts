@@ -131,21 +131,18 @@ function predicatesFixture(): PredicateOverride {
 			paramTypes: ["number"],
 			returnType: "boolean",
 			sourceRef: "Num.isPositive",
-			verifiedPure: true,
 		},
 		isAvailable: {
 			params: ["status"],
 			paramTypes: ["enum<OPEN,SHIPPED>"],
 			returnType: "boolean",
 			sourceRef: "Order.isAvailable",
-			verifiedPure: true,
 		},
 		noArg: {
 			params: [],
 			paramTypes: [],
 			returnType: "boolean",
 			sourceRef: "Util.noArg",
-			verifiedPure: true,
 		},
 	};
 }

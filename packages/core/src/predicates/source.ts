@@ -1,15 +1,16 @@
 /**
  * Predicate source resolution (build-spec §3.4, §13 milestone 8) — traces a
  * `Module.functionName` sourceRef to a real exported function under the
- * source roots and derives its implementation hash. Reuses the extractor's
- * static-analysis seam (resolveExportedFunction) and the shared FNV-1a hash
- * seam (fnv1aHex) — this is NOT manifest derivation (manifest-extraction owns
- * that; contract limits) and nothing is ever invented (ADR-0005).
+ * source roots. Reuses the extractor's static-analysis seam
+ * (resolveExportedFunction) — this is NOT manifest derivation
+ * (manifest-extraction owns that; contract limits) and nothing is ever
+ * invented (ADR-0005).
+ *
+ * ADR-0013/0019: the per-predicate sourceHash is dropped (the declaration no
+ * longer carries it and no hash is computed) — resolution only confirms the
+ * exported function exists.
  */
-import {
-	fnv1aHex,
-	resolveExportedFunction,
-} from "../../../frontend-ts/src/extractors/index.js";
+import { resolveExportedFunction } from "../../../frontend-ts/src/extractors/index.js";
 
 /**
  * Parses a `Module.functionName` sourceRef. Module = file basename without
@@ -27,24 +28,14 @@ function parseSourceRef(
 }
 
 /**
- * sourceHash(predicate) = FNV-1a over the UTF-8 bytes of the function
- * declaration's source text exactly as the TS seam returns it
- * (node.getText(): `export`/`function` through the closing brace).
- * Module-private: only `resolvePredicateSource` uses it.
- */
-function computePredicateSourceHash(sourceText: string): string {
-	return fnv1aHex(sourceText);
-}
-
-/**
  * Mechanically verifies a sourceRef under the given source roots: resolves
- * the exported function and returns the computed implementation hash, or
- * { ok: false } when the ref does not resolve.
+ * the exported function, or { ok: false } when the ref does not resolve.
+ * ADR-0019: existence/shape is the attestation — no sourceHash is computed.
  */
 export function resolvePredicateSource(
 	roots: string[],
 	sourceRef: string,
-): { ok: true; sourceHash: string } | { ok: false } {
+): { ok: true } | { ok: false } {
 	const parsed = parseSourceRef(sourceRef);
 	if (!parsed.ok) {
 		return { ok: false };
@@ -57,8 +48,5 @@ export function resolvePredicateSource(
 	if (!resolved.ok) {
 		return { ok: false };
 	}
-	return {
-		ok: true,
-		sourceHash: computePredicateSourceHash(resolved.sourceText),
-	};
+	return { ok: true };
 }

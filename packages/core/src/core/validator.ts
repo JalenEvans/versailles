@@ -4,8 +4,7 @@
  * workspace context (contracts + manifests + predicates — the loader's
  * VersaillesContext), and implements every §5.1 check row: field resolution,
  * type compatibility, in-operand shape, predicate existence/arity/arg-types,
- * the verifiedPure gate (ADR-0006), and the low-confidence warning tier
- * (ADR-0004).
+ * and the low-confidence warning tier (ADR-0004).
  *
  * The validator never throws an unstructured exception: a missing component
  * manifest, missing operation, or missing predicate entry is a structured
@@ -22,7 +21,6 @@
  *   "predicateCall(<name>)", "old"), NOT the clause entry index.
  * - confidence: "inferred" on a manifest field entry → LOW_CONFIDENCE_FIELD
  *   warning; valid stays true.
- * - UNVERIFIED_PREDICATE covers verifiedPure: false AND verifiedPure missing.
  * - arithmetic → scalar number; no operand-type checks on arithmetic.
  * - Index segments ([N]/[]) are valid only on list<T> → strip to element.
  * - A predicateCall term resolves to its registered returnType; unresolvable
@@ -47,8 +45,7 @@ export type ValidationErrorCode =
 	| "OLD_SCOPE"
 	| "UNKNOWN_PREDICATE"
 	| "PREDICATE_ARITY"
-	| "PREDICATE_ARG_TYPE"
-	| "UNVERIFIED_PREDICATE";
+	| "PREDICATE_ARG_TYPE";
 
 export type ValidationWarningCode = "LOW_CONFIDENCE_FIELD";
 
@@ -329,9 +326,9 @@ function resolveOldTerm(
 }
 
 /**
- * Predicate resolution (build-spec §5.1 rows F–I + ADR-0006): existence,
- * verifiedPure gate, arity, per-arg type compatibility. On success the term
- * resolves to the registered returnType (pinned decision 8).
+ * Predicate resolution (build-spec §5.1 rows F–I): existence, arity,
+ * per-arg type compatibility. On success the term resolves to the registered
+ * returnType (pinned decision 8).
  */
 function resolvePredicate(
 	state: WalkState,
@@ -350,18 +347,10 @@ function resolvePredicate(
 		return { resolved: null, descriptor };
 	}
 
-	// ADR-0006: verifiedPure must be exactly true; false or missing are hard
-	// errors (pinned decision 5).
-	if (entry.verifiedPure !== true) {
-		addError(
-			state,
-			"UNVERIFIED_PREDICATE",
-			descriptor,
-			`Predicate "${node.name}" is not verified pure (verifiedPure must be true)`,
-		);
-		return { resolved: null, descriptor };
-	}
-
+	// ADR-0019: the verifiedPure purity gate is dropped — the declaration
+	// itself is the attestation (sourceRef resolves against real source on
+	// every validate run; impurity/non-termination is caught by the generated
+	// suite at runtime). Any declared predicate is referenceable.
 	const params = Array.isArray(entry.params) ? entry.params : [];
 	if (node.args.length !== params.length) {
 		addError(

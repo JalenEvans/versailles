@@ -10,6 +10,7 @@ import type { ClauseKind, Node } from "../packages/core/src/core/parser.js";
 import type {
 	ContractClause,
 	ContractsFile,
+	LoaderWarning,
 	ManifestsFile,
 	PredicatesFile,
 	VersaillesContext,
@@ -121,8 +122,8 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  * 	it("OrderService.addItem.property-satisfies-0", () => {
  * 		const sku = fc.string();
  * 		const price = fc.integer();
- * 		const OrderService_addItem_pre0 = (sku) => sku !== "";
- * 		const OrderService_addItem_pre1 = (price) => isPositive(price);
+ * 		const OrderService_addItem_pre0 = (sku: string) => sku !== "";
+ * 		const OrderService_addItem_pre1 = (price: number) => isPositive(price);
  * 		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
  * 			new OrderService().addItem(sku, price);
  * 			expect(OrderService_addItem_pre0(sku)).toBe(true);
@@ -142,7 +143,7 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  * 		const reason = fc.string();
  * 		const tags = fc.constant([]);
  * 		const memo = fc.constant(0);
- * 		const AccountService_setStatus_pre0 = (newStatus) => newStatus === "ACTIVE" || newStatus === "FROZEN";
+ * 		const AccountService_setStatus_pre0 = (newStatus: string) => newStatus === "ACTIVE" || newStatus === "FROZEN";
  * 		const prop = fc.property(newStatus.filter(AccountService_setStatus_pre0), notify, reason, tags, memo, (newStatus, notify, reason, tags, memo) => {
  * 			AccountService.setStatus(newStatus, notify, reason, tags, memo);
  * 			expect(AccountService_setStatus_pre0(newStatus)).toBe(true);
@@ -159,7 +160,7 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  * 	// traces: "AccountService.inv0"
  * 	it("AccountService.withdraw.property-invariant-preserving-0", () => {
  * 		const amount = fc.integer({ min: 10, max: 100 });
- * 		const AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;
+ * 		const AccountService_withdraw_pre0 = (amount: number) => amount >= 10 && amount <= 100;
  * 		const AccountService_inv0 = (balance) => balance >= 0;
  * 		const prop = fc.property(amount.filter(AccountService_withdraw_pre0), (amount) => {
  * 			const instance = new AccountService();
@@ -212,6 +213,19 @@ import { derivePropertySeed } from "../packages/engine/src/generator/seed.js";
  *   (`const instance = new <Component>(); instance.<op>(...);`) is emitted when
  *   any asserted oracle parameter is a field. Satisfies/invariant blocks render
  *   the BARE call (no `const result =` — void-safe; the clause IS the check).
+ * - Typed oracle lambdas (ADR-0021): every oracle CONST declaration embeds the
+ *   codegen'd `(<params>) => <expr>` body with a TYPE ANNOTATION on each op-param
+ *   lambda parameter, resolved from descriptor.params[].typeRef (number → number,
+ *   string → string, boolean → boolean, enum<...> → string). This is
+ *   UNCONDITIONAL — the emitter has the op-param types and must not drop them
+ *   (the TS7006 bug). A FIELD lambda parameter (a manifest field, not an op
+ *   param) is typed only when the field's type is known via the field model
+ *   (EmitOptions.fieldTypes) — without it the field lambda stays untyped.
+ * - Deliberate casts for non-public fields (ADR-0021): at every instance-field
+ *   read/write site (pre-state seeding, invariant assertions, FIELD-BOUND PBT
+ *   oracle mappings), a field the field model marks private/protected renders
+ *   `(instance as any).<field>`; a public field NEVER casts. Conditional on the
+ *   field model (EmitOptions.fieldAccess) — legacy mode keeps `instance.<field>`.
  * - Predicate imports (GAP 2): for each component file, `import { <name> } from
  *   "<specifier>"` for every predicate whose name appears in the component's
  *   property clause code strings, ordered by first appearance across the
@@ -753,24 +767,39 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		// Oracle consts are HOISTED to the it-body level (indent 2, one tab
 		// outside the fc.property callback) so the same const fills both the
 		// arbitrary filter and the in-callback assertion.
+		//
+		// ADR-0021: every ORACLE LAMBDA parameter that is a CONTRACT OP PARAM
+		// carries its declared type (from descriptor.params[].typeRef) —
+		// `(amount: number) => ...`, `(newStatus: string) => ...`,
+		// `(sku: string) => ...`, `(price: number) => ...` — never the implicit
+		// `(amount) => ...` (TS7006). This is UNCONDITIONAL: the emitter has the
+		// op-param type in the plan and must not drop it. A FIELD parameter
+		// (e.g. the invariant oracle's `balance`) is only typed when the field's
+		// type is known via the field model — without it the field lambda stays
+		// untyped (pinned below).
 		expect(account?.content).toContain(
-			"\t\tconst AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;",
+			"\t\tconst AccountService_withdraw_pre0 = (amount: number) => amount >= 10 && amount <= 100;",
 		);
 		expect(account?.content).toContain(
-			'\t\tconst AccountService_setStatus_pre0 = (newStatus) => newStatus === "ACTIVE" || newStatus === "FROZEN";',
+			'\t\tconst AccountService_setStatus_pre0 = (newStatus: string) => newStatus === "ACTIVE" || newStatus === "FROZEN";',
 		);
+		// Field-param oracle (balance is a manifest FIELD, not an op param): no
+		// field model passed in the legacy pbtOptions default, so the field type
+		// is unknowable and the lambda stays untyped (the access-data-mode test
+		// below pins the typed `(balance: number)` form).
 		expect(account?.content).toContain(
 			"\t\tconst AccountService_inv0 = (balance) => balance >= 0;",
 		);
 		expect(order?.content).toContain(
-			'\t\tconst OrderService_addItem_pre0 = (sku) => sku !== "";',
+			'\t\tconst OrderService_addItem_pre0 = (sku: string) => sku !== "";',
 		);
 		expect(order?.content).toContain(
-			"\t\tconst OrderService_addItem_pre1 = (price) => isPositive(price);",
+			"\t\tconst OrderService_addItem_pre1 = (price: number) => isPositive(price);",
 		);
-		// The codegen'd source string itself appears verbatim (no mangling).
+		// The codegen'd source string itself appears verbatim (no mangling),
+		// except the op-param type annotations the emitter injects into the head.
 		expect(account?.content).toContain(
-			"(amount) => amount >= 10 && amount <= 100",
+			"(amount: number) => amount >= 10 && amount <= 100",
 		);
 		// The oracle consts are HOISTED, never embedded inside the callback at
 		// indent 3 — the hoisting is what lets the same const fill both the
@@ -883,15 +912,90 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 		expect(account?.content).toContain("\t\t\tinstance.withdraw(amount);");
 	});
 
+	// ── ADR-0021 access-data mode: deliberate casts + typed field oracles ────
+	//
+	// When the emitter is given the field model (EmitOptions.fieldAccess +
+	// fieldTypes, the shape the generate handler derives from manifests.json
+	// fieldAccess/fieldReadonly/fields), non-public fields render through the
+	// deliberate `(instance as any).<field>` escape AND field-referencing oracle
+	// lambdas carry their declared field type — `(balance: number) => ...`. This
+	// is the FIELD-BOUND oracle mapping requirement of ADR-0021 §Confirmation.
+	// Legacy mode (no field model) keeps `instance.balance` uncast and the field
+	// lambda untyped (pinned above) — the byte-identical guarantee.
+	it("access-data mode: FIELD-BOUND oracle mapping casts a private field to (instance as any).balance and types the field lambda", () => {
+		// The field model: AccountService.balance is private (per the manifest
+		// fieldAccess record), type number (per fields). Cast at the read site in
+		// the invariant oracle assertion; the oracle lambda param is typed.
+		const files = emitSuite(
+			pbtSuite(),
+			"vitest",
+			// EmitOptions will gain fieldAccess + fieldTypes (the ir.ts seam the
+			// implementer adds); the `as never` keeps the RED test compiling
+			// before that lands.
+			{
+				...pbtOptions(),
+				fieldAccess: {
+					[ACCOUNT]: { balance: "private" },
+				},
+				fieldTypes: {
+					[ACCOUNT]: { balance: "number" },
+				},
+			} as never,
+		);
+		const account = accountFile(files);
+		expect(account).toBeDefined();
+
+		// The invariant oracle's field param is typed from the manifest field
+		// type, and the assertion reads the private field through the deliberate
+		// cast — the standard white-box testing idiom (ADR-0021 Option A).
+		expect(account?.content).toContain(
+			"\t\tconst AccountService_inv0 = (balance: number) => balance >= 0;",
+		);
+		expect(account?.content).toContain(
+			"expect(AccountService_inv0((instance as any).balance)).toBe(true);",
+		);
+		// The instance binding + call remain unchanged — only the field access
+		// casts.
+		expect(account?.content).toContain(
+			"\t\t\tconst instance = new AccountService();",
+		);
+		expect(account?.content).toContain("\t\t\tinstance.withdraw(amount);");
+	});
+
+	it("access-data mode: a PUBLIC field is NEVER cast in the FIELD-BOUND oracle mapping — instance.name stays", () => {
+		// A public field (absent from fieldAccess, or explicitly "public") must
+		// keep the plain instance.<field> read — Option C (always cast) is
+		// rejected by ADR-0021.
+		const files = emitSuite(pbtSuite(), "vitest", {
+			...pbtOptions(),
+			fieldAccess: {
+				[ACCOUNT]: { balance: "public" },
+			},
+			fieldTypes: {
+				[ACCOUNT]: { balance: "number" },
+			},
+		} as never);
+		const account = accountFile(files);
+		expect(account).toBeDefined();
+		expect(account?.content).toContain(
+			"expect(AccountService_inv0(instance.balance)).toBe(true);",
+		);
+		expect(account?.content).not.toContain(
+			"expect(AccountService_inv0((instance as any).balance)).toBe(true);",
+		);
+	});
+
 	it("rejects blocks embed NO dead oracle consts — the clause is never embedded unused; only the configured idiom asserts", () => {
 		const files = emitPbt();
 		const account = accountFile(files);
 		expect(account).toBeDefined();
 		// The rejects descriptor's clause code `(amount) => amount >= 10` is NOT
 		// embedded anywhere (the satisfies block embeds the compound variant
-		// `... && amount <= 100` — a different string).
+		// `... && amount <= 100` — a different string). ADR-0021: any dead const
+		// would carry the typed op-param head `(amount: number) => ...`, so the
+		// negative pin checks the typed form.
 		expect(account?.content).not.toContain(
-			"const AccountService_withdraw_pre0 = (amount) => amount >= 10;",
+			"const AccountService_withdraw_pre0 = (amount: number) => amount >= 10;",
 		);
 		// The rejects block's only assertion is the idiom.
 		expect(account?.content).toContain(
@@ -962,7 +1066,7 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 			'\t// traces: "AccountService.withdraw.pre0"',
 			'\tit("AccountService.withdraw.property-satisfies-0", () => {',
 			"\t\tconst amount = fc.integer({ min: 10, max: 100 });",
-			"\t\tconst AccountService_withdraw_pre0 = (amount) => amount >= 10 && amount <= 100;",
+			"\t\tconst AccountService_withdraw_pre0 = (amount: number) => amount >= 10 && amount <= 100;",
 			"\t\tconst prop = fc.property(amount.filter(AccountService_withdraw_pre0), (amount) => {",
 			"\t\t\tnew AccountService().withdraw(amount);",
 			"\t\t\texpect(AccountService_withdraw_pre0(amount)).toBe(true);",
@@ -987,7 +1091,7 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 			"\t\tconst reason = fc.string();",
 			"\t\tconst tags = fc.constant([]);",
 			"\t\tconst memo = fc.constant(0);",
-			'\t\tconst AccountService_setStatus_pre0 = (newStatus) => newStatus === "ACTIVE" || newStatus === "FROZEN";',
+			'\t\tconst AccountService_setStatus_pre0 = (newStatus: string) => newStatus === "ACTIVE" || newStatus === "FROZEN";',
 			"\t\tconst prop = fc.property(newStatus.filter(AccountService_setStatus_pre0), notify, reason, tags, memo, (newStatus, notify, reason, tags, memo) => {",
 			"\t\t\tAccountService.setStatus(newStatus, notify, reason, tags, memo);",
 			"\t\t\texpect(AccountService_setStatus_pre0(newStatus)).toBe(true);",
@@ -1011,8 +1115,8 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 			'\tit("OrderService.addItem.property-satisfies-0", () => {',
 			"\t\tconst sku = fc.string();",
 			"\t\tconst price = fc.integer();",
-			'\t\tconst OrderService_addItem_pre0 = (sku) => sku !== "";',
-			"\t\tconst OrderService_addItem_pre1 = (price) => isPositive(price);",
+			'\t\tconst OrderService_addItem_pre0 = (sku: string) => sku !== "";',
+			"\t\tconst OrderService_addItem_pre1 = (price: number) => isPositive(price);",
 			"\t\tconst prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {",
 			"\t\t\tnew OrderService().addItem(sku, price);",
 			"\t\t\texpect(OrderService_addItem_pre0(sku)).toBe(true);",
@@ -1030,8 +1134,8 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 			'\tit("OrderService.addItem.property-satisfies-1", () => {',
 			"\t\tconst sku = fc.string();",
 			"\t\tconst price = fc.integer();",
-			'\t\tconst OrderService_addItem_pre0 = (sku) => sku !== "";',
-			"\t\tconst OrderService_addItem_pre1 = (price) => isPositive(price);",
+			'\t\tconst OrderService_addItem_pre0 = (sku: string) => sku !== "";',
+			"\t\tconst OrderService_addItem_pre1 = (price: number) => isPositive(price);",
 			"\t\tconst prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {",
 			"\t\t\tnew OrderService().addItem(sku, price);",
 			"\t\t\texpect(OrderService_addItem_pre1(price)).toBe(true);",
@@ -1155,6 +1259,249 @@ describe("emitSuite vitest — property-block emitter (ADR-0017 §9.6, determini
 				expect(file.content).not.toContain("import { isPositive }");
 			}
 		}
+	});
+});
+
+// ── ADR-0021 container-typed op-param oracle lambdas (VERSAILLES-175) ────────
+// The totality-of-emission guarantee (ADR-0021) says a generated oracle lambda
+// carries an explicit param type OR a non-silent EMISSION_UNRENDERABLE warning
+// surfaces — never silently type-broken output. The Center review found a hole:
+// typeRefToTs only rendered number|string|boolean|enum<>, so a container-typed
+// op-param (list<string>, optional<number>) in a single-param predicateCall
+// precondition emitted a SILENTLY UNTYPED lambda — `(tags) => isNonEmpty(tags)`
+// (TS7006 under strict) — with NO warning (the EMISSION_UNRENDERABLE loop only
+// covered fieldTypes, never op-params). The example workspace only uses
+// number/string params, so nothing caught it.
+//
+// The fix these pins demand: typeRefToTs renders containers (list<X> → X[],
+// optional<X> → X | undefined, recursing into the inner typeRef), and an
+// op-param typeRef with STILL no renderable form after the extension (e.g.
+// list<Order> — a component-typed inner, which the emitter cannot type) must
+// surface EMISSION_UNRENDERABLE on the same non-blocking tier as the
+// field-model path (tests/emitters.test.ts) — never a silent untyped lambda.
+//
+// The fixture is a minimal self-contained CartService (separate from the
+// heavily-pinned pbtSuite/pbtPlan) so these pins do not disturb the existing
+// byte-for-byte block pins.
+
+const CART = "CartService";
+
+const CART_METHODS: EmitOptions["methods"] = {
+	[CART]: {
+		applyTags: { static: false, params: ["tags"], returnType: "void" },
+		updateCount: { static: false, params: ["count"], returnType: "void" },
+		applyOrder: { static: false, params: ["order"], returnType: "void" },
+	},
+};
+
+const CART_PREDICATES: Record<string, string> = {
+	isNonEmpty: "../../src/CartService.js",
+	isNonNegative: "../../src/CartService.js",
+};
+
+/** A minimal PlannedSuite whose three operations carry the container-typed op-params. */
+function cartSuite(): PlannedSuite {
+	return {
+		clauseIds: [
+			`${CART}.applyTags.pre0`,
+			`${CART}.updateCount.pre0`,
+			`${CART}.applyOrder.pre0`,
+		],
+		operations: [
+			{ component: CART, operation: "applyTags", cases: [] },
+			{ component: CART, operation: "updateCount", cases: [] },
+			{ component: CART, operation: "applyOrder", cases: [] },
+		],
+		invariantCases: [],
+	};
+}
+
+/**
+ * The property plan: three single-param predicateCall satisfies descriptors —
+ * one list<string> op-param, one optional<number> op-param, and one list<Order>
+ * op-param (a component-typed inner with no renderable TS form even after the
+ * container extension — the EMISSION_UNRENDERABLE trigger).
+ */
+function cartPlan(): PropertyPlan {
+	return {
+		descriptors: [
+			{
+				id: `${CART}.applyTags.property-satisfies-0`,
+				component: CART,
+				operation: "applyTags",
+				params: [
+					{
+						param: "tags",
+						typeRef: "list<string>",
+						kind: "string",
+						default: [],
+					},
+				],
+				clauses: [
+					{
+						clauseId: `${CART}.applyTags.pre0`,
+						code: "(tags) => isNonEmpty(tags)",
+					},
+				],
+				outcome: "satisfies",
+				traces: [`${CART}.applyTags.pre0`],
+				seed: 303,
+			},
+			{
+				id: `${CART}.updateCount.property-satisfies-0`,
+				component: CART,
+				operation: "updateCount",
+				params: [
+					{
+						param: "count",
+						typeRef: "optional<number>",
+						kind: "number",
+						default: 0,
+					},
+				],
+				clauses: [
+					{
+						clauseId: `${CART}.updateCount.pre0`,
+						code: "(count) => isNonNegative(count)",
+					},
+				],
+				outcome: "satisfies",
+				traces: [`${CART}.updateCount.pre0`],
+				seed: 404,
+			},
+			{
+				id: `${CART}.applyOrder.property-satisfies-0`,
+				component: CART,
+				operation: "applyOrder",
+				params: [
+					{
+						param: "order",
+						typeRef: "list<Order>",
+						kind: "string",
+						default: [],
+					},
+				],
+				clauses: [
+					{
+						clauseId: `${CART}.applyOrder.pre0`,
+						code: "(order) => isNonEmpty(order)",
+					},
+				],
+				outcome: "satisfies",
+				traces: [`${CART}.applyOrder.pre0`],
+				seed: 505,
+			},
+		],
+		strategies: {},
+		warnings: [],
+	};
+}
+
+function cartOptions(overrides: Partial<EmitOptions> = {}): EmitOptions {
+	return {
+		methods: CART_METHODS,
+		predicates: CART_PREDICATES,
+		propertyPlan: cartPlan(),
+		propertyNumRuns: 100,
+		...overrides,
+	};
+}
+
+function emitCart(overrides: Partial<EmitOptions> = {}) {
+	return emitSuite(cartSuite(), "vitest", cartOptions(overrides));
+}
+
+/**
+ * A cart plan reduced to a single descriptor (by id) — each VERSAILLES-175
+ * pin emits ONLY the descriptor it tests, so the `warnings === []` assertions
+ * in the renderable-container tests are coherent (they must not see the
+ * applyOrder EMISSION_UNRENDERABLE warning, which only the applyOrder test
+ * asserts). No test emits the full three-descriptor cartPlan() directly — it
+ * survives only as the overridden default inside cartOptions().
+ */
+function cartPlanFor(descriptorId: string): PropertyPlan {
+	return {
+		...cartPlan(),
+		descriptors: cartPlan().descriptors.filter((d) => d.id === descriptorId),
+	};
+}
+
+function cartFile(files: ReturnType<typeof emitSuite>) {
+	return files.find((file) => file.path.endsWith("CartService.test.ts"));
+}
+
+describe("emitSuite vitest — container-typed op-param oracle lambdas (VERSAILLES-175)", () => {
+	it("renders a list<string> op-param predicateCall lambda TYPED — (tags: string[]) => isNonEmpty(tags), never the bare (tags) => form", () => {
+		const warnings: LoaderWarning[] = [];
+		const files = emitCart({
+			warnings,
+			propertyPlan: cartPlanFor(`${CART}.applyTags.property-satisfies-0`),
+		});
+		const cart = cartFile(files);
+		expect(cart).toBeDefined();
+
+		// The container typeRef renders to the TS array type on the op-param
+		// lambda parameter (ADR-0021: never the silently-untyped TS7006 form).
+		expect(cart?.content).toContain(
+			"\t\tconst CartService_applyTags_pre0 = (tags: string[]) => isNonEmpty(tags);",
+		);
+		// The silently-untyped form must never render.
+		expect(cart?.content).not.toContain(
+			"const CartService_applyTags_pre0 = (tags) => isNonEmpty(tags);",
+		);
+		// A renderable container is not an unrenderable shape — no warning.
+		expect(warnings).toEqual([]);
+	});
+
+	it("renders an optional<number> op-param predicateCall lambda TYPED — (count: number | undefined) => isNonNegative(count)", () => {
+		const warnings: LoaderWarning[] = [];
+		const files = emitCart({
+			warnings,
+			propertyPlan: cartPlanFor(`${CART}.updateCount.property-satisfies-0`),
+		});
+		const cart = cartFile(files);
+		expect(cart).toBeDefined();
+
+		// optional<X> renders the TS union with undefined on the op-param lambda
+		// parameter — the standard optional-type rendering (no established
+		// emitted-optional convention exists in the codebase; X | undefined is
+		// the TS-native form the finding pins).
+		expect(cart?.content).toContain(
+			"\t\tconst CartService_updateCount_pre0 = (count: number | undefined) => isNonNegative(count);",
+		);
+		// The silently-untyped form must never render.
+		expect(cart?.content).not.toContain(
+			"const CartService_updateCount_pre0 = (count) => isNonNegative(count);",
+		);
+		expect(warnings).toEqual([]);
+	});
+
+	it("surfaces EMISSION_UNRENDERABLE for an op-param typeRef with no renderable TS form (list<Order>) — never a silent untyped lambda", () => {
+		const warnings: LoaderWarning[] = [];
+		const files = emitCart({
+			warnings,
+			propertyPlan: cartPlanFor(`${CART}.applyOrder.property-satisfies-0`),
+		});
+		const cart = cartFile(files);
+		expect(cart).toBeDefined();
+
+		// The warning tier is non-blocking — files still emit (exit 0), but the
+		// unrenderable op-param shape is surfaced, never silent (the same
+		// { code, field, detail } LoaderWarning shape as the field-model path in
+		// tests/emitters.test.ts). The field identifies the op-param as
+		// <component>.<operation>.<param>.
+		expect(files.length).toBeGreaterThan(0);
+		expect(warnings).toContainEqual(
+			expect.objectContaining({
+				code: "EMISSION_UNRENDERABLE",
+				field: "CartService.applyOrder.order",
+			}),
+		);
+		// NO silently-untyped lambda may be emitted for the unrenderable
+		// op-param (the TS7006 bug shape).
+		expect(cart?.content).not.toContain(
+			"const CartService_applyOrder_pre0 = (order) => isNonEmpty(order);",
+		);
 	});
 });
 

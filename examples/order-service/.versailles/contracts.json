@@ -8,8 +8,7 @@
       "paramTypes": [
         "number"
       ],
-      "returnType": "boolean",
-      "verifiedPure": true
+      "returnType": "boolean"
     }
   },
   "contracts": {

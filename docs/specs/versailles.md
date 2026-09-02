@@ -87,7 +87,7 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 
 - The expression grammar is boolean-valued only: no assignment, no loops, no statements; anything outside the grammar is a parse error.
 - `old(field)` is valid only in `postconditions[]` — a parse error (not semantic) elsewhere.
-- Predicate calls resolve only to declared predicates with `verifiedPure: true`; unverified predicates are a hard error (ADR-0006).
+- Predicate calls resolve only to declared predicates in the top-level `predicates` map; no purity gate applies (ADR-0019).
 - Generation is a pure function of validated contracts; regeneration is idempotent and full-file; `generated/` is tool-owned and never hand-edited. The tool never invokes an LLM — no LLM client, no prompting logic, no LLM retry loop anywhere in the tool (ADR-0010).
 - `.versailles/` files are never interpreted in isolation; all tools load them as a unit.
 

@@ -16,6 +16,7 @@ import type {
 import type {
 	ContractClause,
 	ContractsFile,
+	LoaderWarning,
 	ManifestsFile,
 	PredicatesFile,
 	VersaillesContext,
@@ -2108,6 +2109,242 @@ describe("emitSuite — postcondition-satisfaction seeds captured pre-state onto
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
+	});
+});
+
+// ── ADR-0021: deliberate casts for non-public fields + non-silent warning ────
+//
+// When the emitter is given the field model (EmitOptions.fieldAccess +
+// fieldTypes — the shape the generate handler derives from manifests.json
+// fieldAccess/fieldReadonly/fields), every instance-field read/write site for a
+// NON-PUBLIC field renders through the deliberate `(instance as any).<field>`
+// escape — the standard white-box testing idiom (ADR-0021 Option A): external
+// code cannot touch private state type-safely by definition, so the cast keeps
+// coverage instead of skipping the assertion. PUBLIC fields NEVER cast. Legacy
+// mode (no field model) keeps `instance.<field>` byte-identical (the existing
+// B1 test above — this is the byte-identical guarantee for legacy manifests).
+//
+// READONLY DECISION (flagged for the implementer): a readonly field is WRITTEN
+// at its pre-state seeding site, through the SAME `(instance as any).<field>`
+// cast. TS readonly is a compile-time-only constraint — `(instance as
+// any).balance = 50` compiles and runs — so the cast both bypasses the
+// readonly restriction AND preserves the seeding coverage (the balance
+// transition 50 → 51 is the point of the example, per ADR-0021). This groups
+// readonly with non-public exactly as ADR-0021 Option A does
+// ("private/protected/readonly fields are reached through a deliberate,
+// documented cast"). No field is ever silently skipped.
+
+/** The ADR-0021 access-data-mode postcondition suite (balance transition 50 → 51). */
+function accessDataSuite(): PlannedSuite {
+	return {
+		clauseIds: ["Order.addItem.post0"],
+		operations: [
+			{
+				component: "Order",
+				operation: "addItem",
+				cases: [
+					{
+						id: "Order.addItem.postcondition-satisfaction-0",
+						kind: "postcondition-satisfaction",
+						description:
+							"valid input asserting postconditions Order.addItem.post0",
+						inputs: { sku: "initial", price: 1, balance: 50 },
+						expects: {
+							outcome: "accept",
+							postconditions: ["Order.addItem.post0"],
+							assertions: [{ subject: "balance", op: "==", literal: 51 }],
+						},
+						traces: ["Order.addItem.post0"],
+					},
+				],
+			},
+		],
+		invariantCases: [],
+	};
+}
+
+const ACCESS_DATA_METHODS = {
+	Order: {
+		addItem: { static: false, params: ["sku", "price"], returnType: "void" },
+	},
+};
+
+describe("emitSuite — ADR-0021: deliberate (instance as any) casts for non-public fields in access-data mode", () => {
+	it("casts a PRIVATE field at BOTH write and read sites — (instance as any).balance = 50 seed and expect((instance as any).balance).toEqual(51)", () => {
+		const files = emitSuite(
+			accessDataSuite(),
+			"vitest",
+			// EmitOptions will gain fieldAccess + fieldTypes (the ir.ts seam the
+			// implementer adds); the `as never` keeps the RED test compiling
+			// before that lands.
+			{
+				methods: ACCESS_DATA_METHODS,
+				fieldAccess: { Order: { balance: "private" } },
+				fieldTypes: { Order: { balance: "number" } },
+			} as never,
+		);
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+		const content = order?.content ?? "";
+
+		// Pre-state seeding WRITE: the private field is seeded through the cast.
+		expect(content).toContain("(instance as any).balance = 50;");
+		// Invariant/postcondition READ assertion: cast.
+		expect(content).toContain("expect((instance as any).balance).toEqual(51)");
+		// The call itself is never cast (it is a public method).
+		expect(content).toContain('instance.addItem("initial", 1);');
+		// The UNCAST forms must NOT appear in access-data mode.
+		expect(content).not.toContain("instance.balance = 50;");
+		expect(content).not.toContain("expect(instance.balance).toEqual(51)");
+	});
+
+	it("legacy mode (NO field model) keeps instance.balance uncast — the byte-identical guarantee (non-regression)", () => {
+		// Same suite, same methods, but NO fieldAccess/fieldTypes → the existing
+		// B1 render `instance.balance = 50; expect(instance.balance).toEqual(51)`
+		// is preserved byte-identically. This is the guarantee that legacy
+		// manifests (no access data) do NOT change shape.
+		const files = emitSuite(accessDataSuite(), "vitest", {
+			methods: ACCESS_DATA_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+		const content = order?.content ?? "";
+		expect(content).toContain("instance.balance = 50;");
+		expect(content).toContain("expect(instance.balance).toEqual(51)");
+		expect(content).not.toContain("(instance as any)");
+	});
+
+	it("a PUBLIC field is NEVER cast even in access-data mode — instance.name stays plain", () => {
+		// A component with a public `name` field and a private `previousName`
+		// field, both seeded as pre-state (neither is a call param). The
+		// access-data mode is on, but the public field must keep
+		// `instance.name` — the cast is reserved for non-public fields (Option
+		// C — always cast — is rejected by ADR-0021).
+		const suite: PlannedSuite = {
+			clauseIds: ["Order.touch.post0"],
+			operations: [
+				{
+					component: "Order",
+					operation: "touch",
+					cases: [
+						{
+							id: "Order.touch.postcondition-satisfaction-0",
+							kind: "postcondition-satisfaction",
+							description:
+								"valid input asserting postconditions Order.touch.post0",
+							inputs: { value: "x", name: "old", previousName: "hidden" },
+							expects: {
+								outcome: "accept",
+								postconditions: ["Order.touch.post0"],
+								assertions: [{ subject: "name", op: "==", literal: "old" }],
+							},
+							traces: ["Order.touch.post0"],
+						},
+					],
+				},
+			],
+			invariantCases: [],
+		};
+		const files = emitSuite(suite, "vitest", {
+			methods: {
+				Order: {
+					touch: { static: false, params: ["value"], returnType: "void" },
+				},
+			},
+			fieldAccess: { Order: { name: "public", previousName: "private" } },
+			fieldTypes: { Order: { name: "string", previousName: "string" } },
+		} as never);
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+		const content = order?.content ?? "";
+
+		// The PUBLIC field's write and read sites are NEVER cast.
+		expect(content).toContain('instance.name = "old";');
+		expect(content).toContain('expect(instance.name).toEqual("old")');
+		expect(content).not.toContain("(instance as any).name");
+		// The sibling PRIVATE field (previousName) IS cast at its write site.
+		expect(content).toContain('(instance as any).previousName = "hidden";');
+	});
+
+	it("a READONLY field is WRITTEN at its pre-state seeding site through the (instance as any) cast — never silently skipped (ADR-0021 readonly decision)", () => {
+		// readonly is compile-time-only: `(instance as any).balance = 50` compiles
+		// and runs, so the cast both bypasses readonly AND preserves the seeding
+		// coverage (the balance transition is the point of the example). This
+		// groups readonly with non-public exactly as ADR-0021 Option A describes.
+		const files = emitSuite(accessDataSuite(), "vitest", {
+			methods: ACCESS_DATA_METHODS,
+			fieldAccess: { Order: { balance: "private" } },
+			fieldReadonly: { Order: { balance: true } },
+			fieldTypes: { Order: { balance: "number" } },
+		} as never);
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+		const content = order?.content ?? "";
+
+		// The readonly field's write site is NOT skipped — it is seeded through
+		// the cast (readonly bypassed at runtime, coverage preserved).
+		expect(content).toContain("(instance as any).balance = 50;");
+		// No skip/warning suppression: the seeding is emitted, never dropped.
+		expect(content).toContain("expect((instance as any).balance).toEqual(51)");
+	});
+});
+
+// ── ADR-0021: non-silent warning path for unrenderable emission shapes ──────
+//
+// A shape the emitter cannot render type-safely must surface a NON-SILENT
+// warning on the SAME tier as UNPLANNABLE_OPERATION / PROPERTY_UNPLANNABLE
+// ({ code, field, detail }, merged into CliResult.warnings, exit 0) — never a
+// silent success that emits type-broken code. The warning code is pinned here
+// so the implementer and the test agree.
+//
+// The seam: the emitter pushes emission warnings into an OPTIONAL `warnings`
+// out-param array on EmitOptions (mirroring how suite.warnings /
+// propertyPlan.warnings flow into CliResult.warnings). The implementer wires
+// the seam; the test pins the WARNING CODE.
+describe("emitSuite — non-silent EMISSION_UNRENDERABLE warning for unrenderable emission shapes (ADR-0021)", () => {
+	it("surfaces an EMISSION_UNRENDERABLE warning when a field-bound oracle's type cannot be resolved — never silent, never type-broken code", () => {
+		// A FIELD-BOUND invariant oracle whose field has an unresolvable type in
+		// the field model (an exotic typeRef that maps to no TS type). Typed
+		// emission cannot render `(balance: ???) => ...`, so the total-emission
+		// discipline (ADR-0021: "refuses loudly with a non-silent warning")
+		// demands an EMISSION_UNRENDERABLE warning — never a silent untyped
+		// lambda (the TS7006 bug) and never a hard crash (warning tier is
+		// non-blocking, exit 0).
+		const suite: PlannedSuite = {
+			clauseIds: ["Order.inv0"],
+			operations: [],
+			invariantCases: [
+				{
+					id: "Order.addItem.invariant-0",
+					kind: "invariant",
+					description:
+						"call Order.addItem and assert invariant Order.inv0 still holds",
+					inputs: { sku: "initial" },
+					expects: { outcome: "accept" },
+					traces: ["Order.inv0"],
+				},
+			],
+		};
+		const warnings: LoaderWarning[] = [];
+		const files = emitSuite(suite, "vitest", {
+			methods: ACCESS_DATA_METHODS,
+			// The unresolvable field type: a typeRef the emitter cannot map to
+			// a TS type. The field model marks balance private + provides a
+			// type that has no renderable TS form.
+			fieldAccess: { Order: { balance: "private" } },
+			fieldTypes: { Order: { balance: "weird-type-ref" } },
+			// The emitter's new warning out-param seam (EmitOptions.warnings).
+			warnings,
+		} as never);
+		// The warning tier is non-blocking — files still emit (exit 0), but the
+		// unrenderable shape is surfaced, never silent.
+		expect(files.length).toBeGreaterThan(0);
+		expect(warnings).toContainEqual(
+			expect.objectContaining({
+				code: "EMISSION_UNRENDERABLE",
+				field: "Order.balance",
+			}),
+		);
 	});
 });
 

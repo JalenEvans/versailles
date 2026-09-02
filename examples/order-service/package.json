@@ -4,7 +4,9 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"test": "vitest run"
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"verify": "tsc --noEmit && vitest run"
 	},
 	"devDependencies": {
 		"fast-check": "^4.9.0"

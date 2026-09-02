@@ -18,17 +18,17 @@ describe("addItem", () => {
 
 	it("OrderService.addItem.postcondition-satisfaction-0 — valid input asserting postconditions OrderService.addItem.post0", () => {
 		const instance = new OrderService();
-		instance.balance = 50;
+		(instance as any).balance = 50;
 		instance.addItem("initial", 1);
-		expect(instance.balance).toEqual(51);
+		expect((instance as any).balance).toEqual(51);
 	});
 
 	// traces: "OrderService.addItem.pre0"
 	it("OrderService.addItem.property-satisfies-0", () => {
 		const sku = fc.string();
 		const price = fc.integer();
-		const OrderService_addItem_pre0 = (sku) => sku !== "";
-		const OrderService_addItem_pre1 = (price) => isPositive(price);
+		const OrderService_addItem_pre0 = (sku: string) => sku !== "";
+		const OrderService_addItem_pre1 = (price: number) => isPositive(price);
 		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
 			new OrderService().addItem(sku, price);
 			expect(OrderService_addItem_pre0(sku)).toBe(true);
@@ -40,8 +40,8 @@ describe("addItem", () => {
 	it("OrderService.addItem.property-satisfies-1", () => {
 		const sku = fc.string();
 		const price = fc.integer();
-		const OrderService_addItem_pre0 = (sku) => sku !== "";
-		const OrderService_addItem_pre1 = (price) => isPositive(price);
+		const OrderService_addItem_pre0 = (sku: string) => sku !== "";
+		const OrderService_addItem_pre1 = (price: number) => isPositive(price);
 		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
 			new OrderService().addItem(sku, price);
 			expect(OrderService_addItem_pre1(price)).toBe(true);
@@ -53,13 +53,13 @@ describe("addItem", () => {
 	it("OrderService.addItem.property-invariant-preserving-0", () => {
 		const sku = fc.string();
 		const price = fc.integer();
-		const OrderService_addItem_pre0 = (sku) => sku !== "";
-		const OrderService_addItem_pre1 = (price) => isPositive(price);
-		const OrderService_inv0 = (balance) => balance >= 0;
+		const OrderService_addItem_pre0 = (sku: string) => sku !== "";
+		const OrderService_addItem_pre1 = (price: number) => isPositive(price);
+		const OrderService_inv0 = (balance: number) => balance >= 0;
 		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
 			const instance = new OrderService();
 			instance.addItem(sku, price);
-			expect(OrderService_inv0(instance.balance)).toBe(true);
+			expect(OrderService_inv0((instance as any).balance)).toBe(true);
 		});
 		fc.assert(prop, { seed: 1325625372, numRuns: 100 });
 	});
@@ -69,9 +69,9 @@ describe("addItem", () => {
 describe("OrderService invariants", () => {
 	it("OrderService.addItem.invariant-0 — call OrderService.addItem and assert invariant OrderService.inv0 still holds", () => {
 		const instance = new OrderService();
-		instance.balance = 50;
+		(instance as any).balance = 50;
 		instance.addItem("initial", 1);
-		expect(instance.balance).toBeGreaterThanOrEqual(0);
+		expect((instance as any).balance).toBeGreaterThanOrEqual(0);
 	});
 
 });

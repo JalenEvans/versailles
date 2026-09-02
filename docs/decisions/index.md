@@ -9,7 +9,7 @@ Architecture decision records (ADRs). Immutable once accepted — a new decision
 | [0003](0003-git-history-as-audit-trail.md) | Git history as audit trail (no approval fields in schema) | accepted | — |
 | [0004](0004-permissive-manifest-typing.md) | Permissive manifest typing; low-confidence warns | accepted | — |
 | [0005](0005-static-analysis-first-manifest-extraction.md) | Static analysis first for manifest extraction | accepted | — |
-| [0006](0006-predicate-purity-registration-gate.md) | Predicate purity enforced at registration | accepted | — |
+| [0006](0006-predicate-purity-registration-gate.md) | Predicate purity enforced at registration | superseded | ADR-0019 (gate removed) |
 | [0007](0007-configurable-rejection-idiom.md) | Configurable rejection idiom, default `throws` | accepted | — |
 | [0008](0008-language-agnostic-core-pluggable-plugins.md) | Language-agnostic core; pluggable extractor/emitter | accepted | — |
 | [0009](0009-v1-language-and-framework-matrix.md) | v1 targets TS/C#/Python + vitest/xUnit/pytest, TS first | accepted | build-spec §7/§9.4/§14 single-language assumptions |
@@ -22,5 +22,8 @@ Architecture decision records (ADRs). Immutable once accepted — a new decision
 | [0016](0016-cla-assistant-derived-templates.md) | CLA Assistant with derived Apache templates (supersedes ADR-0015's EasyCLA choice) | accepted | ADR-0015 (CLA mechanism only) |
 | [0017](0017-property-based-test-emission-mit-core.md) | PBT emission in the MIT core; determinism scoped to generation-time | accepted | — |
 | [0018](0018-additive-only-format-versioning.md) | Additive-only format versioning — remove per-file versions, collapse version gates, tool version to the binary | accepted | — |
+| [0019](0019-drop-verified-pure-field.md) | Drop `verifiedPure` — the predicate declaration is the attestation | accepted | ADR-0006 (gate aspect) |
+| [0020](0020-split-generator-planner.md) | Split the generator planner into responsibility-bounded modules | accepted | — |
+| [0021](0021-totality-of-emission.md) | Totality of emission — generated output type-checks or is refused | accepted | — |
 
 See also: [Contracts](../contracts/index.md) · [Specs](../specs/index.md) · [Build spec](../build-spec.md)

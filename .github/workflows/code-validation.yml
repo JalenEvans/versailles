@@ -19,6 +19,10 @@ jobs:
   #
   # Build emits: dist/packages/*/  and  dist/src/
   # Tests import from: packages/*/src  and  src/
+  #
+  # Also validates the example workspace (examples/order-service):
+  #   tsc --noEmit over generated output (ADR-0021)
+  #   vitest run over generated tests
   # ---------------------------------------------------------------------------
   code-validation:
     name: Code validation (lint, format, build, tests)
@@ -48,5 +52,30 @@ jobs:
 
       - name: All tests
         run: bun run test
+
+  # ---------------------------------------------------------------------------
+  # Example workspace — verifies generated output type-checks and passes tests.
+  # examples/order-service is NOT a workspace member; its deps resolve from
+  # root node_modules (typescript, vitest, fast-check are all root deps).
+  # ---------------------------------------------------------------------------
+  example-validation:
+    name: Example workspace (typecheck + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck generated output
+        run: cd examples/order-service && bun run typecheck
+
+      - name: Run generated tests
+        run: cd examples/order-service && bun run test
 
   # .NET CI (dotnet build/test) will be added when frontends/csharp/ is scaffolded.

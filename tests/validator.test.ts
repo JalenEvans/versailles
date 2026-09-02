@@ -42,8 +42,9 @@ import type {
  *   | "OLD_SCOPE"              // §5.1 row: old() scope — defense-in-depth
  *   | "UNKNOWN_PREDICATE"      // §5.1 row: predicate exists
  *   | "PREDICATE_ARITY"        // §5.1 row: predicate arity
- *   | "PREDICATE_ARG_TYPE"     // §5.1 row: predicate arg types
- *   | "UNVERIFIED_PREDICATE";  // §5.1 row: predicate verified pure (ADR-0006)
+ *   | "PREDICATE_ARG_TYPE";    // §5.1 row: predicate arg types
+ *                             // (ADR-0019: no UNVERIFIED_PREDICATE gate — any
+ *                             //  declared predicate is referenceable)
  *
  * export type ValidationWarningCode = "LOW_CONFIDENCE_FIELD"; // §5.1 warning row (ADR-0004)
  *
@@ -147,8 +148,8 @@ import type {
  *    object form in the 3.3 wiring chunk; the validator reads either form.
  *    This test file's fixtures use the object form and cast at the makeContext
  *    boundary.
- * 5. UNVERIFIED_PREDICATE covers BOTH verifiedPure: false AND verifiedPure
- *    absent/missing (ADR-0006 / build-spec §3.4).
+ * 5. ADR-0019: the verifiedPure purity gate is DROPPED. Any declared predicate
+ *    is referenceable; `verifiedPure` (true/false/missing) is silently ignored.
  * 6. arithmetic nodes resolve to scalar "number"; operand type checks of
  *    arithmetic are out of scope for the §5.1 table (which lists no arithmetic
  *    row), so "total + 1 >= 0" is valid without checking operand types.
@@ -172,8 +173,8 @@ import type {
  *     there are no declared predicates at all (empty map or null file) or no
  *     declared key is within range. Suggestions live ONLY in the detail
  *     string — code/field/contractId are unchanged, and the other predicate
- *     error codes (UNVERIFIED_PREDICATE / PREDICATE_ARITY / PREDICATE_ARG_TYPE)
- *     are untouched.
+ *     error codes (PREDICATE_ARITY / PREDICATE_ARG_TYPE) are untouched. The
+ *     UNVERIFIED_PREDICATE code is removed (ADR-0019).
  */
 
 const OS = "OrderService";
@@ -274,28 +275,24 @@ function predicatesFixture(): PredicateOverride {
 			paramTypes: ["number"],
 			returnType: "boolean",
 			sourceRef: "Num.isPositive",
-			verifiedPure: true,
 		},
 		isAvailable: {
 			params: ["status"],
 			paramTypes: ["enum<OPEN,SHIPPED>"],
 			returnType: "boolean",
 			sourceRef: "Order.isAvailable",
-			verifiedPure: true,
 		},
 		noArg: {
 			params: [],
 			paramTypes: [],
 			returnType: "boolean",
 			sourceRef: "Util.noArg",
-			verifiedPure: true,
 		},
 		sideEffectful: {
 			params: ["n"],
 			paramTypes: ["number"],
 			returnType: "boolean",
 			sourceRef: "Util.sideEffectful",
-			verifiedPure: false,
 		},
 		missingPurity: {
 			params: ["n"],
@@ -670,33 +667,25 @@ describe("semanticValidate — predicate arg types (H)", () => {
 	});
 });
 
-describe("semanticValidate — verifiedPure gate (I, ADR-0006)", () => {
-	it("I: UNVERIFIED_PREDICATE hard error when verifiedPure is false", () => {
-		const result = validate(
-			"sideEffectful(balance)",
-			"preconditions",
-			PRE0,
-			PRE_SCOPE,
-		);
-		expect(result.valid).toBe(false);
-		expect(result.errors[0]).toMatchObject({
-			code: "UNVERIFIED_PREDICATE",
-			field: "predicateCall(sideEffectful)",
-		});
-	});
-
-	it("I: UNVERIFIED_PREDICATE hard error when verifiedPure is missing", () => {
+describe("semanticValidate — no verifiedPure purity gate (I, ADR-0019)", () => {
+	it("I: a predicate declared WITHOUT verifiedPure now resolves fine (was UNVERIFIED_PREDICATE)", () => {
 		const result = validate(
 			"missingPurity(balance)",
 			"preconditions",
 			PRE0,
 			PRE_SCOPE,
 		);
-		expect(result.valid).toBe(false);
-		expect(result.errors[0]).toMatchObject({
-			code: "UNVERIFIED_PREDICATE",
-			field: "predicateCall(missingPurity)",
-		});
+		expect(result).toEqual({ valid: true, errors: [], warnings: [] });
+	});
+
+	it("I: a predicate whose verifiedPure would have been false now resolves fine (field silently ignored)", () => {
+		const result = validate(
+			"sideEffectful(balance)",
+			"preconditions",
+			PRE0,
+			PRE_SCOPE,
+		);
+		expect(result).toEqual({ valid: true, errors: [], warnings: [] });
 	});
 });
 
@@ -795,7 +784,6 @@ describe("semanticValidate — error/warning shape (M) + never-throws", () => {
 			validate("notRegistered(balance)", "preconditions", PRE0, PRE_SCOPE),
 			validate("isPositive()", "preconditions", PRE0, PRE_SCOPE),
 			validate("isPositive(status)", "preconditions", PRE0, PRE_SCOPE),
-			validate("sideEffectful(balance)", "preconditions", PRE0, PRE_SCOPE),
 		];
 		for (const result of failing) {
 			expect(result.valid).toBe(false);
@@ -1101,28 +1089,24 @@ describe("semanticValidate — UNKNOWN_PREDICATE fuzzy-match suggestions (VERSAI
 					paramTypes: ["number"],
 					returnType: "boolean",
 					sourceRef: "Num.isPositive",
-					verifiedPure: true,
 				},
 				isPositive2: {
 					params: ["n"],
 					paramTypes: ["number"],
 					returnType: "boolean",
 					sourceRef: "Num.isPositive2",
-					verifiedPure: true,
 				},
 				isPositive3: {
 					params: ["n"],
 					paramTypes: ["number"],
 					returnType: "boolean",
 					sourceRef: "Num.isPositive3",
-					verifiedPure: true,
 				},
 				isAvailable: {
 					params: ["status"],
 					paramTypes: ["enum<OPEN,SHIPPED>"],
 					returnType: "boolean",
 					sourceRef: "Order.isAvailable",
-					verifiedPure: true,
 				},
 			},
 		});
@@ -1155,21 +1139,18 @@ describe("semanticValidate — UNKNOWN_PREDICATE fuzzy-match suggestions (VERSAI
 					paramTypes: ["number"],
 					returnType: "boolean",
 					sourceRef: "Num.isPositive2",
-					verifiedPure: true,
 				},
 				isPositive: {
 					params: ["n"],
 					paramTypes: ["number"],
 					returnType: "boolean",
 					sourceRef: "Num.isPositive",
-					verifiedPure: true,
 				},
 				isAvailable: {
 					params: ["status"],
 					paramTypes: ["enum<OPEN,SHIPPED>"],
 					returnType: "boolean",
 					sourceRef: "Order.isAvailable",
-					verifiedPure: true,
 				},
 			},
 		});
