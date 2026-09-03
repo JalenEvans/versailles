@@ -42,7 +42,7 @@ versailles validate      # single gate: parse + semantic + predicate checks
 versailles generate      # deterministic suite → .versailles/generated/
 bun run test             # run the generated tests
 versailles check         # CI lint: validate + staleness (exit 0/1/2)
-git commit               # the commit IS the approval (ADR-0012)
+git commit
 ```
 
 **Greenfield (contract-first, ADR-0011):** skip `extract-manifests` entirely — write the contract *before* any source. `generate` emits tests that fail via import error (legitimate TDD Red), then implement the source until the tests pass (Green).

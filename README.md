@@ -1,6 +1,7 @@
 # versailles
 
 [![npm (beta)](https://img.shields.io/npm/v/versailles-dbc/beta)](https://www.npmjs.com/package/versailles-dbc)
+[![CI](https://github.com/JalenEvans/versailles/actions/workflows/validation.yml/badge.svg)](https://github.com/JalenEvans/versailles/actions/workflows/validation.yml)
 [![license: MIT](https://img.shields.io/npm/l/versailles-dbc)](LICENSE)
 [![status: beta](https://img.shields.io/badge/status-beta-yellow)](https://www.npmjs.com/package/versailles-dbc)
 
@@ -19,8 +20,8 @@ You write the contract; Versailles writes the tests. Declare what must hold in `
       "operations": {
         "addItem": {
           "params": [{ "name": "price", "type": "number" }],
-          "preconditions":  [{ "id": "addItem.pre0", "expr": "price > 0" }],
-          "postconditions": [{ "id": "addItem.post0", "expr": "balance == old(balance) + price" }]
+          "preconditions":  [{ "id": "addItem.pre.pricePositive", "expr": "price > 0" }],
+          "postconditions": [{ "id": "addItem.post.balanceIncrements", "expr": "balance == old(balance) + price" }]
         }
       }
     }
@@ -34,10 +35,10 @@ versailles generate
 
 ```ts
 // .versailles/generated/OrderService.test.ts (abridged)
-it("addItem rejects price = 0 — falsifies addItem.pre0", () => { /* ... */ });
-it("addItem rejects price = -1 — falsifies addItem.pre0", () => { /* ... */ });
-it("addItem accepts price = 1 — satisfies addItem.pre0", () => { /* ... */ });
-it("addItem keeps balance == old(balance) + price", () => { /* ... */ });
+it("addItem rejects price = 0 — falsifies addItem.pre.pricePositive", () => { /* ... */ });
+it("addItem rejects price = -1 — falsifies addItem.pre.pricePositive", () => { /* ... */ });
+it("addItem accepts price = 1 — satisfies addItem.pre.pricePositive", () => { /* ... */ });
+it("addItem keeps balance == old(balance) + price — satisfies addItem.post.balanceIncrements", () => { /* ... */ });
 ```
 
 The end-to-end walkthrough lives in the [getting-started guide](docs/guides/getting-started.md); the grammar is specified in the [contract-language spec](docs/specs/contract-language.md).
@@ -50,7 +51,7 @@ The end-to-end walkthrough lives in the [getting-started guide](docs/guides/gett
 - **Language-agnostic core, pluggable edges** — the grammar, validator, and generator stay language-agnostic; only the manifest extractor (per language) and the output emitters (per framework) plug in — vitest, xUnit, and pytest today ([ADR-0008](docs/decisions/0008-language-agnostic-core-pluggable-plugins.md)).
 - **Seeded property-based emission (opt-in)** — seed-pinned fast-check property blocks alongside the concrete cases; failures reproduce run-to-run ([ADR-0017](docs/decisions/0017-property-based-test-emission-mit-core.md)).
 - **Totality of emission** — generated output type-checks or the tool refuses loudly ([ADR-0021](docs/decisions/0021-totality-of-emission.md)).
-- **Commit-as-approval** — no in-tool review ceremony; `validate`/`check` gate correctness and the git commit is the approval ([ADR-0012](docs/decisions/0012-git-commit-as-approval-remove-review-gate.md)).
+- **No in-tool review ceremony** — `validate`/`check` gate correctness; approval lives in the ordinary git workflow, not a tool ceremony ([ADR-0012](docs/decisions/0012-git-commit-as-approval-remove-review-gate.md)).
 
 ## Install
 
@@ -72,7 +73,7 @@ versailles validate                # single gate: parse + semantic + predicate c
 versailles generate                # deterministic suite → .versailles/generated/
 bun run test                       # run the generated tests (Red → Green)
 versailles check                   # CI lint: validate + staleness (exit 0/1/2)
-git commit                         # the commit IS the approval (ADR-0012)
+git commit
 ```
 
 - **Greenfield (contract-first, [ADR-0011](docs/decisions/0011-contract-first-emission.md)):** write the contract *before* any source. `generate` emits tests that fail via import error — legitimate TDD Red — then implement the source until the tests pass (Green).
@@ -95,7 +96,7 @@ A clause is a boolean expression (full grammar: [build-spec §4](docs/build-spec
 ```text
 invariant      balance >= 0
 precondition   sku != ""
-precondition   isPositive(price)          # predicate declared in contracts.json's predicates map
+precondition   price > 0                        # inline when the grammar can express it — use a named predicate only for what it can't (e.g. format checks)
 postcondition  balance == old(balance) + price   # old(field) is postconditions ONLY
 ```
 
@@ -177,7 +178,7 @@ cd examples/order-service && bun run test   # run the committed generated suite 
 
 ### The full loop, step by step
 
-The example ships a fully-authored workspace (contract + inline predicate declaration already in `contracts.json`), so every step is re-runnable in place and stays byte-identical to what's committed:
+The example ships a fully-authored workspace (contract already in `contracts.json` — inline expressions only), so every step is re-runnable in place and stays byte-identical to what's committed:
 
 ```bash
 cd examples/order-service
@@ -187,10 +188,10 @@ versailles validate                   # 2. parse + semantic + predicate checks
 versailles generate                   # 3. write the deterministic suite to .versailles/generated/
 versailles check                      # 4. CI lint: validate + staleness (exit 0)
 bun run test                          # 5. run the generated tests
-# git commit the workspace — the commit IS the approval
+# git commit the workspace
 ```
 
-The committed contract (`examples/order-service/.versailles/contracts.json`) declares the `isPositive` predicate inline in the top-level `"predicates"` map — no separate `predicates.json`, no staged directory, no review step.
+The committed contract (`examples/order-service/.versailles/contracts.json`) uses only inline expressions — no named predicates — demonstrating the inline-first doctrine; the predicate path is taught in the [getting-started guide](docs/guides/getting-started.md).
 
 ### Run the test suite
 

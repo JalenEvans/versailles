@@ -570,6 +570,129 @@ describe("planPropertyBlocks — strategy gating: example-shaped clauses yield N
 	});
 });
 
+// ── Fixture: inline numeric-bound precondition guards sibling blocks ────────
+// build-spec §9.6 "single-param oracles keep the per-param arbitrary + .filter
+// shape" — INCLUDING single-param example-strategy clauses that are renderable.
+// `price > 0` is an inline numeric-bound precondition → strategy "example"
+// (strategy.ts table): the concrete boundary cases cover it, so NO property
+// block is planned for it. But a renderable single-param example-strategy
+// clause must STILL join the operation's guard set — the satisfies block
+// tracing `sku != ""` and the invariant-preserving block sample `price` from a
+// bare `fc.integer()` otherwise (a lower-only bound attaches no bounds object),
+// so `fc.integer()` generates 0 and negative values and the property fails
+// silently (no PROPERTY_UNPLANNABLE warning, no filter). This is the
+// generator-soundness bug: the guard-set construction EXCLUDES every clause
+// whose strategy is "example", so the numeric-bound oracle never constrains
+// sibling property blocks. The fix keeps the clause's strategy "example" but
+// attaches its renderable single-param oracle to the sibling descriptors'
+// guard set (`guards`), and the emitter renders it as a `.filter(...)`.
+function inlineNumericBoundGuardContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		contracts: {
+			OrderService: {
+				invariants: [{ id: "OrderService.inv0", expr: "balance >= 0" }],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{ id: "OrderService.addItem.pre0", expr: 'sku != ""' },
+							{ id: "OrderService.addItem.pre1", expr: "price > 0" },
+						],
+						postconditions: [],
+						effects: [{ field: "balance", kind: "mutate" }],
+						sourceHash: "additem-numeric-guard-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		manifests: {
+			OrderService: {
+				sourceHash: "man-additem-numeric-guard",
+				fields: { balance: "number" },
+			},
+		},
+	};
+	return makeContext(contracts, manifests, EMPTY_PREDICATES, {
+		enabled: true,
+		numRuns: 100,
+	});
+}
+
+describe("planPropertyBlocks — a renderable single-param example-strategy precondition guards sibling blocks (§9.6)", () => {
+	it("the satisfies + invariant-preserving descriptors carry the numeric-bound clause in their guard set — strategy stays example, no descriptor for it, no warning", () => {
+		const ctx = inlineNumericBoundGuardContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
+		);
+
+		// Fixture clause-code verification: the numeric-bound precondition
+		// codegen's to a SINGLE-param oracle — the filterable per-param form
+		// (§9.6 "single-param oracles keep the per-param arbitrary + .filter
+		// shape").
+		const pre1Code = renderOracle(ctx, "OrderService.addItem.pre1");
+		expect(pre1Code).toBe("(price) => price > 0");
+		expect(oracleParamsOf(pre1Code)).toEqual(["price"]);
+
+		// Strategy gating is UNCHANGED: the numeric-bound clause stays example —
+		// the concrete boundary cases cover it, so it plans NO property block of
+		// its own (the §9.2 boundary cases remain the audit spine).
+		expect(strategies["OrderService.addItem.pre1"]).toBe("example");
+		expect(
+			descriptors.some((d) => d.traces.includes("OrderService.addItem.pre1")),
+		).toBe(false);
+
+		// The satisfies block for the string clause is planned WITH the
+		// numeric-bound clause in its guard set — a `.filter` oracle for the
+		// sibling block so `price` is never sampled below the bound (never a
+		// silently unguarded `fc.integer()` for price).
+		const satisfies = descriptors.find(
+			(d) => d.id === "OrderService.addItem.property-satisfies-0",
+		) as
+			| (PropertyDescriptor & {
+					guards?: { clauseId: string; code: string }[];
+			  })
+			| undefined;
+		expect(satisfies).toBeDefined();
+		expect(satisfies?.clauses).toEqual([
+			{ clauseId: "OrderService.addItem.pre0", code: '(sku) => sku !== ""' },
+		]);
+		expect(satisfies?.guards).toEqual([
+			{ clauseId: "OrderService.addItem.pre1", code: "(price) => price > 0" },
+		]);
+
+		// The invariant-preserving block carries the SAME guard oracle.
+		const invariant = descriptors.find(
+			(d) => d.id === "OrderService.addItem.property-invariant-preserving-0",
+		) as
+			| (PropertyDescriptor & {
+					guards?: { clauseId: string; code: string }[];
+			  })
+			| undefined;
+		expect(invariant).toBeDefined();
+		expect(invariant?.guards).toEqual([
+			{ clauseId: "OrderService.addItem.pre1", code: "(price) => price > 0" },
+		]);
+
+		// A renderable single-param example-strategy guard is NOT a warning —
+		// never PROPERTY_UNPLANNABLE, never silent. (The multi-param /
+		// unrenderable case keeps the existing PROPERTY_UNPLANNABLE path — those
+		// shapes are pinned in the retained-unplannable describes above.)
+		expect(warnings).toEqual([]);
+
+		expect(strategies["OrderService.addItem.pre0"]).toBe("property");
+		expect(strategies["OrderService.inv0"]).toBe("property");
+		expectStrategyCoverage(ctx, strategies);
+	});
+});
+
 // ── Fixture: predicateCall precondition → property-with-falsifier ───────────
 // isPositive is a REGISTERED predicate, so the codegen'd oracle resolves; the
 // strategy keeps the deterministic example falsifier (the concrete

@@ -4,7 +4,6 @@
 import { describe, expect, it } from "vitest";
 
 import { OrderService } from "../../src/OrderService.ts";
-import { isPositive } from "../../src/OrderService.ts";
 import fc from "fast-check";
 
 describe("addItem", () => {
@@ -12,8 +11,16 @@ describe("addItem", () => {
 		expect(() => new OrderService().addItem("", 1)).toThrow();
 	});
 
-	it("OrderService.addItem.precondition-violation-1 — violates OrderService.addItem.pre1 (predicate isPositive falsified via price)", () => {
+	it("OrderService.addItem.boundary-0 — boundary-1 (reject): price=-1 falsifies OrderService.addItem.pre1", () => {
 		expect(() => new OrderService().addItem("initial", -1)).toThrow();
+	});
+
+	it("OrderService.addItem.boundary-1 — boundary (reject): price=0 falsifies OrderService.addItem.pre1", () => {
+		expect(() => new OrderService().addItem("initial", 0)).toThrow();
+	});
+
+	it("OrderService.addItem.boundary-2 — boundary+1 (accept): price=1 satisfies OrderService.addItem.pre1", () => {
+		new OrderService().addItem("initial", 1);
 	});
 
 	it("OrderService.addItem.postcondition-satisfaction-0 — valid input asserting postconditions OrderService.addItem.post0", () => {
@@ -28,7 +35,7 @@ describe("addItem", () => {
 		const sku = fc.string();
 		const price = fc.integer();
 		const OrderService_addItem_pre0 = (sku: string) => sku !== "";
-		const OrderService_addItem_pre1 = (price: number) => isPositive(price);
+		const OrderService_addItem_pre1 = (price: number) => price > 0;
 		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
 			new OrderService().addItem(sku, price);
 			expect(OrderService_addItem_pre0(sku)).toBe(true);
@@ -36,25 +43,12 @@ describe("addItem", () => {
 		fc.assert(prop, { seed: 1514751120, numRuns: 100 });
 	});
 
-	// traces: "OrderService.addItem.pre1"
-	it("OrderService.addItem.property-satisfies-1", () => {
-		const sku = fc.string();
-		const price = fc.integer();
-		const OrderService_addItem_pre0 = (sku: string) => sku !== "";
-		const OrderService_addItem_pre1 = (price: number) => isPositive(price);
-		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
-			new OrderService().addItem(sku, price);
-			expect(OrderService_addItem_pre1(price)).toBe(true);
-		});
-		fc.assert(prop, { seed: 1406675087, numRuns: 100 });
-	});
-
 	// traces: "OrderService.inv0"
 	it("OrderService.addItem.property-invariant-preserving-0", () => {
 		const sku = fc.string();
 		const price = fc.integer();
 		const OrderService_addItem_pre0 = (sku: string) => sku !== "";
-		const OrderService_addItem_pre1 = (price: number) => isPositive(price);
+		const OrderService_addItem_pre1 = (price: number) => price > 0;
 		const OrderService_inv0 = (balance: number) => balance >= 0;
 		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
 			const instance = new OrderService();

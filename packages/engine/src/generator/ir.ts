@@ -273,6 +273,21 @@ export type PropertyDescriptor = {
 	operation: string;
 	params: ArbitrarySpec[];
 	clauses: PropertyClause[];
+	/**
+	 * Sibling guard oracles (build-spec §9.6 "single-param oracles keep the
+	 * per-param arbitrary + .filter shape", the guard-set soundness fix): the
+	 * renderable SINGLE-PARAM example-strategy clauses of the same
+	 * (component, operation) — e.g. an inline numeric-bound precondition
+	 * `price > 0` whose own strategy stays "example" (no property block of
+	 * its own; the concrete boundary cases remain the spine). The emitter
+	 * renders each guard as a `.filter(<oracle>)` on the sibling block's
+	 * arbitrary so a sampled input never violates a sibling precondition —
+	 * never a bare unbounded `fc.integer()` for a lower-only bound. Present
+	 * ONLY on descriptors whose own clause oracle is single-param (the
+	 * per-param `.filter` layout); multi-param own-clause descriptors
+	 * (mirror / record / FIELD-BOUND) never filter with sibling guards.
+	 */
+	guards?: PropertyClause[];
 	outcome: PropertyOutcome;
 	/** ADR-0007 passthrough on rejects; read from config, default "throws". */
 	rejectionIdiom?: string;
