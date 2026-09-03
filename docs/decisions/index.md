@@ -25,5 +25,6 @@ Architecture decision records (ADRs). Immutable once accepted — a new decision
 | [0019](0019-drop-verified-pure-field.md) | Drop `verifiedPure` — the predicate declaration is the attestation | accepted | ADR-0006 (gate aspect) |
 | [0020](0020-split-generator-planner.md) | Split the generator planner into responsibility-bounded modules | accepted | — |
 | [0021](0021-totality-of-emission.md) | Totality of emission — generated output type-checks or is refused | accepted | — |
+| [0022](0022-npm-publish-pipeline-access-control.md) | npm publish pipeline — manual-only, owner-gated | accepted | — |
 
 See also: [Contracts](../contracts/index.md) · [Specs](../specs/index.md) · [Build spec](../build-spec.md)
