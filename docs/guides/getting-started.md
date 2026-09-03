@@ -16,7 +16,7 @@ The authoring judgment you'll learn in Step 1 is the heart of Versailles' predic
 
 ## Before you start
 
-You need a working `versailles` CLI (install from source — see the [README](../../README.md#contributing--install-from-source); the package is not yet published to npm) and a TypeScript project with vitest wired up. Nothing else: no source file, no manifest, no hand-written test.
+You need a working `versailles` CLI — install the beta from npm with `npm install -g versailles-dbc@beta`, or install from source (see the [README](../../README.md#contributing)) — and a TypeScript project with vitest wired up. Nothing else: no source file, no manifest, no hand-written test.
 
 Check the tool version first — it lives in the **binary**, never in the workspace ([ADR-0018](../decisions/0018-additive-only-format-versioning.md)):
 
@@ -27,7 +27,7 @@ versailles -v
 `-v` (and `--version`) is a root-level flag, not a command: it short-circuits before any workspace load, prints the machine-readable envelope with the tool version, and exits `0` from any directory:
 
 ```json
-{ "ok": true, "errors": [], "warnings": [], "exitCode": 0, "output": { "version": "0.1.0" } }
+{ "ok": true, "errors": [], "warnings": [], "exitCode": 0, "output": { "version": "0.1.0-beta.0" } }
 ```
 
 The loop you're about to run, as a preview:
