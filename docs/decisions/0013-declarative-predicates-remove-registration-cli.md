@@ -3,7 +3,7 @@
 **ID:** ADR-0013
 **Date:** 2026-08-22
 **Status:** accepted
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Template:** MADR-derived decision record
 
 ---
@@ -61,5 +61,5 @@ Chosen option: **Option A**, **because** it makes predicate registration part of
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-22 | associate-head-coach | Initial proposal |
-| 2026-08-22 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-22 | maintainer | Initial proposal |
+| 2026-08-22 | maintainer | Accepted |

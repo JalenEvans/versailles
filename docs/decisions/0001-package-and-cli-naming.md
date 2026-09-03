@@ -3,7 +3,7 @@
 **ID:** ADR-0001
 **Date:** 2026-08-11
 **Status:** accepted
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Template:** MADR-derived decision record
 
 ---
@@ -57,6 +57,6 @@ Chosen option: **`versailles-dbc`** (with scoped `@<org>/versailles` as the fall
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-11 | associate-head-coach | Initial proposal |
-| 2026-08-11 | associate-head-coach | Accepted by Head Coach |
-| 2026-08-19 | general-manager | Confirmation updated: implemented bin mapping is the `./bin/versailles` shim importing `dist/cli/index.js` (VERSAILLES-16), superseding the proposal-time `./dist/cli.js` example |
+| 2026-08-11 | maintainer | Initial proposal |
+| 2026-08-11 | maintainer | Accepted |
+| 2026-08-19 | maintainer | Confirmation updated: implemented bin mapping is the `./bin/versailles` shim importing `dist/cli/index.js` (VERSAILLES-16), superseding the proposal-time `./dist/cli.js` example |

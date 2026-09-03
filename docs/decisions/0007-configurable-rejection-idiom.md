@@ -3,7 +3,7 @@
 **ID:** ADR-0007
 **Date:** 2026-08-11
 **Status:** accepted
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Template:** MADR-derived decision record
 
 ---
@@ -48,5 +48,5 @@ Chosen option: **configurable rejection idiom, defaulting to `throws`**, **becau
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-11 | associate-head-coach | Initial proposal |
-| 2026-08-11 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-11 | maintainer | Initial proposal |
+| 2026-08-11 | maintainer | Accepted |

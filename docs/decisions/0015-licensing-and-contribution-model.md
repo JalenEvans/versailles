@@ -3,7 +3,7 @@
 **ID:** ADR-0015
 **Date:** 2026-08-24
 **Status:** accepted
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Template:** MADR-derived decision record
 
 ---
@@ -18,7 +18,7 @@ Three prerequisite decisions are already resolved:
 - **LIC-1 (VERSAILLES-29, 2026-08-24):** employment IP check passed — no IP assignment clause found; Versailles is personally owned by the author.
 - **LIC-3 (VERSAILLES-31, 2026-08-24):** CLA framework is EasyCLA (Linux Foundation), with both ICLA and CCLA required, using Apache ICLA and Harmony UNMODIFIED templates.
 
-What remains is to record the full licensing and contribution model as an immutable ADR: the per-package licensing layout, the open-core commitment, the CLA mechanism, and the trademark posture — so that future sessions and external contributors encounter a consistent, published position.
+What remains is to record the full licensing and contribution model as an immutable ADR: the per-package licensing layout, the open-core commitment, the CLA mechanism, and the trademark posture — so that future maintainers and external contributors encounter a consistent, published position.
 
 ## Decision Drivers
 
@@ -54,7 +54,7 @@ Chosen option: **MIT core permanently; per-package mixed licensing (ir = Apache-
 
 ### Consequences
 
-- **Positive:** contributors sign a CLA before merging, preserving the project's ability to include contributor work in both the free and commercial tiers. The free-tier commitment (MIT, permanent) is published — external contributors know the deal from day one. The per-package licensing intent is recorded, so future sessions understand the plan without executing it prematurely. The trademark is asserted.
+- **Positive:** contributors sign a CLA before merging, preserving the project's ability to include contributor work in both the free and commercial tiers. The free-tier commitment (MIT, permanent) is published — external contributors know the deal from day one. The per-package licensing intent is recorded, so future maintainers understand the plan without executing it prematurely. The trademark is asserted.
 - **Negative:** the CLA adds contributor friction — every external contributor must sign before their first PR is merged. The per-package layout is unexecutable until D3 (monorepo restructure) is resolved. The commercial tier lives in a separate private repo, which adds operational overhead (two repos to maintain, sync boundaries to define).
 - **Neutral:** `package.json` already carries `"license": "MIT"` (verified, no change needed). `THIRD-PARTY-NOTICES.md` is generated (see below). `CONTRIBUTING.md` is published separately (LIC-5) and will reference this ADR for the CLA process.
 
@@ -80,6 +80,6 @@ Chosen option: **MIT core permanently; per-package mixed licensing (ir = Apache-
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-24 | associate-head-coach | Initial proposal |
-| 2026-08-24 | associate-head-coach | Accepted by Head Coach |
-| 2026-08-24 | general-manager | D3 restructure landed; IR naming disambiguated — the generator's in-memory test-case IR stays MIT, `packages/ir` (VIR schema) is Apache-2.0 |
+| 2026-08-24 | maintainer | Initial proposal |
+| 2026-08-24 | maintainer | Accepted |
+| 2026-08-24 | maintainer | D3 restructure landed; IR naming disambiguated — the generator's in-memory test-case IR stays MIT, `packages/ir` (VIR schema) is Apache-2.0 |

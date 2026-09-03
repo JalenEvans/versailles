@@ -3,8 +3,8 @@
 **ID:** ADR-0021
 **Date:** 2026-09-01
 **Status:** accepted
-**Owner:** associate-head-coach
-**Canonical source:** `~/.opencode/skills/adr-builder/references/adr.template.md`
+**Owner:** maintainer
+**Canonical source:** MADR-derived decision record template
 
 ---
 
@@ -60,5 +60,5 @@ Chosen option: **Option A, because the root cause is an incomplete input model, 
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-09-01 | associate-head-coach | Initial proposal |
-| 2026-09-01 | associate-head-coach | Accepted by Head Coach |
+| 2026-09-01 | maintainer | Initial proposal |
+| 2026-09-01 | maintainer | Accepted |

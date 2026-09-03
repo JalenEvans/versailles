@@ -2,10 +2,10 @@
 
 **ID:** SPEC-wc
 **Lifecycle:** implemented
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Threshold:** data (the `.versailles/` file set is the tool's data layer, identified by the `config.schema.json` pointer; `config.schema.json` gates it), public-api (the `VersaillesContext` object, scoped extraction helper, and `versailles check` exit codes are consumed by every other component and CI)
 **Linked contract:** `docs/contracts/workspace-context.contract.yaml`
-**Canonical source:** `~/.opencode/skills/spec-builder/references/spec.template.md`
+**Canonical source:** spec-builder template
 
 ---
 
@@ -110,9 +110,9 @@ The `.versailles/` workspace — `config.json`, `contracts.json` (with its top-l
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-11 | associate-head-coach | Initial draft from build-spec §2, §3.1, §6, §8; ADR-0009/0010 |
-| 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
-| 2026-08-17 | general-manager | Acknowledged the manifests.json store entry shape — `sourcePath` (never empty for covered entries; legacy entries lacking it preserved as-is) and per-component `methods` metadata — and that the loader surfaces both on `ManifestsFile` entries for downstream consumers (generate handler → emitter modulePaths + call shape). Aligns with the manifest-extraction/deterministic-generation extension (fix/generator-emitter-runnability) |
-| 2026-08-18 | general-manager | Mirrored the review-warning contract follow-up (fix/generator-emitter-runnability): the store shape's `methods` key is always present on refreshed entries — possibly `{}`, the first-class zero-methods signal — with only preserved legacy entries allowed to lack it; the loader surfaces a present empty map exactly as stored, never stripping or inventing it (VERSAILLES-25 follow-up) |
-| 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
-| 2026-08-30 | general-manager | Reconcile with ADR-0018 (VERSAILLES-168 Phase 2/3 follow-up): removed the version-gate behavior/constraint/scope coverage — no grammarVersion/schemaVersion checks, no VERSION_MISMATCH; version-less config is the valid default, `$schema` pointer names `config.schema.json`, deprecated fields load permissively (deprecate-don't-remove) |
+| 2026-08-11 | maintainer | Initial draft from build-spec §2, §3.1, §6, §8; ADR-0009/0010 |
+| 2026-08-13 | maintainer | Removed Linked Plans section — execution plans are tracked outside the public repo |
+| 2026-08-17 | maintainer | Acknowledged the manifests.json store entry shape — `sourcePath` (never empty for covered entries; legacy entries lacking it preserved as-is) and per-component `methods` metadata — and that the loader surfaces both on `ManifestsFile` entries for downstream consumers (generate handler → emitter modulePaths + call shape). Aligns with the manifest-extraction/deterministic-generation extension (fix/generator-emitter-runnability) |
+| 2026-08-18 | maintainer | Mirrored the review-warning contract follow-up (fix/generator-emitter-runnability): the store shape's `methods` key is always present on refreshed entries — possibly `{}`, the first-class zero-methods signal — with only preserved legacy entries allowed to lack it; the loader surfaces a present empty map exactly as stored, never stripping or inventing it (VERSAILLES-25 follow-up) |
+| 2026-08-20 | maintainer | Lifecycle flipped draft → implemented: context shipped and verified for beta |
+| 2026-08-30 | maintainer | Reconcile with ADR-0018 (VERSAILLES-168 Phase 2/3 follow-up): removed the version-gate behavior/constraint/scope coverage — no grammarVersion/schemaVersion checks, no VERSION_MISMATCH; version-less config is the valid default, `$schema` pointer names `config.schema.json`, deprecated fields load permissively (deprecate-don't-remove) |

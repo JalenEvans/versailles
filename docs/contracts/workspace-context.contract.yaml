@@ -1,8 +1,8 @@
 # Contract: workspace-context
-# Owner: general-manager
+# Owner: maintainer
 # Gate: contract_gate — no implementation starts without a registered contract
 # Validated by: scripts/validate-contracts.sh
-# Canonical source: ~/.opencode/skills/contract-builder/references/contract.template.yaml
+# Canonical source: contract-builder template
 
 schema_version: 1
 context: workspace-context
@@ -155,9 +155,9 @@ asserts:
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-11 | general-manager | Initial contract from docs/specs/workspace-context.md; build-spec §2, §3.1, §6, §8; ADR-0009/0010 |
-| 2026-08-13 | general-manager | Pinned the loader never-throws guarantee (F3): invariants/ensures/must/must_not/asserts for structured LoaderErrors on missing/invalid-JSON/malformed-shape files, ScopedView errors for degenerate contexts, and ValidationResult aggregation for semantic validation (ADR-0010) |
-| 2026-08-17 | general-manager | Acknowledged the manifests.json store entry shape — sourcePath (never empty for covered entries; legacy entries lacking it preserved as-is) and per-component methods metadata ({ static, params, returnType? }, recorded where determinable, permissive low-confidence policy) — and that the loader surfaces both on ManifestsFile entries for downstream consumers (generate handler → emitter modulePaths + call shape). Aligns with the manifest-extraction/deterministic-generation extension (fix/generator-emitter-runnability); backs VERSAILLES-20/21/22/23 |
-| 2026-08-18 | general-manager | Acknowledged the canonical sourcePath semantic (VERSAILLES-24): covered entries store project-root-relative POSIX paths (src/order.ts); the loader surfaces them exactly as stored. Aligns with the manifest-extraction/deterministic-generation extension on fix/generator-emitter-runnability |
-| 2026-08-18 | general-manager | Pinned the methods-key presence semantics (VERSAILLES-25 review-warning follow-up): a refreshed manifest entry always carries the methods key — possibly {} — with only preserved legacy entries allowed to lack it; the loader surfaces a present empty map exactly as stored, never stripping or inventing it |
-| 2026-08-30 | general-manager | Reconcile with ADR-0018 (VERSAILLES-168 Phase 2/3 follow-up): removed the version-gate owns/purpose/invariant/ensures/must/must_not/assert coverage — no grammarVersion/schemaVersion checks, no VERSION_MISMATCH error code (LoaderError set is now MISSING_FILE | INVALID_JSON | CONFIG_INVALID | INVALID_SHAPE); version-less config is the valid default, config.json carries the $schema pointer, deprecated fields load permissively (deprecate-don't-remove) |
+| 2026-08-11 | maintainer | Initial contract from docs/specs/workspace-context.md; build-spec §2, §3.1, §6, §8; ADR-0009/0010 |
+| 2026-08-13 | maintainer | Pinned the loader never-throws guarantee (F3): invariants/ensures/must/must_not/asserts for structured LoaderErrors on missing/invalid-JSON/malformed-shape files, ScopedView errors for degenerate contexts, and ValidationResult aggregation for semantic validation (ADR-0010) |
+| 2026-08-17 | maintainer | Acknowledged the manifests.json store entry shape — sourcePath (never empty for covered entries; legacy entries lacking it preserved as-is) and per-component methods metadata ({ static, params, returnType? }, recorded where determinable, permissive low-confidence policy) — and that the loader surfaces both on ManifestsFile entries for downstream consumers (generate handler → emitter modulePaths + call shape). Aligns with the manifest-extraction/deterministic-generation extension (fix/generator-emitter-runnability); backs VERSAILLES-20/21/22/23 |
+| 2026-08-18 | maintainer | Acknowledged the canonical sourcePath semantic (VERSAILLES-24): covered entries store project-root-relative POSIX paths (src/order.ts); the loader surfaces them exactly as stored. Aligns with the manifest-extraction/deterministic-generation extension on fix/generator-emitter-runnability |
+| 2026-08-18 | maintainer | Pinned the methods-key presence semantics (VERSAILLES-25 review-warning follow-up): a refreshed manifest entry always carries the methods key — possibly {} — with only preserved legacy entries allowed to lack it; the loader surfaces a present empty map exactly as stored, never stripping or inventing it |
+| 2026-08-30 | maintainer | Reconcile with ADR-0018 (VERSAILLES-168 Phase 2/3 follow-up): removed the version-gate owns/purpose/invariant/ensures/must/must_not/assert coverage — no grammarVersion/schemaVersion checks, no VERSION_MISMATCH error code (LoaderError set is now MISSING_FILE | INVALID_JSON | CONFIG_INVALID | INVALID_SHAPE); version-less config is the valid default, config.json carries the $schema pointer, deprecated fields load permissively (deprecate-don't-remove) |

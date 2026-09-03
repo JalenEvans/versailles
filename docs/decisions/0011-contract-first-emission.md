@@ -3,7 +3,7 @@
 **ID:** ADR-0011
 **Date:** 2026-08-21
 **Status:** accepted
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Template:** MADR-derived decision record
 
 ---
@@ -63,5 +63,5 @@ Chosen option: **Option A — contract-first emission, with extract-manifests re
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-21 | associate-head-coach | Initial proposal |
-| 2026-08-21 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-21 | maintainer | Initial proposal |
+| 2026-08-21 | maintainer | Accepted |

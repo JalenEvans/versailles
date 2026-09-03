@@ -2,10 +2,10 @@
 
 **ID:** SPEC-pr
 **Lifecycle:** implemented
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Threshold:** data (predicates are part of the tool's data layer — declared inline in `contracts.json`), public-api (the validator's predicate-verification behavior is user-facing)
 **Linked contract:** `docs/contracts/predicate-registry.contract.yaml`
-**Canonical source:** `~/.opencode/skills/spec-builder/references/spec.template.md`
+**Canonical source:** spec-builder template
 
 ---
 
@@ -109,10 +109,10 @@ discoverable to authors.
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-14 | associate-head-coach | Initial draft from build-spec §3.4, §13 milestone 8, §14; ADR-0003/0006/0010 |
-| 2026-08-16 | associate-head-coach | Made the shipped CLI command names concrete (`register-predicate`, `verify-purity`, `remind-unverified`) — milestone 8 tooling is shipped (PR feat/review-ecosystem) |
-| 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
-| 2026-08-22 | power-forward | Rewritten for declarative predicates (ADR-0013): predicates declared inline in contracts.json; registration CLI removed; sourceHash dropped; validate verifies declarations (resolve-or-warn, name validity, purity gate) |
-| 2026-08-30 | general-manager | Reconcile with ADR-0018 (VERSAILLES-168 Phase 2/3 follow-up): predicates are part of the tool's data layer — dropped the stale "versioned" qualifier |
-| 2026-08-30 | general-manager | Reverse-reference discoverability index (VERSAILLES-168 Phase 5, VERSAILLES-173): validate --verbose emits verbose.predicateReferences — one entry per declared predicate (unused included, clauses: []), entries/clauses sorted, singleUse = clauses.length === 1, deterministic (ADR-0002), additive/detail-only; added the workspace-level scope statement |
-| 2026-08-31 | associate-head-coach | Drop the purity gate (ADR-0019): predicate declaration schema is { source, params, paramTypes, returnType }; purity metadata and the gate are removed; the declaration (existence + shape + resolvable sourceRef) is the attestation |
+| 2026-08-14 | maintainer | Initial draft from build-spec §3.4, §13 milestone 8, §14; ADR-0003/0006/0010 |
+| 2026-08-16 | maintainer | Made the shipped CLI command names concrete (`register-predicate`, `verify-purity`, `remind-unverified`) — milestone 8 tooling is shipped (PR feat/review-ecosystem) |
+| 2026-08-20 | maintainer | Lifecycle flipped draft → implemented: context shipped and verified for beta |
+| 2026-08-22 | maintainer | Rewritten for declarative predicates (ADR-0013): predicates declared inline in contracts.json; registration CLI removed; sourceHash dropped; validate verifies declarations (resolve-or-warn, name validity, purity gate) |
+| 2026-08-30 | maintainer | Reconcile with ADR-0018 (VERSAILLES-168 Phase 2/3 follow-up): predicates are part of the tool's data layer — dropped the stale "versioned" qualifier |
+| 2026-08-30 | maintainer | Reverse-reference discoverability index (VERSAILLES-168 Phase 5, VERSAILLES-173): validate --verbose emits verbose.predicateReferences — one entry per declared predicate (unused included, clauses: []), entries/clauses sorted, singleUse = clauses.length === 1, deterministic (ADR-0002), additive/detail-only; added the workspace-level scope statement |
+| 2026-08-31 | maintainer | Drop the purity gate (ADR-0019): predicate declaration schema is { source, params, paramTypes, returnType }; purity metadata and the gate are removed; the declaration (existence + shape + resolvable sourceRef) is the attestation |

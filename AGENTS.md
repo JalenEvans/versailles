@@ -4,7 +4,7 @@ Deterministic test generation from Design-by-Contract specifications.
 
 **Start at [`docs/index.md`](docs/index.md)** — the contributor map.
 
-This repo follows the Code Squad repository convention. Every repo carries:
+This repo follows a repository convention where AGENTS.md points to docs/index.md as the contributor map. Every repo carries:
 
 ```
 AGENTS.md                      ← this file, tiny, points to docs/index.md

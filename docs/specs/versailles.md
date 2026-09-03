@@ -2,7 +2,7 @@
 
 **ID:** SPEC-ver
 **Lifecycle:** implemented
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Threshold:** public-api (the CLI surface, `.versailles/` file formats, generated test files), data (contracts/manifests/predicates are the tool's data layer)
 **Linked contract:** `docs/contracts/versailles.contract.yaml`
 
@@ -105,12 +105,12 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-11 | associate-head-coach | Initial draft from build spec |
-| 2026-08-11 | associate-head-coach | v1 scope pinned by ADR-0009: TS/C#/Python + vitest/xUnit/pytest, TS+vitest first |
-| 2026-08-11 | associate-head-coach | Linked Plans section added pointing to the v1 pipeline implementation plan |
-| 2026-08-11 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
-| 2026-08-11 | associate-head-coach | Architecture correction: CLI never drives an LLM; LLMs drive the CLI (ADR-0010) |
-| 2026-08-19 | general-manager | Programmatic surface pinned: CLI only, no library API in v1 (VERSAILLES-19) |
-| 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
-| 2026-08-30 | general-manager | CLI surface delta (VERSAILLES-171 Phase 3): root-level `-v` / `--version` flags short-circuit before dispatch (exit 0, `{ version }`, no workspace load); subcommands reject them as usage errors; check/generate/extract-manifests share one workspace gate (`requireValidWorkspace`) with the standardized `{}` failure-path output |
-| 2026-08-30 | general-manager | Reconcile with ADR-0018 (VERSAILLES-168 Phase 2/3 follow-up): the `.versailles/` file set is loaded as a single unit — dropped the versioned/version-gate phrasing (no version fields, additive-only format policy) |
+| 2026-08-11 | maintainer | Initial draft from build spec |
+| 2026-08-11 | maintainer | v1 scope pinned by ADR-0009: TS/C#/Python + vitest/xUnit/pytest, TS+vitest first |
+| 2026-08-11 | maintainer | Linked Plans section added pointing to the v1 pipeline implementation plan |
+| 2026-08-11 | maintainer | Removed Linked Plans section — execution plans are tracked outside the public repo |
+| 2026-08-11 | maintainer | Architecture correction: CLI never drives an LLM; LLMs drive the CLI (ADR-0010) |
+| 2026-08-19 | maintainer | Programmatic surface pinned: CLI only, no library API in v1 (VERSAILLES-19) |
+| 2026-08-20 | maintainer | Lifecycle flipped draft → implemented: context shipped and verified for beta |
+| 2026-08-30 | maintainer | CLI surface delta (VERSAILLES-171 Phase 3): root-level `-v` / `--version` flags short-circuit before dispatch (exit 0, `{ version }`, no workspace load); subcommands reject them as usage errors; check/generate/extract-manifests share one workspace gate (`requireValidWorkspace`) with the standardized `{}` failure-path output |
+| 2026-08-30 | maintainer | Reconcile with ADR-0018 (VERSAILLES-168 Phase 2/3 follow-up): the `.versailles/` file set is loaded as a single unit — dropped the versioned/version-gate phrasing (no version fields, additive-only format policy) |

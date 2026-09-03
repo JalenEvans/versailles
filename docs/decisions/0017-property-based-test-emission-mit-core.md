@@ -3,8 +3,8 @@
 **ID:** ADR-0017
 **Date:** 2026-08-28
 **Status:** accepted
-**Owner:** associate-head-coach
-**Canonical source:** `~/.opencode/skills/adr-builder/references/adr.template.md`
+**Owner:** maintainer
+**Canonical source:** MADR-derived decision record template
 
 ---
 
@@ -69,5 +69,5 @@ Chosen option: **Option A — PBT emission in the MIT core (L0–L2), opt-in via
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-28 | associate-head-coach | Initial proposal |
-| 2026-08-28 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-28 | maintainer | Initial proposal |
+| 2026-08-28 | maintainer | Accepted |

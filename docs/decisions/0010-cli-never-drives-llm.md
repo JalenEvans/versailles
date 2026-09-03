@@ -3,7 +3,7 @@
 **ID:** ADR-0010
 **Date:** 2026-08-11
 **Status:** accepted
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Template:** MADR-derived decision record
 
 ---
@@ -56,6 +56,6 @@ Chosen option: **external agent drives the CLI**, **because** it keeps Versaille
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-11 | associate-head-coach | Initial proposal |
-| 2026-08-11 | associate-head-coach | Accepted by Head Coach |
-| 2026-08-19 | general-manager | Confirmation added: no importable library surface — integration via CLI subprocess + structured JSON, never in-process imports |
+| 2026-08-11 | maintainer | Initial proposal |
+| 2026-08-11 | maintainer | Accepted |
+| 2026-08-19 | maintainer | Confirmation added: no importable library surface — integration via CLI subprocess + structured JSON, never in-process imports |

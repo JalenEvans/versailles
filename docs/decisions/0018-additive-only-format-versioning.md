@@ -3,8 +3,8 @@
 **ID:** ADR-0018
 **Date:** 2026-08-30
 **Status:** accepted
-**Owner:** associate-head-coach
-**Canonical source:** `~/.opencode/skills/adr-builder/references/adr.template.md`
+**Owner:** maintainer
+**Canonical source:** MADR-derived decision record template
 
 ---
 
@@ -70,5 +70,5 @@ Chosen option: **Option A — additive-only format evolution, deprecate-don't-re
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-30 | associate-head-coach | Initial proposal |
-| 2026-08-30 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-30 | maintainer | Initial proposal |
+| 2026-08-30 | maintainer | Accepted |
