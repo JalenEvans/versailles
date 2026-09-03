@@ -3,7 +3,7 @@
 **ID:** ADR-0016
 **Date:** 2026-08-25
 **Status:** accepted
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Template:** MADR-derived decision record
 
 ---
@@ -60,5 +60,5 @@ Chosen option: **Option A — CLA Assistant (cla-assistant.io, gist-based GitHub
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-25 | associate-head-coach | Initial proposal |
-| 2026-08-25 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-25 | maintainer | Initial proposal |
+| 2026-08-25 | maintainer | Accepted |

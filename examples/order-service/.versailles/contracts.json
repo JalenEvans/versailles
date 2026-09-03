@@ -1,16 +1,4 @@
 {
-  "predicates": {
-    "isPositive": {
-      "source": "OrderService.isPositive",
-      "params": [
-        "amount"
-      ],
-      "paramTypes": [
-        "number"
-      ],
-      "returnType": "boolean"
-    }
-  },
   "contracts": {
     "OrderService": {
       "invariants": [
@@ -39,7 +27,7 @@
             },
             {
               "id": "OrderService.addItem.pre1",
-              "expr": "isPositive(price)"
+              "expr": "price > 0"
             }
           ],
           "postconditions": [

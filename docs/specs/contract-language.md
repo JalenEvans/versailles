@@ -2,10 +2,10 @@
 
 **ID:** SPEC-cl
 **Lifecycle:** implemented
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Threshold:** public-api (the expression grammar, AST node contract, and structured error contract are consumed by CI and external tooling), data (the parsed AST and validation results gate what enters `contracts.json`)
 **Linked contract:** `docs/contracts/contract-language.contract.yaml`
-**Canonical source:** `~/.opencode/skills/spec-builder/references/spec.template.md`
+**Canonical source:** spec-builder template
 
 ---
 
@@ -101,8 +101,8 @@ The contract language is the boolean-valued expression grammar (build-spec §4.1
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-11 | associate-head-coach | Initial draft from build-spec §4–§5, ADR-0006/0008/0010 |
-| 2026-08-13 | associate-head-coach | Removed Linked Plans section — execution plans are tracked outside the public repo |
-| 2026-08-20 | head-coach | Lifecycle flipped draft → implemented: context shipped and verified for beta |
-| 2026-08-30 | general-manager | VERSAILLES-172: UNKNOWN_PREDICATE 'did you mean' fuzzy suggestion behavior spec'd (Levenshtein ≤ 2, at most 2, deterministic, detail-only) |
-| 2026-08-31 | associate-head-coach | Drop the purity gate (ADR-0019): predicate calls resolve to any declared predicate — existence, arity, arg types checked; no purity gate |
+| 2026-08-11 | maintainer | Initial draft from build-spec §4–§5, ADR-0006/0008/0010 |
+| 2026-08-13 | maintainer | Removed Linked Plans section — execution plans are tracked outside the public repo |
+| 2026-08-20 | maintainer | Lifecycle flipped draft → implemented: context shipped and verified for beta |
+| 2026-08-30 | maintainer | VERSAILLES-172: UNKNOWN_PREDICATE 'did you mean' fuzzy suggestion behavior spec'd (Levenshtein ≤ 2, at most 2, deterministic, detail-only) |
+| 2026-08-31 | maintainer | Drop the purity gate (ADR-0019): predicate calls resolve to any declared predicate — existence, arity, arg types checked; no purity gate |

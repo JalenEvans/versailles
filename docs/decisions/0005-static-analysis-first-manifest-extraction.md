@@ -3,7 +3,7 @@
 **ID:** ADR-0005
 **Date:** 2026-08-11
 **Status:** accepted
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Template:** MADR-derived decision record
 
 ---
@@ -50,6 +50,6 @@ Chosen option: **static analysis first**, **because** it is the only option that
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-11 | associate-head-coach | Initial proposal |
-| 2026-08-11 | associate-head-coach | Accepted by Head Coach |
-| 2026-08-11 | general-manager | Added ADR-0010 clarification note (external-agent framing); decision body unchanged |
+| 2026-08-11 | maintainer | Initial proposal |
+| 2026-08-11 | maintainer | Accepted |
+| 2026-08-11 | maintainer | Added ADR-0010 clarification note (external-agent framing); decision body unchanged |

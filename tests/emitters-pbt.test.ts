@@ -1957,3 +1957,128 @@ describe("emitters-pbt fixture integrity — single-param-only oracles (Center B
 		}
 	});
 });
+
+// ── Example-strategy numeric-bound preconditions guard sibling blocks ────────
+// build-spec §9.6 "single-param oracles keep the per-param arbitrary + .filter
+// shape" — INCLUDING single-param example-strategy clauses that are renderable.
+// The committed example's `price > 0` precondition (numeric-bound → strategy
+// "example") must still constrain the operation's SIBLING property blocks via
+// a `.filter` oracle, so `fc.integer()` never feeds addItem a price <= 0. This
+// is the FULL-PIPELINE pin (planTestCases → planPropertyBlocks → emitSuite)
+// for the generator-soundness bug: the planner currently EXCLUDES every
+// "example" strategy clause from the guard set, so the sibling blocks sample
+// `price` bare and the property fails at runtime (price = 0 thrown). The fix
+// must emit `price.filter(OrderService_addItem_pre1)` with the pre1 const
+// `(price: number) => price > 0` in BOTH the satisfies and the
+// invariant-preserving block.
+
+/** The order-service example's shape with `price > 0` as the numeric-bound clause. */
+function numericGuardEmitContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		contracts: {
+			OrderService: {
+				invariants: [{ id: "OrderService.inv0", expr: "balance >= 0" }],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{ id: "OrderService.addItem.pre0", expr: 'sku != ""' },
+							{ id: "OrderService.addItem.pre1", expr: "price > 0" },
+						],
+						postconditions: [],
+						effects: [{ field: "balance", kind: "mutate" }],
+						sourceHash: "additem-numeric-guard-emit-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		manifests: {
+			OrderService: {
+				sourceHash: "man-additem-numeric-guard-emit",
+				fields: { balance: "number" },
+			},
+		},
+	};
+	return {
+		config: execConfig({ enabled: true, numRuns: 100 }),
+		contracts,
+		manifests,
+		predicates: EXEC_EMPTY_PREDICATES,
+		parsedContracts: execParseAll(contracts),
+		parseErrors: [],
+		validationErrors: [],
+		validationWarnings: [],
+		isValid: true,
+	};
+}
+
+describe("emitSuite vitest — example-strategy numeric-bound preconditions guard sibling blocks (full pipeline)", () => {
+	it("the sibling satisfies + invariant-preserving blocks emit price.filter(OrderService_addItem_pre1) — never a bare unfiltered fc.integer() for price", () => {
+		const ctx = numericGuardEmitContext();
+		const suite = planTestCases(ctx);
+		const plan = planPropertyBlocks(suite, ctx);
+
+		// Planner precondition pin: the numeric-bound clause is example (no
+		// property block of its own — the §9.2 boundary cases cover it), yet
+		// its oracle must still guard the sibling blocks.
+		expect(plan.strategies["OrderService.addItem.pre1"]).toBe("example");
+		expect(
+			plan.descriptors.some((d) =>
+				d.traces.includes("OrderService.addItem.pre1"),
+			),
+		).toBe(false);
+
+		const files = emitSuite(suite, "vitest", {
+			generatedDir: ".",
+			methods: {
+				OrderService: {
+					addItem: {
+						static: false,
+						params: ["sku", "price"],
+						returnType: "void",
+					},
+				},
+			},
+			fieldAccess: { OrderService: { balance: "private" } },
+			fieldTypes: { OrderService: { balance: "number" } },
+			propertyPlan: plan,
+			propertyNumRuns: 100,
+		});
+		const order = files.find((file) =>
+			file.path.endsWith("OrderService.test.ts"),
+		);
+		expect(order).toBeDefined();
+
+		// The numeric-bound oracle is embedded as the typed pre1 const — the
+		// SAME codegen'd arrow that fills the arbitrary `.filter(...)`.
+		expect(order?.content).toContain(
+			"\t\tconst OrderService_addItem_pre1 = (price: number) => price > 0;",
+		);
+		// ...and filters price in the sibling blocks (the full valid region:
+		// sku non-empty AND price > 0 are all guarded before the call).
+		expect(order?.content).toContain("price.filter(OrderService_addItem_pre1)");
+		// The satisfies block must NOT pass price BARE to the operation — a
+		// bare `fc.integer()` for price is exactly the silent-runtime-failure
+		// shape this pin forbids.
+		expect(order?.content).not.toContain(
+			"fc.property(sku.filter(OrderService_addItem_pre0), price, (sku, price) => {",
+		);
+		// The invariant-preserving block guards price the same way and still
+		// asserts its field oracle on the bound instance.
+		expect(order?.content).toContain(
+			"fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {",
+		);
+		expect(order?.content).toContain(
+			"expect(OrderService_inv0((instance as any).balance)).toBe(true);",
+		);
+		// `price > 0` is an inline numeric bound, not a predicateCall — no
+		// predicate import is needed for the guard oracle.
+		expect(order?.content).not.toContain("import { isPositive }");
+	});
+});

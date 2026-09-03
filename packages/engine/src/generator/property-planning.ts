@@ -757,17 +757,57 @@ export function planPropertyBlocks(
 			// set — its own descriptor carries the render-failure warning
 			// (Center W5) below instead.
 			const guardCandidates: { clauseId: string; ast: Node }[] = [];
+			// §9.6 guard-set soundness: a renderable SINGLE-PARAM
+			// example-strategy clause (e.g. an inline numeric-bound
+			// precondition `price > 0`) keeps its "example" strategy — no
+			// property block of its own — but its oracle must STILL join the
+			// operation's guard set so every per-param-filter sibling block
+			// filters to the valid region. A lower-only numeric bound attaches
+			// no bounds object, so a bare `fc.integer()` would sample ≤0 and
+			// the property would fail silently (the generator-soundness bug:
+			// the guard-set construction excluded every "example" clause).
+			// Multi-param / unrenderable example-strategy clauses stay
+			// excluded — their shapes follow the existing PROPERTY_UNPLANNABLE
+			// path.
+			const exampleGuardOracles: { clauseId: string; code: string }[] = [];
 			for (const pre of operation.preconditions ?? []) {
 				const ast = context.parsedContracts[pre.id];
-				if (strategies[pre.id] !== "example" && ast !== undefined) {
-					guardCandidates.push({ clauseId: pre.id, ast });
+				if (ast === undefined) {
+					continue;
 				}
+				if (strategies[pre.id] === "example") {
+					try {
+						const code = renderClausePredicate(ast, { predicates });
+						if (oracleParamsOf(code).length <= 1) {
+							exampleGuardOracles.push({ clauseId: pre.id, code });
+						}
+					} catch {
+						// Unrenderable example-strategy clause — never a guard
+						// oracle (its own descriptor would warn on the
+						// property path; example clauses never reach it).
+					}
+					continue;
+				}
+				guardCandidates.push({ clauseId: pre.id, ast });
 			}
 			for (const post of operation.postconditions ?? []) {
 				const ast = context.parsedContracts[post.id];
-				if (strategies[post.id] !== "example" && ast !== undefined) {
-					guardCandidates.push({ clauseId: post.id, ast });
+				if (ast === undefined) {
+					continue;
 				}
+				if (strategies[post.id] === "example") {
+					try {
+						const code = renderClausePredicate(ast, { predicates });
+						if (oracleParamsOf(code).length <= 1) {
+							exampleGuardOracles.push({ clauseId: post.id, code });
+						}
+					} catch {
+						// Unrenderable example-strategy clause — never a guard
+						// oracle.
+					}
+					continue;
+				}
+				guardCandidates.push({ clauseId: post.id, ast });
 			}
 			for (const invariant of invariants) {
 				const ast = context.parsedContracts[invariant.id];
@@ -986,12 +1026,24 @@ export function planPropertyBlocks(
 						params = mirrored;
 					}
 				}
+				// §9.6 guard-set wiring: attach the operation's renderable
+				// single-param example-strategy guard oracles ONLY to
+				// descriptors whose own clause oracle is single-param — the
+				// per-param `.filter` layout that actually consumes sibling
+				// guards. Multi-param own-clause descriptors (mirror / record
+				// / FIELD-BOUND) never filter with sibling guards, so they
+				// carry no `guards` (keeps the record/field-bound pins
+				// byte-identical).
+				const ownOracleParams = oracleParamsOf(code);
 				descriptors.push({
 					id: nextId(outcome),
 					component: componentName,
 					operation: operationName,
 					params,
 					clauses: [{ clauseId, code }],
+					...(exampleGuardOracles.length > 0 && ownOracleParams.length <= 1
+						? { guards: exampleGuardOracles }
+						: {}),
 					outcome,
 					traces: [clauseId],
 					// Seed wiring: the explicit override wins; otherwise the

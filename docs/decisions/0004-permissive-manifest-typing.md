@@ -3,7 +3,7 @@
 **ID:** ADR-0004
 **Date:** 2026-08-11
 **Status:** accepted
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Template:** MADR-derived decision record
 
 ---
@@ -48,5 +48,5 @@ Chosen option: **permissive with warnings**, **because** it keeps dynamically-ty
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-11 | associate-head-coach | Initial proposal |
-| 2026-08-11 | associate-head-coach | Accepted by Head Coach |
+| 2026-08-11 | maintainer | Initial proposal |
+| 2026-08-11 | maintainer | Accepted |

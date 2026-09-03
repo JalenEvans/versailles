@@ -1,14 +1,9 @@
 /**
  * OrderService — the minimal reference domain for the Versailles example
- * workspace (VERSAILLES-17). One invariant (`balance >= 0`), one operation
- * with a pre/postcondition pair (`addItem`), and one registered pure
- * predicate (`isPositive`) used by a predicate-call precondition.
+ * workspace (VERSAILLES-17). One invariant (`balance >= 0`) and one operation
+ * with a pre/postcondition pair (`addItem`). All preconditions are expressed
+ * inline — grammar-expressible clauses, no named predicates.
  */
-
-/** Registered pure predicate: price must be a positive number. */
-export function isPositive(amount: number): boolean {
-	return amount > 0;
-}
 
 /** An order accumulates a non-negative balance as items are added. */
 export class OrderService {
@@ -26,7 +21,7 @@ export class OrderService {
 		if (sku === "") {
 			throw new Error("sku must not be empty");
 		}
-		if (!isPositive(price)) {
+		if (price <= 0) {
 			throw new Error("price must be positive");
 		}
 		this.balance += price;

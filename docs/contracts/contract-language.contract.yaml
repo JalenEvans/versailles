@@ -1,8 +1,8 @@
 # Contract: contract-language
-# Owner: general-manager
+# Owner: maintainer
 # Gate: contract_gate — no implementation starts without a registered contract
 # Validated by: scripts/validate-contracts.sh
-# Canonical source: ~/.opencode/skills/contract-builder/references/contract.template.yaml
+# Canonical source: contract-builder template
 
 schema_version: 1
 context: contract-language
@@ -134,6 +134,6 @@ asserts:
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-09-01 | general-manager | Removed the verifiedPure purity gate (ADR-0019): resolve_predicate now resolves to any declared predicate by existence, checking arity and argument types against the entry's params/paramTypes — no purity attestation required; removed all UNVERIFIED_PREDICATE / ADR-0006 hard-error-on-false language from owns/purpose/invariants/operations/must/must_not/limits/asserts; retained UNKNOWN_PREDICATE existence checks with 'did you mean' suggestions |
-| 2026-08-11 | general-manager | Initial contract from docs/specs/contract-language.md; build-spec §4–§5; ADR-0004/0006/0008/0010 |
-| 2026-08-30 | general-manager | VERSAILLES-172: UNKNOWN_PREDICATE 'did you mean' fuzzy suggestions spec'd (Levenshtein ≤ 2, at most 2, distance-then-alphabetical, detail-only) |
+| 2026-09-01 | maintainer | Removed the verifiedPure purity gate (ADR-0019): resolve_predicate now resolves to any declared predicate by existence, checking arity and argument types against the entry's params/paramTypes — no purity attestation required; removed all UNVERIFIED_PREDICATE / ADR-0006 hard-error-on-false language from owns/purpose/invariants/operations/must/must_not/limits/asserts; retained UNKNOWN_PREDICATE existence checks with 'did you mean' suggestions |
+| 2026-08-11 | maintainer | Initial contract from docs/specs/contract-language.md; build-spec §4–§5; ADR-0004/0006/0008/0010 |
+| 2026-08-30 | maintainer | VERSAILLES-172: UNKNOWN_PREDICATE 'did you mean' fuzzy suggestions spec'd (Levenshtein ≤ 2, at most 2, distance-then-alphabetical, detail-only) |

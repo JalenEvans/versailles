@@ -828,28 +828,48 @@ function renderPropertyBlock(
 
 	// Guard set (GAP 3): the clause oracle of EVERY satisfies +
 	// invariant-preserving descriptor for the same (component, operation), in
-	// plan order. Each callback param referenced by a guard oracle gets
-	// `.filter(<first guard oracle referencing it>)` on its arbitrary — so
-	// every input reaching the call satisfies ALL sibling oracles.
+	// plan order — PLUS each descriptor's `guards` (the renderable
+	// SINGLE-PARAM example-strategy sibling oracles, build-spec §9.6). Each
+	// callback param referenced by a guard oracle gets `.filter(<first guard
+	// oracle referencing it>)` on its arbitrary — so every input reaching the
+	// call satisfies ALL sibling oracles.
 	const guardOracles: GuardOracle[] = [];
+	// Dedupe by clauseId: the same example-strategy guard sits on EVERY
+	// single-param sibling descriptor's `guards`, so a naive collection would
+	// emit duplicate `const` declarations (a TS redeclaration error) in the
+	// block.
+	const seenGuardClauseIds = new Set<string>();
+	const pushGuardOracle = (clause: {
+		clauseId: string;
+		code: string;
+	}): void => {
+		if (seenGuardClauseIds.has(clause.clauseId)) {
+			return;
+		}
+		seenGuardClauseIds.add(clause.clauseId);
+		const oracle: GuardOracle = {
+			constName: sanitizeId(clause.clauseId),
+			clauseId: clause.clauseId,
+			code: clause.code,
+			oracleParams: oracleParamsOf(clause.code),
+		};
+		// VERSAILLES-175: an oracle referencing an op-param whose typeRef
+		// has no renderable TS form (e.g. list<Order>) cannot be embedded
+		// type-safely — dropping it here (its filter/assert never render)
+		// is the non-silent alternative to a bare untyped lambda (the
+		// TS7006 bug); the EMISSION_UNRENDERABLE warning for the op-param
+		// fires in renderComponentFile.
+		if (hasUnrenderableOpParam(oracle.code, descriptor)) {
+			return;
+		}
+		guardOracles.push(oracle);
+	};
 	for (const sibling of guardDescriptors) {
 		for (const clause of sibling.clauses) {
-			const oracle: GuardOracle = {
-				constName: sanitizeId(clause.clauseId),
-				clauseId: clause.clauseId,
-				code: clause.code,
-				oracleParams: oracleParamsOf(clause.code),
-			};
-			// VERSAILLES-175: an oracle referencing an op-param whose typeRef
-			// has no renderable TS form (e.g. list<Order>) cannot be embedded
-			// type-safely — dropping it here (its filter/assert never render)
-			// is the non-silent alternative to a bare untyped lambda (the
-			// TS7006 bug); the EMISSION_UNRENDERABLE warning for the op-param
-			// fires in renderComponentFile.
-			if (hasUnrenderableOpParam(oracle.code, descriptor)) {
-				continue;
-			}
-			guardOracles.push(oracle);
+			pushGuardOracle(clause);
+		}
+		for (const guard of sibling.guards ?? []) {
+			pushGuardOracle(guard);
 		}
 	}
 

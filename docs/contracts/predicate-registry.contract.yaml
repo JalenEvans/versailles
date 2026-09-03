@@ -1,8 +1,8 @@
 # Contract: predicate-registry
-# Owner: general-manager
+# Owner: maintainer
 # Gate: contract_gate — no implementation starts without a registered contract
 # Validated by: scripts/validate-contracts.sh
-# Canonical source: ~/.opencode/skills/contract-builder/references/contract.template.yaml
+# Canonical source: contract-builder template
 
 schema_version: 1
 context: predicate-registry
@@ -116,7 +116,7 @@ asserts:
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-09-01 | general-manager | Dropped the verifiedPure field and the ADR-0006 purity gate (ADR-0019): predicate declaration schema is now { source, params, paramTypes, returnType }; removed verifiedPure from schema/owns/purpose/invariants/must/must_not/limits/asserts and the verify_predicate_reference operation; any declared predicate is now referenceable, with anti-hallucination enforced by sourceRef resolution and impurity/non-termination surfaced by the generated suite at run time; existence-based UNKNOWN_PREDICATE hard error retained |
-| 2026-08-14 | general-manager | Initial contract from docs/specs/predicate-registry.md; build-spec §3.4, §13 milestone 8, §14; ADR-0003/0006/0010 |
-| 2026-08-22 | power-forward | Rewritten for declarative predicates (ADR-0013): predicates declared inline in contracts.json; registration CLI removed; sourceHash dropped; validate verifies declarations (resolve-or-warn, name validity, verifiedPure gate preserved) |
-| 2026-08-30 | general-manager | Reverse-reference discoverability index (VERSAILLES-168 Phase 5, VERSAILLES-173): can — validate --verbose may emit verbose.predicateReferences; must — deterministic (ADR-0002), one entry per declared predicate (unused included with clauses: []), entries and clauses sorted, singleUse = clauses.length === 1, additive/detail-only with no error-shape change; asserts added |
+| 2026-09-01 | maintainer | Dropped the verifiedPure field and the ADR-0006 purity gate (ADR-0019): predicate declaration schema is now { source, params, paramTypes, returnType }; removed verifiedPure from schema/owns/purpose/invariants/must/must_not/limits/asserts and the verify_predicate_reference operation; any declared predicate is now referenceable, with anti-hallucination enforced by sourceRef resolution and impurity/non-termination surfaced by the generated suite at run time; existence-based UNKNOWN_PREDICATE hard error retained |
+| 2026-08-14 | maintainer | Initial contract from docs/specs/predicate-registry.md; build-spec §3.4, §13 milestone 8, §14; ADR-0003/0006/0010 |
+| 2026-08-22 | maintainer | Rewritten for declarative predicates (ADR-0013): predicates declared inline in contracts.json; registration CLI removed; sourceHash dropped; validate verifies declarations (resolve-or-warn, name validity, verifiedPure gate preserved) |
+| 2026-08-30 | maintainer | Reverse-reference discoverability index (VERSAILLES-168 Phase 5, VERSAILLES-173): can — validate --verbose may emit verbose.predicateReferences; must — deterministic (ADR-0002), one entry per declared predicate (unused included with clauses: []), entries and clauses sorted, singleUse = clauses.length === 1, additive/detail-only with no error-shape change; asserts added |

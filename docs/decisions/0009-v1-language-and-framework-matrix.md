@@ -3,14 +3,14 @@
 **ID:** ADR-0009
 **Date:** 2026-08-11
 **Status:** accepted
-**Owner:** associate-head-coach
+**Owner:** maintainer
 **Template:** MADR-derived decision record
 
 ---
 
 ## Context and Problem Statement
 
-The build spec (§7, §9.4, §14) assumed v1 targets **one** language and **one** test framework ("pick based on your primary repo"). The Head Coach has decided v1 instead spans three source languages and three test frameworks, with TypeScript + vitest first. This changes the v1 scope and the build milestone ordering.
+The build spec (§7, §9.4, §14) assumed v1 targets **one** language and **one** test framework ("pick based on your primary repo"). The maintainer has decided v1 instead spans three source languages and three test frameworks, with TypeScript + vitest first. This changes the v1 scope and the build milestone ordering.
 
 ## Decision Drivers
 
@@ -62,5 +62,5 @@ Sequencing: **TypeScript + vitest first**, then C# + xUnit, then Python + pytest
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-11 | associate-head-coach | Initial proposal, accepted by Head Coach |
-| 2026-08-13 | associate-head-coach | Supersession note extended to include build-spec §3.1 (config example) |
+| 2026-08-11 | maintainer | Initial proposal, accepted |
+| 2026-08-13 | maintainer | Supersession note extended to include build-spec §3.1 (config example) |

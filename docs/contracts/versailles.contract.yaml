@@ -1,8 +1,8 @@
 # Contract: versailles
-# Owner: general-manager
+# Owner: maintainer
 # Gate: contract_gate — no implementation starts without a registered contract
 # Validated by: scripts/validate-contracts.sh
-# Canonical source: ~/.opencode/skills/contract-builder/references/contract.template.yaml
+# Canonical source: contract-builder template
 
 schema_version: 1
 context: versailles
@@ -173,7 +173,7 @@ asserts:
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-08-14 | general-manager | Initial contract from docs/specs/versailles.md; build-spec §6, §8, §9, §10, §12; ADR-0002/0010. Cross-references workspace-context for staleness exit-code mechanics; no duplication of its check_staleness ownership |
-| 2026-08-16 | general-manager | Extended the command surface from six to nine subcommands — register-predicate, verify-purity, remind-unverified and the review --approve/--reject flags shipped (PR feat/review-ecosystem); build-spec §12 updated in step |
-| 2026-08-22 | power-forward | Retired review + predicate registration CLI per ADR-0012 / ADR-0013; command surface is now five subcommands; validate --verbose carries the parser-sanity view; predicates are declarative in contracts.json |
-| 2026-08-30 | general-manager | VERSAILLES-171 Phase 3 (CLI surface delta): root-level -v/--version flags short-circuit before dispatch (exit 0, output { version }, no workspace load, any directory); subcommands reject them as usage errors; check/generate/extract-manifests share one workspace gate (requireValidWorkspace) and standardize every failure path on exit 1 with the empty output envelope {} — the per-command { staleIds: [] } / { files: [] } envelopes are gone |
+| 2026-08-14 | maintainer | Initial contract from docs/specs/versailles.md; build-spec §6, §8, §9, §10, §12; ADR-0002/0010. Cross-references workspace-context for staleness exit-code mechanics; no duplication of its check_staleness ownership |
+| 2026-08-16 | maintainer | Extended the command surface from six to nine subcommands — register-predicate, verify-purity, remind-unverified and the review --approve/--reject flags shipped (PR feat/review-ecosystem); build-spec §12 updated in step |
+| 2026-08-22 | maintainer | Retired review + predicate registration CLI per ADR-0012 / ADR-0013; command surface is now five subcommands; validate --verbose carries the parser-sanity view; predicates are declarative in contracts.json |
+| 2026-08-30 | maintainer | VERSAILLES-171 Phase 3 (CLI surface delta): root-level -v/--version flags short-circuit before dispatch (exit 0, output { version }, no workspace load, any directory); subcommands reject them as usage errors; check/generate/extract-manifests share one workspace gate (requireValidWorkspace) and standardize every failure path on exit 1 with the empty output envelope {} — the per-command { staleIds: [] } / { files: [] } envelopes are gone |

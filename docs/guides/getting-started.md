@@ -16,7 +16,7 @@ The authoring judgment you'll learn in Step 1 is the heart of Versailles' predic
 
 ## Before you start
 
-You need a working `versailles` CLI (install from source — see the [README](../../README.md#contributing--install-from-source); the package is not yet published to npm) and a TypeScript project with vitest wired up. Nothing else: no source file, no manifest, no hand-written test.
+You need a working `versailles` CLI — install the beta from npm with `npm install -g versailles-dbc@beta`, or install from source (see the [README](../../README.md#contributing)) — and a TypeScript project with vitest wired up. Nothing else: no source file, no manifest, no hand-written test.
 
 Check the tool version first — it lives in the **binary**, never in the workspace ([ADR-0018](../decisions/0018-additive-only-format-versioning.md)):
 
@@ -27,7 +27,7 @@ versailles -v
 `-v` (and `--version`) is a root-level flag, not a command: it short-circuits before any workspace load, prints the machine-readable envelope with the tool version, and exits `0` from any directory:
 
 ```json
-{ "ok": true, "errors": [], "warnings": [], "exitCode": 0, "output": { "version": "0.1.0" } }
+{ "ok": true, "errors": [], "warnings": [], "exitCode": 0, "output": { "version": "0.1.0-beta.0" } }
 ```
 
 The loop you're about to run, as a preview:
@@ -39,7 +39,7 @@ versailles validate    # gate 1: parse + semantic + predicate checks
 versailles generate    # deterministic suite → .versailles/generated/
 bun run test           # Red (import error) → Green (after Step 5)
 versailles check       # CI lint: validate + staleness (exit 0/1/2)
-git commit             # the commit IS the approval (ADR-0012)
+git commit
 ```
 
 ## Step 0 — Scaffold the workspace
@@ -109,10 +109,10 @@ Open `.versailles/contracts.json` and write the whole contract. This is the arti
 What each piece means (vocabulary lives in the [glossary](../glossary.md); the grammar is [build-spec §4](../build-spec.md#4-contract-expression-grammar)):
 
 - **`predicates` map (top level)** — the [declarative predicate](../glossary.md) `isValidSku` is declared inline here, no separate registry file, no registration CLI ([ADR-0013](../decisions/0013-declarative-predicates-remove-registration-cli.md)). The declaration: `source` (`OrderService.isValidSku` — the qualified name of the real function, resolved under `config.sourceRoots`), `params`/`paramTypes` (arity and argument types), `returnType` (`boolean`). The declaration itself is the attestation — `validate` resolves the `sourceRef` against real source on every run, and no purity gate applies ([ADR-0019](../decisions/0019-drop-verified-pure-field.md)).
-- **Why `isValidSku`, not `isPositive`?** The two preconditions show the inline-vs-predicate judgment (sidebar below): `price > 0` is grammar-expressible, so it stays **inline**; `isValidSku(sku)` checks a string *format* (regex — the grammar has no pattern matching), so it cannot be inline and earns a named predicate. It is also named for the reusable property, not for this one consumer.
+- **Why `isValidSku`, not an inline expression?** The two preconditions show the inline-vs-predicate judgment (see the inline-vs-predicate callout below): `price > 0` is grammar-expressible, so it stays **inline**; `isValidSku(sku)` checks a string *format* (regex — the grammar has no pattern matching), so it cannot be inline and earns a named predicate. It is also named for the reusable property, not for this one consumer.
 - **`invariants`** — `balance >= 0` must hold for every instance at all times, before and after every operation call. A clause.
 - **`operations.addItem`** — one operation with a typed `params` list, two `preconditions` clauses (a predicate-call precondition and an inline comparison), a `postconditions` clause that compares against pre-call state via `old(balance)`, and an `effects` declaration saying `addItem` mutates `balance` (the generator uses effects to know which field a postcondition-satisfaction test should assert against).
-- **`sourceHash`** — a placeholder in greenfield; the git commit is the approval anyway ([ADR-0012](../decisions/0012-git-commit-as-approval-remove-review-gate.md)). On the brownfield path, `extract-manifests` computes real structural hashes.
+- **`sourceHash`** — a placeholder in greenfield; approval lives in the authored commit, not a tool ceremony ([ADR-0012](../decisions/0012-git-commit-as-approval-remove-review-gate.md)). On the brownfield path, `extract-manifests` computes real structural hashes.
 
 > **Inline vs predicate — the judgment call**
 >
@@ -285,7 +285,7 @@ Now the traceability. Every generated test carries a [traceability comment](../g
 
 Every clause is covered; nothing is silent. (The default suite is concrete cases only. Opt into seeded property-based blocks later — see the [PBT consumer guide](pbt-emission.md).)
 
-> **About the call shape you see here.** This is exactly the shape the committed example workspace emits (`bun run example:generate` regenerates it byte-identically): imports derived from the manifest's `sourcePath` (`../../src/OrderService.ts`), instance calls, real matcher assertions, and the deliberate `(instance as any)` casts for the private `balance` field — decided from the manifest's `fieldAccess: { balance: "private" }`, never applied to public fields ([ADR-0021](../decisions/0021-totality-of-emission.md)). The committed example also enables `propertyBased`, so its generated file additionally shows **typed oracle lambdas** — `(sku: string) => sku !== ""`, `(price: number) => isPositive(price)` — explicit param types from the contract/manifest, never implicit `any`. In a pure greenfield workspace with no manifests yet, calls fall back to the legacy static options-object form and imports to the default `../../src/<Component>.js` — either resolves through vitest's module resolution once `src/OrderService.ts` exists. Run `extract-manifests` (below) and regenerate to get the source-aware shape.
+> **About the call shape you see here.** This is exactly the shape the committed example workspace emits (`bun run example:generate` regenerates it byte-identically): imports derived from the manifest's `sourcePath` (`../../src/OrderService.ts`), instance calls, real matcher assertions, and the deliberate `(instance as any)` casts for the private `balance` field — decided from the manifest's `fieldAccess: { balance: "private" }`, never applied to public fields ([ADR-0021](../decisions/0021-totality-of-emission.md)). The committed example also enables `propertyBased`, so its generated file additionally shows **typed oracle lambdas** — `(sku: string) => sku !== ""`, `(price: number) => price > 0` — explicit param types from the contract/manifest, never implicit `any`. In a pure greenfield workspace with no manifests yet, calls fall back to the legacy static options-object form and imports to the default `../../src/<Component>.js` — either resolves through vitest's module resolution once `src/OrderService.ts` exists. Run `extract-manifests` (below) and regenerate to get the source-aware shape.
 
 ## Step 5 — Implement the source (Red → Green)
 
@@ -329,7 +329,7 @@ bun run test   # Green — all generated tests pass
 
 The suite didn't change; the source caught up to the contract. That's the whole contract-first TDD loop: contract → tests (Red via import error) → implementation (Green). No stub source was ever fabricated to satisfy the tool.
 
-## Step 6 — `check` in CI, and the commit is the approval
+## Step 6 — `check` in CI, and the commit
 
 ```bash
 versailles check
@@ -349,7 +349,7 @@ git add .versailles src
 git commit -m "OrderService contract-first: contract, generated suite, source"
 ```
 
-The **git commit is the approval** ([ADR-0012](../decisions/0012-git-commit-as-approval-remove-review-gate.md)) — there is no in-tool review or staging ceremony. Git history is the audit trail; a PR diff is the human review ([ADR-0003](../decisions/0003-git-history-as-audit-trail.md)).
+Approval lives in the authored commit, not a tool ceremony ([ADR-0012](../decisions/0012-git-commit-as-approval-remove-review-gate.md)) — there is no in-tool review or staging ceremony. Git history is the audit trail; a PR diff is the human review ([ADR-0003](../decisions/0003-git-history-as-audit-trail.md)).
 
 ## Brownfield? Run `extract-manifests` instead
 
