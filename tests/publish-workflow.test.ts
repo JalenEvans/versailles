@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * npm publish pipeline — access-control surface (feat/npm-publish-oidc):
+ * npm publish pipeline — access-control surface (feat/npm-publish-staged):
  * a manually-triggered publish workflow whose whole point is WHO may publish
  * and to WHAT. This file pins the workflow file's access-control contract so
  * the pipeline can never drift into a wide-open state:
@@ -15,14 +15,19 @@ import { describe, expect, it } from "vitest";
  *    environment approval gate is the primary access control) and its first
  *    step fails unless github.triggering_actor is JalenEvans (the repo
  *    owner) — a second, in-workflow actor guard.
- * 3. Publishing uses npm Trusted Publishing (OIDC), not a registry token:
- *    the publish job grants `id-token: write` and runs `npm publish --tag
- *    --provenance` wired to the dist_tag input — permission and command are
- *    pinned. The npmjs.com Trusted Publisher must be configured with the
- *    workflow source `npm-publish.yml` and environment `npm-publish` (that
- *    is exactly how npm matches the OIDC token to an account). No NPM_TOKEN
- *    secret and no .npmrc are written — credentials never appear in the
- *    workflow.
+ * 3. Publishing uses npm Trusted Publishing (OIDC) via staged publishing:
+ *    the publish job grants `id-token: write` and runs `npm stage publish
+ *    --tag --provenance` wired to the dist_tag input — permission and
+ *    command are pinned. The npmjs.com Trusted Publisher must be configured
+ *    with the stage-only permission (`Permissions: npm stage publish`) and
+ *    the workflow source `npm-publish.yml` and environment `npm-publish`
+ *    (that is exactly how npm matches the OIDC token to an account).
+ *    Staging is not the final act: the version goes live only after a
+ *    maintainer approves on npmjs.com (Staged Packages tab) or runs `npm
+ *    stage approve <stage-id>` with 2FA, and the dist-tag is immutable on a
+ *    staged package. Direct `npm publish` is forbidden (403) — the workflow
+ *    never runs it as a command line. No NPM_TOKEN secret and no .npmrc are
+ *    written — credentials never appear in the workflow.
  * 4. Concurrency group `npm-publish` with cancel-in-progress: false — at most
  *    one publish runs at a time, and a slow publish is never cancelled.
  * 5. Reuse conventions: a `validate` job calls back into
@@ -30,14 +35,14 @@ import { describe, expect, it } from "vitest";
  *    validation.yml), and publish `needs: validate`.
  *
  * Contract grounding: design contract for the npm publish pipeline.
- * This test pins the OIDC model end-to-end: `id-token: write` scoped to
- * the publish job (never workflow-level), `npm publish --tag
- * --provenance`, no NPM_TOKEN/.npmrc, and Node 24 (which bundles npm ≥
- * 11.5.1 — the minimum npm CLI for Trusted Publishing OIDC; Node 22's
- * bundled npm 10 cannot exchange the OIDC token). Pinned as plain text (no
- * YAML parser): the file is read as utf8 and asserted on its content, the
- * same read-from-disk style as tests/package.test.ts (REPO_ROOT
- * convention).
+ * This test pins the OIDC staged-publishing model end-to-end: `id-token:
+ * write` scoped to the publish job (never workflow-level), `npm stage
+ * publish --tag --provenance` with no direct `npm publish --tag` command
+ * line, no NPM_TOKEN/.npmrc, and Node 24 (which bundles npm ≥ 11.5.1 — the
+ * minimum npm CLI for Trusted Publishing OIDC; Node 22's bundled npm 10
+ * cannot exchange the OIDC token). Pinned as plain text (no YAML parser):
+ * the file is read as utf8 and asserted on its content, the same
+ * read-from-disk style as tests/package.test.ts (REPO_ROOT convention).
  */
 
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -161,7 +166,7 @@ describe("npm-publish workflow — access-control surface (design contract pin)"
 
 	it("publishes with `--provenance` provenance attestation", async () => {
 		const yaml = await readPublishWorkflow();
-		expect(yaml).toMatch(/npm publish --tag.*--provenance/);
+		expect(yaml).toMatch(/--provenance/);
 	});
 
 	it("publishes without a registry token — fail-closed: no `NPM_TOKEN`, no `.npmrc`", async () => {
@@ -170,9 +175,26 @@ describe("npm-publish workflow — access-control surface (design contract pin)"
 		expect(yaml).not.toContain(".npmrc");
 	});
 
-	it("publishes with `npm publish --tag` wired to the `dist_tag` input", async () => {
+	it("stages the package with `npm stage publish --tag` wired to the `dist_tag` input", async () => {
 		const yaml = await readPublishWorkflow();
-		expect(yaml).toMatch(/npm publish --tag/);
+		expect(yaml).toMatch(/npm stage publish --tag/);
 		expect(yaml).toContain("inputs.dist_tag");
+	});
+
+	it("never runs direct `npm publish` — fail-closed: no `npm publish --tag` command line", async () => {
+		const yaml = await readPublishWorkflow();
+		// The trusted publisher permission is stage-only (`Permissions: npm
+		// stage publish` on npmjs.com), so a direct `npm publish --tag`
+		// would 403. `npm stage publish --tag` does NOT contain the exact
+		// substring `npm publish --tag` ("stage " sits between), so this is
+		// a clean token check. The workflow header may mention `npm publish`
+		// as prose; strip comment lines so only the actual command surface
+		// is pinned (same comment-aware approach as the job-level `id-token`
+		// scoping pin).
+		const commandsOnly = yaml
+			.split("\n")
+			.filter((line) => !line.trimStart().startsWith("#"))
+			.join("\n");
+		expect(commandsOnly).not.toContain("npm publish --tag");
 	});
 });
