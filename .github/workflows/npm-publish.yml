@@ -1,4 +1,4 @@
-# npm-publish — manually-triggered publish pipeline for versailles-dbc.
+# npm-publish — manually-triggered staged-publish pipeline for versailles-dbc.
 #
 # Trigger: workflow_dispatch only (no push / pull_request). Dispatch from the
 # GitHub Actions UI on the `main` branch after a version-bump commit has been
@@ -19,6 +19,16 @@
 #   with owner `JalenEvans`, repo `versailles`, workflow source
 #   `npm-publish.yml`, environment `npm-publish` — it will NOT publish
 #   until that web-side configuration exists.
+#
+# Staged publishing flow:
+#   This workflow stages the package with `npm stage publish` — direct
+#   `npm publish` is forbidden by the stage-only Trusted Publisher permission
+#   (returns 403 "OIDC permission denied for this action"). After staging,
+#   the maintainer must approve the package with 2FA on npmjs.com (Staged
+#   Packages tab) or via `npm stage approve <stage-id>` before the version
+#   is publicly installable. The dist-tag is immutable on a staged package:
+#   if the wrong tag was staged, run `npm stage reject <stage-id>` and
+#   re-stage.
 
 name: npm-publish
 
@@ -84,7 +94,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Publish to npm
+      - name: Stage publish (approve on npmjs.com)
         env:
           DIST_TAG: ${{ inputs.dist_tag }}
           DRY_RUN: ${{ inputs.dry_run }}
@@ -92,7 +102,7 @@ jobs:
           # Fail-closed whitelist — only known dist-tags are allowed.
           case "${DIST_TAG}" in latest|beta|next) ;; *) echo "::error::invalid dist_tag: ${DIST_TAG}"; exit 1 ;; esac
           if [ "${DRY_RUN}" = "true" ]; then
-            npm publish --tag "${DIST_TAG}" --provenance --dry-run
+            npm stage publish --tag "${DIST_TAG}" --provenance --dry-run
           else
-            npm publish --tag "${DIST_TAG}" --provenance
+            npm stage publish --tag "${DIST_TAG}" --provenance
           fi
