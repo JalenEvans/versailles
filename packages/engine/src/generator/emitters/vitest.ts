@@ -16,11 +16,16 @@
  * cases on a void-returning INSTANCE operation WITH assertions bind the
  * component INSTANCE — `const instance = new <Component>(); instance.<op>(...);
  * expect(instance.<field>)...` — so assertions target instance state, never
- * the void return value (VERSAILLES-26). A STATIC void operation with
- * assertions renders the bare call `<Component>.<op>(...);` with no
- * instance.<field> assertion — the static call never touches a constructed
- * instance, so an instance assertion would be meaningless (VERSAILLES-26
- * follow-up, W1). Without the `methods` option
+ * the void return value (VERSAILLES-26). The same instance-bound receiver
+ * applies to PRIMITIVE-returning (number/string/boolean) INSTANCE operations:
+ * a primitive return value has no fields, so `result.<field>` reads undefined
+ * and can never pass (VERSAILLES-185); object-returning operations keep the
+ * `result.<field>` receiver. A STATIC void operation with assertions renders
+ * the bare call `<Component>.<op>(...);` with no instance.<field> assertion —
+ * the static call never touches a constructed instance, so an instance
+ * assertion would be meaningless (VERSAILLES-26 follow-up, W1), and a STATIC
+ * primitive operation keeps the result-bound render (no instance to bind).
+ * Without the `methods` option
  * (legacy) the historical static options-object call
  * `<Component>.<op>({ ...inputs })` with a toBeDefined assertion is preserved
  * byte-identically.
@@ -315,9 +320,11 @@ const MATCHER: Record<AssertionDescriptor["op"], string> = {
 
 /**
  * Renders a real vitest matcher on the subject field. The receiver is either
- * "result" (a non-void operation's return value) or "instance" (a bound
- * component instance for void-returning operations, VERSAILLES-26) — a void
- * call's return value is undefined and must never be the assertion subject.
+ * "result" (an object-returning operation's return value) or "instance" (a
+ * bound component instance for void-returning operations, VERSAILLES-26, and
+ * for PRIMITIVE-returning operations, VERSAILLES-185 — a primitive return
+ * value has no fields, so `result.<field>` would read undefined) — a
+ * fieldless call's return value must never be the assertion subject.
  *
  * ADR-0021: an INSTANCE-receiver assertion on a non-public field renders
  * through the deliberate `(instance as any).<field>` escape (the manifest
@@ -574,66 +581,86 @@ function renderCase(
 		}
 	} else {
 		const assertions = case_.expects.assertions ?? [];
-		if (voidAccept) {
-			if (meta.static) {
-				// W1 (VERSAILLES-26 follow-up,
-				// deterministic-generation.contract.yaml): a STATIC void
-				// operation's accept/invariant case renders the bare call —
-				// `<Component>.<op>(...);` — with NO instance binding, NO
-				// result binding, and NO assertions. The static call never
-				// touches a constructed instance, so `const instance = new
-				// <Component>(); <Component>.<op>(...); expect(instance.<field>)`
-				// would assert state on an object the call cannot have
-				// modified — a silently meaningless assertion. Instance void
-				// ops keep the V-26 instance-state render below.
-				lines.push(`\t\t${call};`);
-			} else if (assertions.length > 0) {
-				// VERSAILLES-26: a void-returning operation's return value is
-				// undefined, so `const result = ...; expect(result.<field>)`
-				// throws TypeError at runtime. The case binds the component
-				// INSTANCE and asserts instance state — `const instance = new
-				// <Component>(); instance.<op>(...); expect(instance.<field>)`
-				// (§9.4). Only INSTANCE void ops reach this branch (the static
-				// void carve-out above handles the static variant), so the
-				// call always runs on the bound instance.
-				lines.push(`\t\tconst instance = new ${component}();`);
-				// B1: the assertion literal is derived by the planner from its
-				// captured pre-call state, so the emitter must establish that
-				// state on the bound instance before the call runs.
-				//
-				// ADR-0021: a pre-state WRITE to a non-public field (per the
-				// manifest fieldAccess) — or to a readonly field, whose
-				// compile-time-only restriction the cast bypasses at runtime —
-				// renders through the deliberate `(instance as any).<field>`
-				// escape. Public fields never cast; legacy (no field model)
-				// keeps `instance.<field>` byte-identical.
-				const paramNames = new Set(meta.params);
-				for (const key of Object.keys(case_.inputs)) {
-					if (!paramNames.has(key)) {
-						assertIdentifier(key, "pre-state input key");
-						const target = shouldCastWrite(
-							component,
-							key,
-							fieldAccess,
-							fieldReadonly,
-						)
-							? `(instance as any).${key}`
-							: `instance.${key}`;
-						lines.push(`\t\t${target} = ${renderValue(case_.inputs[key])};`);
-					}
+		// VERSAILLES-185: a PRIMITIVE return type (number/string/boolean) has
+		// no fields — `result.<field>` on the primitive return value reads
+		// `undefined` and can never pass. A field-based assertion on a
+		// primitive-returning operation must target the bound INSTANCE's
+		// state, exactly like the V-26 void render. Static ops never bind an
+		// instance (a static call never touches a constructed object), so the
+		// static primitive-returning op keeps the result-bound render below.
+		const primitiveReturn =
+			meta?.returnType === "number" ||
+			meta?.returnType === "string" ||
+			meta?.returnType === "boolean";
+		// The instance-bound accept-with-assertions render applies to an
+		// INSTANCE operation whose return type cannot carry field assertions —
+		// void (V-26) or primitive (V-185) — when the case asserts a field.
+		// Static ops (the W1 static-void bare call and the static non-void
+		// result-bound pin), object-returning ops (result.<field>), and
+		// fieldless accept cases without assertions all stay on their existing
+		// paths.
+		const instanceStateAccept =
+			meta !== undefined &&
+			!meta.static &&
+			(voidAccept || primitiveReturn) &&
+			assertions.length > 0;
+		if (instanceStateAccept) {
+			// VERSAILLES-26/185: a void- or primitive-returning operation's
+			// return value carries no fields — `const result = ...;
+			// expect(result.<field>)` reads `undefined` on the void return
+			// (V-26) or on the primitive number/string/boolean return (V-185)
+			// and can never pass. The case binds the component INSTANCE and
+			// asserts instance state — `const instance = new <Component>();
+			// instance.<op>(...); expect(instance.<field>)` (§9.4).
+			// instanceStateAccept guarantees an INSTANCE (non-static) op, so
+			// the call always runs on the bound instance.
+			lines.push(`\t\tconst instance = new ${component}();`);
+			// B1: the assertion literal is derived by the planner from its
+			// captured pre-call state, so the emitter must establish that
+			// state on the bound instance before the call runs.
+			//
+			// ADR-0021: a pre-state WRITE to a non-public field (per the
+			// manifest fieldAccess) — or to a readonly field, whose
+			// compile-time-only restriction the cast bypasses at runtime —
+			// renders through the deliberate `(instance as any).<field>`
+			// escape. Public fields never cast; legacy (no field model)
+			// keeps `instance.<field>` byte-identical.
+			const paramNames = new Set(meta.params);
+			for (const key of Object.keys(case_.inputs)) {
+				if (!paramNames.has(key)) {
+					assertIdentifier(key, "pre-state input key");
+					const target = shouldCastWrite(
+						component,
+						key,
+						fieldAccess,
+						fieldReadonly,
+					)
+						? `(instance as any).${key}`
+						: `instance.${key}`;
+					lines.push(`\t\t${target} = ${renderValue(case_.inputs[key])};`);
 				}
-				lines.push(
-					`\t\tinstance.${operation}${renderPositionalArgs(case_, component, operation, methods)};`,
-				);
-				for (const assertion of assertions) {
-					lines.push(
-						`\t\t${renderAssertion(assertion, "instance", component, fieldAccess)};`,
-					);
-				}
-			} else {
-				// Bare call — no result binding, no return-value assertion.
-				lines.push(`\t\t${call};`);
 			}
+			lines.push(
+				`\t\tinstance.${operation}${renderPositionalArgs(case_, component, operation, methods)};`,
+			);
+			for (const assertion of assertions) {
+				lines.push(
+					`\t\t${renderAssertion(assertion, "instance", component, fieldAccess)};`,
+				);
+			}
+		} else if (voidAccept) {
+			// The remaining void-accept cases render the bare call:
+			// - W1 (VERSAILLES-26 follow-up,
+			//   deterministic-generation.contract.yaml): a STATIC void
+			//   operation's accept/invariant case — `<Component>.<op>(...);`
+			//   — with NO instance binding, NO result binding, and NO
+			//   assertions. The static call never touches a constructed
+			//   instance, so `expect(instance.<field>)` would assert state on
+			//   an object the call cannot have modified — a silently
+			//   meaningless assertion.
+			// - an INSTANCE void accept case WITHOUT assertions (the F1 pin) —
+			//   no result binding, no return-value assertion.
+			lines.push(`\t\t${call};`);
 		} else {
 			lines.push(`\t\tconst result = ${call};`);
 			lines.push("\t\texpect(result).toBeDefined();");
