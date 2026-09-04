@@ -78,7 +78,7 @@ Events here are records of deterministic state transitions in the pipeline (the 
 
 | Command | Purpose | Primary context |
 |---|---|---|
-| `versailles -v` / `versailles --version` | Print the tool version (the package `version`, currently `0.1.0`) and exit `0` from any directory — a **root-level flag, not a command**: it short-circuits before command dispatch and never loads the workspace. Subcommands reject `-v` / `--version` as usage errors; `--verbose` stays the only `validate` flag (long-only). | (cross-cutting, CLI) |
+| `versailles -v` / `versailles --version` | Print the tool version (the package `version`, currently `0.1.0-beta.1`) and exit `0` from any directory — a **root-level flag, not a command**: it short-circuits before command dispatch and never loads the workspace. Subcommands reject `-v` / `--version` as usage errors; `--verbose` stays the only `validate` flag (long-only). | (cross-cutting, CLI) |
 | `versailles init` | Scaffold `.versailles/` with empty/default files. | workspace-context |
 | `versailles extract-manifests` | Run the manifest extractor for `config.language`, update `manifests.json` (no implicit pruning; `--prune` removes stale entries explicitly). | manifest-extraction |
 | `versailles validate` | Parse + semantically validate all of `contracts.json` (including declarative predicate verification), print the structured report. `--verbose` additionally shows raw `expr` + parsed AST per clause. | contract-language + predicate-registry (via workspace-context) |

@@ -61,7 +61,7 @@ npm install -g versailles-dbc@beta
 
 Then `versailles <command>` works anywhere. The npm package is `versailles-dbc`; the CLI binary is `versailles` ([ADR-0001](docs/decisions/0001-package-and-cli-naming.md)).
 
-> **Beta:** the current release is `0.1.0-beta.0`, published on the `beta` dist-tag — the `@beta` in the install command is intentional until the first stable release. Prefer installing from source? See [Contributing](#contributing).
+> **Beta:** the current release is `0.1.0-beta.1`, published on the `beta` dist-tag — the `@beta` in the install command is intentional until the first stable release. Prefer installing from source? See [Contributing](#contributing).
 
 ## Quick start
 
@@ -113,7 +113,7 @@ Gotchas: `old(field)` anywhere but a postcondition is a parse error; predicate c
 
 ### Root-level flags
 
-`versailles -v` / `versailles --version` prints the tool version (the package `version`, currently `0.1.0-beta.0`) and exits `0` from any directory — it is a **root-level flag, not a command**: it short-circuits before command dispatch and never touches the workspace. Subcommands reject `-v` / `--version` as usage errors; `--verbose` remains the only flag on `validate` (long-only).
+`versailles -v` / `versailles --version` prints the tool version (the package `version`, currently `0.1.0-beta.1`) and exits `0` from any directory — it is a **root-level flag, not a command**: it short-circuits before command dispatch and never touches the workspace. Subcommands reject `-v` / `--version` as usage errors; `--verbose` remains the only flag on `validate` (long-only).
 
 ## Using in CI
 
