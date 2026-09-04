@@ -33,6 +33,7 @@
 import type {
 	ArbitrarySpec,
 	AssertionDescriptor,
+	CoverageStatus,
 	EmitOptions,
 	EmittedFile,
 	OperationCaseGroup,
@@ -92,6 +93,10 @@ export function emitVitest(
 	const fieldTypes = options?.fieldTypes;
 	const fieldReadonly = options?.fieldReadonly;
 	const warnings = options?.warnings;
+	// VERSAILLES-186: the header trace comment mirrors the suite's coverage
+	// status — brownfield keeps the verified `// traces:` form, greenfield
+	// surfaces the provisional state (never reading as verified coverage).
+	const coverageStatus = suite.coverageStatus ?? "verified";
 	const groups = groupByComponent(suite);
 	const files: EmittedFile[] = [];
 	for (const component of Object.keys(groups)) {
@@ -100,6 +105,7 @@ export function emitVitest(
 			component,
 			groups[component],
 			suite.clauseIds,
+			coverageStatus,
 			modulePaths,
 			methods,
 			predicates,
@@ -138,6 +144,7 @@ function renderComponentFile(
 	component: string,
 	group: ComponentGroup,
 	clauseIds: string[],
+	coverageStatus: CoverageStatus,
 	modulePaths: Record<string, string>,
 	methods: EmitOptions["methods"],
 	predicates: EmitOptions["predicates"],
@@ -174,10 +181,16 @@ function renderComponentFile(
 	// generated surface covers (the full source clause set, so zero-coverage
 	// gaps stay visible against the manifest). Clause ids are escaped with
 	// JSON.stringify so a hostile id can never break out of the comment into
-	// an executable line (Center W1).
-	lines.push(
-		`// traces: ${clauseIds.map((id) => JSON.stringify(id)).join(", ")}`,
-	);
+	// an executable line (Center W1). VERSAILLES-186: the comment mirrors the
+	// coverage status — brownfield keeps the byte-identical verified
+	// `// traces: "id", ...` form; greenfield emits a provisional-marked
+	// variant (`// traces (provisional): ...`) that never starts with the
+	// verified `// traces:` prefix and still lists the traced clause ids.
+	const tracesLine =
+		coverageStatus === "provisional"
+			? `// traces (provisional): ${clauseIds.map((id) => JSON.stringify(id)).join(", ")}`
+			: `// traces: ${clauseIds.map((id) => JSON.stringify(id)).join(", ")}`;
+	lines.push(tracesLine);
 	lines.push('import { describe, expect, it } from "vitest";');
 	lines.push("");
 	// modulePaths override wins when present and non-empty; an absent (legacy)
