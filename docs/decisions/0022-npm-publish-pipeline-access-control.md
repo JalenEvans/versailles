@@ -8,6 +8,8 @@
 
 ---
 
+**Status note (2026-09-04):** the auth mechanism is amended — from an `NPM_TOKEN` environment secret to **npm Trusted Publishing (OIDC)** (`id-token: write` + `--provenance`, no token, no OTP). See the changelog. The original decision body below remains the historical record.
+
 ## Context and Problem Statement
 
 The npm beta (`0.1.0-beta.0`) was published by hand: a `chore(release)` commit (488c67f) bumped the version and the publish itself ran `npm publish` from a laptop. There was no repeatable pipeline — publishing knowledge lived only in the maintainer's head, and nothing validated the package before it reached the registry.
@@ -34,14 +36,14 @@ Chosen option: **Option A, because it keeps publishing a deliberate, owner-only,
 
 ### Consequences
 
-- **Positive:** repeatable publish — any future maintainer can ship from the Actions UI without laptop-only knowledge; owner-only guarantee enforced at the workflow level; full validation (lint, format, build, tests) runs before anything reaches the registry; least-privilege secret handling — the token is scoped to the publish job and written to an ephemeral `.npmrc`.
-- **Negative:** the pipeline cannot self-bump versions — version bumps remain PR-driven `chore(release)` commits, by design, consistent with git-commit-as-approval (ADR-0003, ADR-0012); the actor guard is a software check, not a security boundary — a repo admin could edit the workflow, so the environment required-reviewer gate is the real boundary; external setup is required before first use (GitHub environment `npm-publish` with required reviewers plus an `NPM_TOKEN` environment secret).
+- **Positive:** repeatable publish — any future maintainer can ship from the Actions UI without laptop-only knowledge; owner-only guarantee enforced at the workflow level; full validation (lint, format, build, tests) runs before anything reaches the registry; least-privilege secret handling — the token is scoped to the publish job and written to an ephemeral `.npmrc`. **(amended 2026-09-04: now tokenless — Trusted Publishing (OIDC), see changelog)**
+- **Negative:** the pipeline cannot self-bump versions — version bumps remain PR-driven `chore(release)` commits, by design, consistent with git-commit-as-approval (ADR-0003, ADR-0012); the actor guard is a software check, not a security boundary — a repo admin could edit the workflow, so the environment required-reviewer gate is the real boundary; external setup is required before first use (GitHub environment `npm-publish` with required reviewers plus an `NPM_TOKEN` environment secret). **(amended 2026-09-04: external setup is now the npmjs.com Trusted Publisher for `versailles-dbc` — owner JalenEvans, repo versailles, workflow source `npm-publish.yml`, environment `npm-publish`; see changelog)**
 - **Neutral:** publishing remains a two-step process (merge bump → dispatch publish); a misdispatched publish is rejected by the environment gate or actor guard rather than silently proceeding.
 
 ### Confirmation
 
-- `.github/workflows/npm-publish.yml` exists: `workflow_dispatch`-only on `branches: [main]`, `dist_tag` (latest/beta/next) and `dry_run` inputs, `npm-publish` concurrency group with `cancel-in-progress: false`, `validate` job reusing `code-validation.yml` via `workflow_call`, `publish` job under `environment: npm-publish` with the owner-only actor guard and `npm publish --tag ${{ inputs.dist_tag }}` using `secrets.NPM_TOKEN`.
-- `tests/publish-workflow.test.ts` passes and pins the access-control surface (manual-only, branches [main], environment gate, actor guard, NPM_TOKEN, `npm publish --tag`).
+- `.github/workflows/npm-publish.yml` exists: `workflow_dispatch`-only on `branches: [main]`, `dist_tag` (latest/beta/next) and `dry_run` inputs, `npm-publish` concurrency group with `cancel-in-progress: false`, `validate` job reusing `code-validation.yml` via `workflow_call`, `publish` job under `environment: npm-publish` with the owner-only actor guard, job-level `permissions: { id-token: write }` (Trusted Publishing / OIDC), and `npm publish --tag ${{ inputs.dist_tag }} --provenance` — no `NPM_TOKEN`, no `.npmrc`.
+- `tests/publish-workflow.test.ts` passes and pins the access-control surface (manual-only, branches [main], environment gate, actor guard, `id-token: write`, `--provenance`, `npm publish --tag` wired to `dist_tag`, and fail-closed: no `NPM_TOKEN` / `.npmrc` anywhere).
 - `scripts/validate-docs.sh` passes after this record is registered in `docs/decisions/index.md`.
 
 ## More Information / Links
@@ -58,3 +60,4 @@ Chosen option: **Option A, because it keeps publishing a deliberate, owner-only,
 |------|--------|--------|
 | 2026-09-03 | maintainer | Initial proposal |
 | 2026-09-03 | maintainer | Accepted |
+| 2026-09-04 | maintainer | Amended: auth switched from NPM_TOKEN environment secret to Trusted Publishing (OIDC) — npm mandatory-2FA (classic tokens revoked 2025-12; bypass-2FA GATs deprecate 2027-01); publish job grants id-token: write, runs npm publish --tag ... --provenance, no token/.npmrc; pin test asserts fail-closed |
