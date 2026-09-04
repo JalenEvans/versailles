@@ -1,0 +1,9 @@
+# Dependabot keeps SHA-pinned actions in npm-publish.yml current.
+# Also covers the other workflows in .github/workflows/.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

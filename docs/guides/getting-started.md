@@ -27,7 +27,7 @@ versailles -v
 `-v` (and `--version`) is a root-level flag, not a command: it short-circuits before any workspace load, prints the machine-readable envelope with the tool version, and exits `0` from any directory:
 
 ```json
-{ "ok": true, "errors": [], "warnings": [], "exitCode": 0, "output": { "version": "0.1.0-beta.0" } }
+{ "ok": true, "errors": [], "warnings": [], "exitCode": 0, "output": { "version": "0.1.0-beta.1" } }
 ```
 
 The loop you're about to run, as a preview:

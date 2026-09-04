@@ -1,0 +1,89 @@
+# npm-publish — manually-triggered publish pipeline for versailles-dbc.
+#
+# Trigger: workflow_dispatch only (no push / pull_request). Dispatch from the
+# GitHub Actions UI on the `main` branch after a version-bump commit has been
+# merged. npm rejects duplicate versions, so the commit must land before you
+# dispatch.
+#
+# Access control (two gates):
+#   1. Environment approval — the publish job runs under the `npm-publish`
+#      GitHub environment, which should require manual approval.
+#   2. Actor guard — the first step of the publish job fails unless the
+#      triggering_actor is the repo owner (JalenEvans).
+#
+# Secrets:
+#   NPM_TOKEN — stored as a secret on the `npm-publish` GitHub environment
+#   (least privilege: exposed only to the publish job after the environment
+#   approval gate passes). Written to an ephemeral .npmrc on the runner;
+#   never committed to the repo.
+
+name: npm-publish
+
+on:
+  workflow_dispatch:
+    branches: [main]
+    inputs:
+      dist_tag:
+        description: npm dist-tag to publish under
+        required: true
+        default: latest
+        type: choice
+        options:
+          - latest
+          - beta
+          - next
+      dry_run:
+        description: Preview the publish without writing to the registry
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    # workflow_call → code-validation.yml (lint, format, build, tests)
+    name: Validate (lint, format, build, tests)
+    uses: ./.github/workflows/code-validation.yml
+
+  publish:
+    name: Publish to npm
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm-publish
+    steps:
+      - name: Authorize trigger (owner-only)
+        if: github.triggering_actor != 'JalenEvans'
+        run: |
+          echo "::error::npm publish is restricted to the repo owner (JalenEvans). Triggered by ${{ github.triggering_actor }}."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # SHA-pinned — workflow carries NPM_TOKEN; Dependabot keeps this current
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # SHA-pinned — workflow carries NPM_TOKEN; Dependabot keeps this current
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Publish to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ inputs.dist_tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+          # Fail-closed whitelist — only known dist-tags are allowed.
+          case "${DIST_TAG}" in latest|beta|next) ;; *) echo "::error::invalid dist_tag: ${DIST_TAG}"; exit 1 ;; esac
+          if [ "${DRY_RUN}" = "true" ]; then
+            npm publish --tag "${DIST_TAG}" --dry-run
+          else
+            npm publish --tag "${DIST_TAG}"
+          fi

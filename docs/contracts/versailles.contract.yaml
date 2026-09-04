@@ -51,7 +51,7 @@ operations:
       - input: "route_command(['check'])"
         output: "routes to the check handler"
       - input: "route_command(['-v'])"
-        output: "{ ok: true, errors: [], warnings: [], exitCode: 0, output: { version: '0.1.0' } } — root-level version short-circuit, no dispatch"
+        output: "{ ok: true, errors: [], warnings: [], exitCode: 0, output: { version: '0.1.0-beta.1' } } — root-level version short-circuit, no dispatch"
       - input: "route_command(['author', 'OrderService'])"
         output: "structured usage error { ok: false, errors: [{ code: 'UNKNOWN_COMMAND', ... }], warnings: [], exitCode: 1 } — no author subcommand exists"
       - input: "route_command(['review', 'OrderService'])"
@@ -177,3 +177,4 @@ asserts:
 | 2026-08-16 | maintainer | Extended the command surface from six to nine subcommands — register-predicate, verify-purity, remind-unverified and the review --approve/--reject flags shipped (PR feat/review-ecosystem); build-spec §12 updated in step |
 | 2026-08-22 | maintainer | Retired review + predicate registration CLI per ADR-0012 / ADR-0013; command surface is now five subcommands; validate --verbose carries the parser-sanity view; predicates are declarative in contracts.json |
 | 2026-08-30 | maintainer | VERSAILLES-171 Phase 3 (CLI surface delta): root-level -v/--version flags short-circuit before dispatch (exit 0, output { version }, no workspace load, any directory); subcommands reject them as usage errors; check/generate/extract-manifests share one workspace gate (requireValidWorkspace) and standardize every failure path on exit 1 with the empty output envelope {} — the per-command { staleIds: [] } / { files: [] } envelopes are gone |
+| 2026-09-03 | maintainer | Bump -v/--version example output version literal to 0.1.0-beta.1 (version bump for npm publish) |

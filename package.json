@@ -1,6 +1,6 @@
 {
 	"name": "versailles-dbc",
-	"version": "0.1.0-beta.0",
+	"version": "0.1.0-beta.1",
 	"description": "Deterministic test generation from Design-by-Contract specifications",
 	"author": "Jalen Evans",
 	"private": false,

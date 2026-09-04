@@ -40,7 +40,7 @@ versailles
 │   ├── decisions/    ← architecture decision records (ADRs)
 │   └── glossary.md   ← ubiquitous language (single vocabulary for all docs)
 ├── scripts/          ← repo-level validation scripts
-└── .github/          ← PR validation pipeline (workflows/) + PR description template
+└── .github/          ← PR validation + manual npm publish pipelines (workflows/) + PR description template
 ```
 
 ## Modules / Boundaries
