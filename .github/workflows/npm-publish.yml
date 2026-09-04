@@ -11,11 +11,14 @@
 #   2. Actor guard — the first step of the publish job fails unless the
 #      triggering_actor is the repo owner (JalenEvans).
 #
-# Secrets:
-#   NPM_TOKEN — stored as a secret on the `npm-publish` GitHub environment
-#   (least privilege: exposed only to the publish job after the environment
-#   approval gate passes). Written to an ephemeral .npmrc on the runner;
-#   never committed to the repo.
+# Trusted Publisher (OIDC) — NO token, NO OTP, no auth file:
+#   Auth uses npm Trusted Publishing (OIDC). The publish job grants
+#   `id-token: write` and requires npm CLI ≥ 11.5.1 / Node ≥ 22.14
+#   (setup-node provides this). Publish emits `--provenance` attestations.
+#   The npmjs.com Trusted Publisher for `versailles-dbc` must be configured
+#   with owner `JalenEvans`, repo `versailles`, workflow source
+#   `npm-publish.yml`, environment `npm-publish` — it will NOT publish
+#   until that web-side configuration exists.
 
 name: npm-publish
 
@@ -57,6 +60,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Authorize trigger (owner-only)
         if: github.triggering_actor != 'JalenEvans'
@@ -65,25 +71,28 @@ jobs:
           exit 1
 
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # SHA-pinned — workflow carries NPM_TOKEN; Dependabot keeps this current
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # SHA-pinned — publish workflow; Dependabot keeps this current
 
       - name: Setup bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # SHA-pinned — workflow carries NPM_TOKEN; Dependabot keeps this current
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # SHA-pinned — publish workflow; Dependabot keeps this current
+
+      - name: Setup Node (trusted publishing needs npm ≥ 11.5.1 / Node ≥ 22.14)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # SHA-pinned; Dependabot keeps this current
+        with:
+          node-version: 22
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
       - name: Publish to npm
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           DIST_TAG: ${{ inputs.dist_tag }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
           # Fail-closed whitelist — only known dist-tags are allowed.
           case "${DIST_TAG}" in latest|beta|next) ;; *) echo "::error::invalid dist_tag: ${DIST_TAG}"; exit 1 ;; esac
           if [ "${DRY_RUN}" = "true" ]; then
-            npm publish --tag "${DIST_TAG}" --dry-run
+            npm publish --tag "${DIST_TAG}" --provenance --dry-run
           else
-            npm publish --tag "${DIST_TAG}"
+            npm publish --tag "${DIST_TAG}" --provenance
           fi

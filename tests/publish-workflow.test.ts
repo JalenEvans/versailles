@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * npm publish pipeline — access-control surface (feat/npm-publish-pipeline):
+ * npm publish pipeline — access-control surface (feat/npm-publish-oidc):
  * a manually-triggered publish workflow whose whole point is WHO may publish
  * and to WHAT. This file pins the workflow file's access-control contract so
  * the pipeline can never drift into a wide-open state:
@@ -15,8 +15,14 @@ import { describe, expect, it } from "vitest";
  *    environment approval gate is the primary access control) and its first
  *    step fails unless github.triggering_actor is JalenEvans (the repo
  *    owner) — a second, in-workflow actor guard.
- * 3. The publish step consumes secrets.NPM_TOKEN and runs `npm publish --tag`
- *    wired to the dist_tag input — credential and command are pinned.
+ * 3. Publishing uses npm Trusted Publishing (OIDC), not a registry token:
+ *    the publish job grants `id-token: write` and runs `npm publish --tag
+ *    --provenance` wired to the dist_tag input — permission and command are
+ *    pinned. The npmjs.com Trusted Publisher must be configured with the
+ *    workflow source `npm-publish.yml` and environment `npm-publish` (that
+ *    is exactly how npm matches the OIDC token to an account). No NPM_TOKEN
+ *    secret and no .npmrc are written — credentials never appear in the
+ *    workflow.
  * 4. Concurrency group `npm-publish` with cancel-in-progress: false — at most
  *    one publish runs at a time, and a slow publish is never cancelled.
  * 5. Reuse conventions: a `validate` job calls back into
@@ -24,9 +30,10 @@ import { describe, expect, it } from "vitest";
  *    validation.yml), and publish `needs: validate`.
  *
  * Contract grounding: design contract for the npm publish pipeline.
- * Written as a RED-phase pin — the workflow file does not exist yet; the
- * implementing agent makes these pass. Pinned as plain text (no YAML parser):
- * the file is read as utf8 and asserted on its content, the same
+ * Written as a RED-phase pin — the workflow file currently uses the
+ * NPM_TOKEN/.npmrc model; the implementing agent migrates it to Trusted
+ * Publishing (OIDC) to make these pass. Pinned as plain text (no YAML
+ * parser): the file is read as utf8 and asserted on its content, the same
  * read-from-disk style as tests/package.test.ts (REPO_ROOT convention).
  */
 
@@ -114,9 +121,26 @@ describe("npm-publish workflow — access-control surface (design contract pin)"
 		expect(yaml).toMatch(/if:.*github\.triggering_actor/);
 	});
 
-	it("consumes `secrets.NPM_TOKEN` in the publish step", async () => {
+	// Trusted Publishing (OIDC): the OIDC token must be scoped to the publish
+	// job via job-level `permissions: { id-token: write }` — never
+	// workflow-wide, keeping least privilege. The pin asserts at file-content
+	// level that `id-token: write` is present; exact job scoping is the
+	// implementing agent's structural job, and the content assertion is the
+	// contract clause npm requires.
+	it("grants the OIDC publish permission — `id-token: write`", async () => {
 		const yaml = await readPublishWorkflow();
-		expect(yaml).toContain("secrets.NPM_TOKEN");
+		expect(yaml).toMatch(/id-token:\s*write/);
+	});
+
+	it("publishes with `--provenance` provenance attestation", async () => {
+		const yaml = await readPublishWorkflow();
+		expect(yaml).toMatch(/npm publish --tag.*--provenance/);
+	});
+
+	it("publishes without a registry token — fail-closed: no `NPM_TOKEN`, no `.npmrc`", async () => {
+		const yaml = await readPublishWorkflow();
+		expect(yaml).not.toContain("NPM_TOKEN");
+		expect(yaml).not.toContain(".npmrc");
 	});
 
 	it("publishes with `npm publish --tag` wired to the `dist_tag` input", async () => {
