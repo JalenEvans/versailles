@@ -30,11 +30,14 @@ import { describe, expect, it } from "vitest";
  *    validation.yml), and publish `needs: validate`.
  *
  * Contract grounding: design contract for the npm publish pipeline.
- * Written as a RED-phase pin — the workflow file currently uses the
- * NPM_TOKEN/.npmrc model; the implementing agent migrates it to Trusted
- * Publishing (OIDC) to make these pass. Pinned as plain text (no YAML
- * parser): the file is read as utf8 and asserted on its content, the same
- * read-from-disk style as tests/package.test.ts (REPO_ROOT convention).
+ * This test pins the OIDC model end-to-end: `id-token: write` scoped to
+ * the publish job (never workflow-level), `npm publish --tag
+ * --provenance`, no NPM_TOKEN/.npmrc, and Node 24 (which bundles npm ≥
+ * 11.5.1 — the minimum npm CLI for Trusted Publishing OIDC; Node 22's
+ * bundled npm 10 cannot exchange the OIDC token). Pinned as plain text (no
+ * YAML parser): the file is read as utf8 and asserted on its content, the
+ * same read-from-disk style as tests/package.test.ts (REPO_ROOT
+ * convention).
  */
 
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -123,13 +126,37 @@ describe("npm-publish workflow — access-control surface (design contract pin)"
 
 	// Trusted Publishing (OIDC): the OIDC token must be scoped to the publish
 	// job via job-level `permissions: { id-token: write }` — never
-	// workflow-wide, keeping least privilege. The pin asserts at file-content
-	// level that `id-token: write` is present; exact job scoping is the
-	// implementing agent's structural job, and the content assertion is the
-	// contract clause npm requires.
+	// workflow-wide, keeping least privilege. Two pins: (1) the content-level
+	// assertion below that `id-token: write` is present, and (2) a fail-closed
+	// assertion that the workflow-level YAML (everything before the `jobs:`
+	// marker) grants no `id-token` — the workflow-wide `permissions` block
+	// stays `contents: read` only.
 	it("grants the OIDC publish permission — `id-token: write`", async () => {
 		const yaml = await readPublishWorkflow();
 		expect(yaml).toMatch(/id-token:\s*write/);
+	});
+
+	it("scopes `id-token` to the publish job — fail-closed: no `id-token` in the workflow-level YAML before `jobs:`", async () => {
+		const yaml = await readPublishWorkflow();
+		const beforeJobs = yaml.slice(0, yaml.indexOf("jobs:"));
+		// The workflow header comment may describe the job-level grant as
+		// prose; strip comment lines so only the actual YAML surface is
+		// pinned. Least privilege: workflow-level permissions stay
+		// `contents: read` only.
+		const workflowLevelYaml = beforeJobs
+			.split("\n")
+			.filter((line) => !line.trimStart().startsWith("#"))
+			.join("\n");
+		expect(workflowLevelYaml).not.toContain("id-token");
+	});
+
+	// Node 24 is the functional blocker for Trusted Publishing (OIDC): it
+	// bundles npm ≥ 11.5.1, the minimum npm CLI that can exchange the OIDC
+	// token. Node 22's bundled npm 10 cannot — pinning the version keeps the
+	// OIDC auth path viable.
+	it("pins setup-node to Node 24 — bundled npm ≥ 11.5.1 for Trusted Publishing OIDC", async () => {
+		const yaml = await readPublishWorkflow();
+		expect(yaml).toMatch(/node-version:\s*24/);
 	});
 
 	it("publishes with `--provenance` provenance attestation", async () => {
