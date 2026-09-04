@@ -1,7 +1,10 @@
 /**
  * init handler — scaffolds .versailles/ (build-spec §2, §12) by reusing
- * src/cli/init.ts (initWorkspace). Idempotent: a second init on an existing
- * workspace re-seeds the same four files and exits 0.
+ * src/cli/init.ts (initWorkspace). VERSAILLES-184: init scaffolds a FRESH
+ * workspace only — a second init on an existing workspace REFUSES (exit 1,
+ * structured error) instead of re-seeding the three workspace files
+ * (config.json + contracts.json + manifests.json), never a silent re-write
+ * over authored content.
  */
 import { join } from "node:path";
 

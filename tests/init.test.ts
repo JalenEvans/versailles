@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Ajv from "ajv";
@@ -11,6 +18,9 @@ import configSchema from "../config.schema.json";
 // contracts.json's top-level `predicates` map.
 // ADR-0018 (VERSAILLES-170): no version fields are seeded — the config gets a
 // `$schema` pointer and the stores are `{}` envelopes.
+// VERSAILLES-184: init scaffolds a FRESH workspace only; when .versailles/
+// already exists with workspace files it REFUSES (rejects) instead of
+// re-seeding — never a silent re-write over authored contracts/manifests.
 import { initWorkspace } from "../packages/cli/src/cli/init.js";
 
 /**
@@ -119,14 +129,93 @@ describe("initWorkspace — scaffolds .versailles/", () => {
 			expect(parsed).toEqual({});
 		},
 	);
+});
 
-	it("is idempotent: a second run does not throw and preserves all three files", async () => {
-		const targetDir = await freshTargetDir("d-idempotent");
+// VERSAILLES-184: the previous idempotency pin (a second run re-seeds and
+// resolves) encoded the bug — init silently re-wrote the stores over any
+// authored content. Fixed behavior: initWorkspace REFUSES (rejects) whenever
+// .versailles/ already exists with workspace files, and leaves the existing
+// files byte-unchanged.
+describe("initWorkspace — refuses to overwrite an existing workspace (VERSAILLES-184)", () => {
+	it("rejects on a second run over an already-seeded workspace — no silent re-seed", async () => {
+		const targetDir = await freshTargetDir("d-refuses-seeded");
 
 		await initWorkspace(targetDir);
-		await expect(initWorkspace(targetDir)).resolves.toBeUndefined();
+		const before: Record<string, string> = {};
+		for (const fileName of SEED_FILE_NAMES) {
+			before[fileName] = await readFile(
+				join(targetDir, ".versailles", fileName),
+				"utf8",
+			);
+		}
 
-		const entries = await readdir(join(targetDir, ".versailles"));
-		expect(entries.sort()).toEqual(SEED_FILE_NAMES);
+		await expect(initWorkspace(targetDir)).rejects.toThrow();
+
+		for (const fileName of SEED_FILE_NAMES) {
+			const after = await readFile(
+				join(targetDir, ".versailles", fileName),
+				"utf8",
+			);
+			expect(after).toBe(before[fileName]);
+		}
+	});
+
+	it("rejects when contracts.json holds authored content and leaves every workspace file byte-unchanged", async () => {
+		const targetDir = await freshTargetDir("d-refuses-authored");
+		await mkdir(join(targetDir, ".versailles"), { recursive: true });
+		const authoredContracts = {
+			contracts: {
+				OrderService: {
+					invariants: [],
+					operations: {
+						placeOrder: {
+							id: "OrderService.placeOrder",
+							params: [],
+							preconditions: [],
+							postconditions: [],
+							effects: [],
+							sourceHash: "authored-hash",
+						},
+					},
+				},
+			},
+		};
+		const authoredManifests = {
+			manifests: {
+				OrderService: { sourceHash: "man-os", fields: {} },
+			},
+		};
+		await writeFile(
+			join(targetDir, ".versailles", "config.json"),
+			`${JSON.stringify(SEEDED_CONFIG, null, 2)}\n`,
+			"utf8",
+		);
+		await writeFile(
+			join(targetDir, ".versailles", "contracts.json"),
+			`${JSON.stringify(authoredContracts, null, 2)}\n`,
+			"utf8",
+		);
+		await writeFile(
+			join(targetDir, ".versailles", "manifests.json"),
+			`${JSON.stringify(authoredManifests, null, 2)}\n`,
+			"utf8",
+		);
+		const before: Record<string, string> = {};
+		for (const fileName of SEED_FILE_NAMES) {
+			before[fileName] = await readFile(
+				join(targetDir, ".versailles", fileName),
+				"utf8",
+			);
+		}
+
+		await expect(initWorkspace(targetDir)).rejects.toThrow();
+
+		for (const fileName of SEED_FILE_NAMES) {
+			const after = await readFile(
+				join(targetDir, ".versailles", fileName),
+				"utf8",
+			);
+			expect(after).toBe(before[fileName]);
+		}
 	});
 });

@@ -227,6 +227,26 @@ async function writeSource(
 	await writeFile(join(cwd, "src", fileName), content, "utf8");
 }
 
+async function readWorkspaceFile(
+	cwd: string,
+	fileName: string,
+): Promise<string> {
+	return readFile(join(cwd, ".versailles", fileName), "utf8");
+}
+
+/**
+ * A project cwd with NO .versailles/ — the fresh-init case. VERSAILLES-184:
+ * init scaffolds ONLY when no workspace exists, so the fresh-scaffold tests
+ * must run against a bare project (the pre-seeding freshWorkspace fixture
+ * would make init refuse).
+ */
+async function bareProjectCwd(name: string): Promise<string> {
+	const cwd = join(tempRoot, name);
+	await rm(cwd, { recursive: true, force: true });
+	await mkdir(cwd, { recursive: true });
+	return cwd;
+}
+
 /**
  * Scaffolds a fresh workspace (with optional config overrides) into its own
  * temp subdir. Writes the three jointly-loaded files directly so fixtures do
@@ -432,7 +452,7 @@ describe("runCli — usage errors (build-spec §12)", () => {
 
 describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => {
 	it("scaffolds the three jointly-loaded files with a schema-valid seeded config, exit 0", async () => {
-		const cwd = await freshWorkspace("i-scaffold");
+		const cwd = await bareProjectCwd("i-scaffold");
 		const result = await runCli(["init"], { cwd });
 
 		expect(result.ok).toBe(true);
@@ -453,7 +473,7 @@ describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => 
 	});
 
 	it("reports the created workspace dir in output", async () => {
-		const cwd = await freshWorkspace("i-output");
+		const cwd = await bareProjectCwd("i-output");
 		const result = await runCli(["init"], { cwd });
 
 		expect(result.output).toMatchObject({
@@ -461,13 +481,94 @@ describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => 
 		});
 	});
 
-	it("is idempotent: a second init on an existing workspace exits 0 and preserves the files", async () => {
-		const cwd = await freshWorkspace("i-idempotent");
-		await runCli(["init"], { cwd });
-		const second = await runCli(["init"], { cwd });
+	// VERSAILLES-184 Red-phase pin: the previous idempotency test (a second
+	// init exits 0 and re-seeds) encoded the bug — init silently re-wrote the
+	// stores over any authored content. Fixed behavior: init on an existing
+	// workspace REFUSES (exit 1, structured error) and leaves every workspace
+	// file byte-unchanged — the spec's "refuses to overwrite an existing one".
+	it("refuses to re-seed an existing workspace: exit 1, structured error, every file byte-unchanged", async () => {
+		const cwd = await freshWorkspace("i-existing-seeded");
+		const before = {
+			config: await readWorkspaceFile(cwd, "config.json"),
+			contracts: await readWorkspaceFile(cwd, "contracts.json"),
+			manifests: await readWorkspaceFile(cwd, "manifests.json"),
+		};
 
-		expect(second.ok).toBe(true);
-		expect(second.exitCode).toBe(0);
+		const result = await runCli(["init"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(result.errors.length).toBeGreaterThan(0);
+		expect(
+			result.errors.some((error) => /EXISTS|INIT|WORKSPACE/.test(error.code)),
+		).toBe(true);
+		expect(await readWorkspaceFile(cwd, "config.json")).toBe(before.config);
+		expect(await readWorkspaceFile(cwd, "contracts.json")).toBe(
+			before.contracts,
+		);
+		expect(await readWorkspaceFile(cwd, "manifests.json")).toBe(
+			before.manifests,
+		);
+	});
+
+	it("refuses to overwrite an existing workspace with authored contracts: exit 1, structured error, non-empty contracts.json survives byte-identical", async () => {
+		const cwd = await freshWorkspace("i-existing-authored");
+		// A genuinely authored store — a non-empty contracts.json with a real
+		// contract (the spec's refusal example: "a non-empty contracts.json").
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			contracts: {
+				OrderService: {
+					invariants: [],
+					operations: {
+						placeOrder: {
+							id: "OrderService.placeOrder",
+							params: [],
+							preconditions: [],
+							postconditions: [],
+							effects: [],
+							sourceHash: "authored-hash",
+						},
+					},
+				},
+			},
+		});
+		const before = {
+			config: await readWorkspaceFile(cwd, "config.json"),
+			contracts: await readWorkspaceFile(cwd, "contracts.json"),
+			manifests: await readWorkspaceFile(cwd, "manifests.json"),
+		};
+
+		const result = await runCli(["init"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(result.errors.length).toBeGreaterThan(0);
+		expect(
+			result.errors.some((error) => /EXISTS|INIT|WORKSPACE/.test(error.code)),
+		).toBe(true);
+		// init never erases authored contracts/manifests — byte-identical.
+		expect(await readWorkspaceFile(cwd, "contracts.json")).toBe(
+			before.contracts,
+		);
+		expect(await readWorkspaceFile(cwd, "config.json")).toBe(before.config);
+		expect(await readWorkspaceFile(cwd, "manifests.json")).toBe(
+			before.manifests,
+		);
+	});
+
+	// VERSAILLES-184 edge: "exists with content" refuses. A .versailles/ that
+	// exists but contains NO workspace files has no content to destroy, so init
+	// re-scaffolds it (exit 0). DECISION for the implementation agent: if the
+	// fix instead treats ANY existing .versailles/ as a refusal trigger, relax
+	// this test — the content-bearing refusal tests above MUST stay.
+	it("re-scaffolds a completely empty .versailles/ directory (no workspace files) — exists-but-empty is not content, exit 0", async () => {
+		const cwd = await bareProjectCwd("i-existing-empty-dir");
+		await mkdir(join(cwd, ".versailles"), { recursive: true });
+
+		const result = await runCli(["init"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
 		const entries = (await readdir(join(cwd, ".versailles"))).sort();
 		expect(entries).toEqual([
 			"config.json",
