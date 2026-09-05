@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+// VERSAILLES-188: the marker the loader-hook fixture throws — asserted to
+// NEVER surface as a raw crash on stderr (only inside the envelope detail).
+import { BOOM } from "./fixtures/throw-runcli-loader.mjs";
 
 /**
  * Packaging lifecycle (VERSAILLES-16, "Get Ready For Beta" sprint Phase 2):
@@ -37,6 +40,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const PACKAGE_JSON_PATH = join(REPO_ROOT, "package.json");
 const SHIM_PATH = join(REPO_ROOT, "bin", "versailles");
+// VERSAILLES-188: --import preload that registers the loader hook swapping
+// the dist runCli for one that throws (see tests/fixtures/).
+const THROW_RUNCLI_PRELOAD = join(
+	REPO_ROOT,
+	"tests",
+	"fixtures",
+	"register-throw-runcli.mjs",
+);
 
 type PackageJson = {
 	name?: string;
@@ -289,5 +300,76 @@ describe("bin/versailles shim — real shipped surface (VERSAILLES-16)", () => {
 		expect(envelope.errors).toContainEqual(
 			expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
 		);
+	});
+
+	// ── bin/versailles top-level crash safety (VERSAILLES-188) ──────────────
+	// bin/versailles is a thin shim with NO try/catch around runCli: any
+	// unexpected throw escapes as an unhandled crash (raw stack trace on
+	// stderr, empty stdout, non-deterministic exit) instead of the structured
+	// envelope the CLI contract promises (build-spec §10, ADR-0010). The fix
+	// wraps the runCli call so an escaping throw prints
+	// { ok: false, errors: [{ code: "INTERNAL", ... }], warnings: [], exitCode: 1 }
+	// and exits 1 — never an unstructured crash. These tests PIN that fix.
+	//
+	// Harness: the REAL shim is spawned with the register-throw-runcli.mjs
+	// --import preload, whose loader hook substitutes the dist runCli for a
+	// stub that ALWAYS throws. The bin itself is untouched — the crash-safety
+	// surface exercised is exactly the shipped bin/versailles file.
+
+	it("--version → stdout parses to the envelope, ok true, exit 0 — regression guard that the normal surface stays intact (VERSAILLES-188)", async () => {
+		const cwd = await freshWorkspace("shim-version");
+		const run = spawnSync("node", [SHIM_PATH, "--version"], {
+			cwd,
+			encoding: "utf8",
+		});
+
+		expect(
+			run.status,
+			`shim exited ${run.status}:\n${run.stdout}\n${run.stderr}`,
+		).toBe(0);
+		const envelope = JSON.parse(run.stdout) as CliResultShape;
+		expect(envelope.ok).toBe(true);
+		expect(envelope.exitCode).toBe(0);
+		expect(envelope.errors).toEqual([]);
+		expect(envelope.output).toMatchObject({ version: expect.any(String) });
+	});
+
+	it("when runCli throws, the bin prints the structured { ok: false } envelope, exits 1, and never crashes with a raw stack on stderr (VERSAILLES-188)", async () => {
+		const cwd = await freshWorkspace("shim-crash");
+		// --import preload swaps the dist runCli for one that throws; the bin
+		// must convert that escaping throw into the envelope, not crash.
+		const run = spawnSync(
+			"node",
+			["--import", THROW_RUNCLI_PRELOAD, SHIM_PATH, "--version"],
+			{ cwd, encoding: "utf8" },
+		);
+
+		// Non-zero exit (1) — the deterministic failure envelope, never the
+		// non-deterministic unhandled-crash status.
+		expect(
+			run.status,
+			`shim exited ${run.status}:\n${run.stdout}\n${run.stderr}`,
+		).toBe(1);
+		// The envelope must actually be printed (pre-fix stdout is EMPTY — the
+		// throw escapes before JSON.stringify ever runs).
+		expect(
+			run.stdout.trim().length,
+			`stdout must be the JSON envelope — got: ${JSON.stringify(run.stdout)}\nstderr: ${run.stderr}`,
+		).toBeGreaterThan(0);
+		const envelope = JSON.parse(run.stdout) as CliResultShape;
+		expect(envelope.ok).toBe(false);
+		expect(envelope.exitCode).toBe(1);
+		expect(Array.isArray(envelope.errors)).toBe(true);
+		expect(envelope.errors).toContainEqual(
+			expect.objectContaining({ code: "INTERNAL" }),
+		);
+		// The actual error must be surfaced machine-readably inside the
+		// envelope detail — never swallowed, never a raw crash.
+		expect(JSON.stringify(envelope.errors)).toContain(BOOM);
+		// No unstructured crash: the raw throw must never reach stderr.
+		expect(
+			run.stderr,
+			`stderr must not contain the raw crash:\n${run.stderr}`,
+		).not.toContain(BOOM);
 	});
 });
