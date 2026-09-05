@@ -56,6 +56,10 @@ type PackageJson = {
 	repository?: { url?: string };
 	author?: string | { name?: string };
 	keywords?: string[];
+	dependencies?: Record<string, string>;
+	devDependencies?: Record<string, string>;
+	optionalDependencies?: Record<string, string>;
+	peerDependencies?: Record<string, string>;
 };
 
 async function readPackageJson(): Promise<PackageJson> {
@@ -186,6 +190,22 @@ describe("package.json publish metadata (VERSAILLES-19)", () => {
 		expect(Array.isArray(pkg.keywords)).toBe(true);
 		expect((pkg.keywords ?? []).length).toBeGreaterThan(0);
 		expect((pkg.keywords ?? []).every((k) => typeof k === "string")).toBe(true);
+	});
+});
+
+// ── package.json dependency hygiene (VERSAILLES-190) ───────────────────────
+// The TypeScript extractor lazy-loads the compiler API inside the extract
+// path (VERSAILLES-190), so `typescript` is a dev-time/peer concern only: the
+// tsc build (scripts.build/prepare) and consumers who actually run
+// extract-manifests on a TS project need it, but a non-TS consumer of the
+// runtime package must not pay the install cost. This pins that `typescript`
+// is never a hard runtime `dependency`.
+
+describe("package.json dependency hygiene (VERSAILLES-190)", () => {
+	it("does not declare `typescript` as a hard runtime dependency — the TS extractor lazy-loads it (optional/peer/dev only)", async () => {
+		const pkg = await readPackageJson();
+
+		expect(pkg.dependencies?.typescript).toBeUndefined();
 	});
 });
 

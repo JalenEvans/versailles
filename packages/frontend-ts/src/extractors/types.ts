@@ -77,6 +77,15 @@ export type ExtractorResult = {
  * Extractor plugin seam (ADR-0008): one plugin per source language, selected
  * by config.language. All language-specific extraction lives behind this
  * interface — the core never forks per language.
+ *
+ * VERSAILLES-190: the TypeScript compiler API is an optional dependency, so
+ * extraction is lazy. The seam exposes BOTH entry points:
+ * - `extract` (async) — the primary seam entry, lazy-loads the compiler API
+ *   via dynamic `await import(...)`; fails with the structured
+ *   EXTRACTOR_DEPENDENCY_MISSING error when the dependency is absent.
+ * - `extractSync` (sync) — for callers that cannot await (the public
+ *   `extractManifests` surface and the CLI); lazy-loads synchronously and
+ *   fails with the same structured error.
  */
 export interface ExtractorPlugin {
 	readonly language: "typescript" | "csharp" | "python";
@@ -87,5 +96,10 @@ export interface ExtractorPlugin {
 	 *   sourcePath values project-root-relative (VERSAILLES-24). When omitted
 	 *   the plugin infers it from the source roots' common directory prefix.
 	 */
-	extract(sourceRoots: string[], projectRoot?: string): ExtractorResult;
+	extract(
+		sourceRoots: string[],
+		projectRoot?: string,
+	): Promise<ExtractorResult>;
+	/** Synchronous variant of {@link extract} for non-awaiting callers. */
+	extractSync(sourceRoots: string[], projectRoot?: string): ExtractorResult;
 }
