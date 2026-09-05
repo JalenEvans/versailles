@@ -93,7 +93,7 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 
 - **Given** a project with no `.versailles/` workspace
 - **When** `versailles init` runs
-- **Then** it scaffolds `.versailles/` with the four jointly-loaded files (config.json + empty contracts.json + empty manifests.json) and exits `0`
+- **Then** it scaffolds `.versailles/` with the three jointly-loaded files (config.json + empty contracts.json + empty manifests.json) and exits `0`
 - **Given** a project with an existing `.versailles/` workspace containing authored content (e.g. a non-empty `contracts.json`)
 - **When** `versailles init` runs again
 - **Then** it does NOT modify any workspace file and returns a structured error (exit `1`) — `init` never silently erases authored contracts/manifests (build-spec §2; VERSAILLES-184)
