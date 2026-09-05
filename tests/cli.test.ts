@@ -110,7 +110,7 @@ import { extractManifests } from "../packages/frontend-ts/src/extractors/index.j
 // (VERSAILLES-170): no grammarVersion/schemaVersion fields — the `$schema`
 // pointer string replaces the version ceremony.
 const SEEDED_CONFIG = {
-	$schema: "../../config.schema.json",
+	$schema: "../config.schema.json",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",

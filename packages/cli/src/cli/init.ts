@@ -12,7 +12,7 @@ const WORKSPACE_FILE_NAMES = [
 ];
 
 const SEEDED_CONFIG = {
-	$schema: "../../config.schema.json",
+	$schema: "../config.schema.json",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",

@@ -1,13 +1,16 @@
 import {
+	copyFile,
 	mkdir,
 	mkdtemp,
 	readFile,
 	readdir,
 	rm,
+	stat,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -43,10 +46,15 @@ import { initWorkspace } from "../packages/cli/src/cli/init.js";
  *   envelope).
  */
 
+const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
+
 const SEED_FILE_NAMES = ["config.json", "contracts.json", "manifests.json"];
 
 const SEEDED_CONFIG = {
-	$schema: "../../config.schema.json",
+	// VERSAILLES-187: `../config.schema.json` resolves from .versailles/ up one
+	// level to the project-root schema. The old `../../config.schema.json`
+	// resolved one level ABOVE the project root — a dead pointer.
+	$schema: "../config.schema.json",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -129,6 +137,78 @@ describe("initWorkspace — scaffolds .versailles/", () => {
 			expect(parsed).toEqual({});
 		},
 	);
+});
+
+// VERSAILLES-187: the seeded config `$schema` pointer must resolve to the
+// project-root schema (`<project>/config.schema.json`), never one level above
+// the project root. The config lives at `<project>/.versailles/config.json`,
+// so the old `../../config.schema.json` resolved to
+// `<parent-of-project>/config.schema.json` — a dead pointer (editor/tooling
+// JSON-schema validation silently off). The root package ships
+// `config.schema.json` at the project root (package.json "files" includes
+// "config.schema.json"), so the seeded pointer is `../config.schema.json` and
+// validation stays live. Spec: docs/specs/workspace-context.md (VERSAILLES-187).
+describe("initWorkspace — seeded config $schema resolves to the project-root schema (VERSAILLES-187)", () => {
+	it("seeds $schema as ../config.schema.json (resolves from .versailles/ up one level to the project root)", async () => {
+		const targetDir = await freshTargetDir("e-schema-pointer-value");
+
+		await initWorkspace(targetDir);
+
+		const parsed = JSON.parse(
+			await readFile(join(targetDir, ".versailles", "config.json"), "utf8"),
+		) as Record<string, unknown>;
+
+		expect(parsed.$schema).toBe("../config.schema.json");
+		expect(parsed.$schema).not.toBe("../../config.schema.json");
+	});
+
+	it("resolves the seeded $schema to the project-root config.schema.json — a live pointer, never dead", async () => {
+		const targetDir = await freshTargetDir("e-schema-live");
+		// A freshly initialized project root carries the schema the root
+		// package ships (package.json "files" includes config.schema.json at the
+		// repo root), so arrange it like a real project root.
+		await mkdir(targetDir, { recursive: true });
+		await copyFile(
+			join(REPO_ROOT, "config.schema.json"),
+			join(targetDir, "config.schema.json"),
+		);
+
+		await initWorkspace(targetDir);
+
+		const configPath = join(targetDir, ".versailles", "config.json");
+		const parsed = JSON.parse(await readFile(configPath, "utf8")) as {
+			$schema?: string;
+		};
+		const resolvedSchemaPath = resolve(
+			dirname(configPath),
+			parsed.$schema ?? "",
+		);
+
+		expect(resolvedSchemaPath).toBe(join(targetDir, "config.schema.json"));
+		// Live: the file the pointer names actually exists at the project root.
+		const schemaStats = await stat(resolvedSchemaPath);
+		expect(schemaStats.isFile()).toBe(true);
+	});
+
+	it("never resolves the seeded $schema one level above the project root (no ../../ dead pointer)", async () => {
+		const targetDir = await freshTargetDir("e-schema-not-above");
+
+		await initWorkspace(targetDir);
+
+		const configPath = join(targetDir, ".versailles", "config.json");
+		const parsed = JSON.parse(await readFile(configPath, "utf8")) as {
+			$schema?: string;
+		};
+		const resolvedSchemaPath = resolve(
+			dirname(configPath),
+			parsed.$schema ?? "",
+		);
+
+		expect(resolvedSchemaPath).not.toBe(
+			join(targetDir, "..", "config.schema.json"),
+		);
+		expect(resolvedSchemaPath).toBe(join(targetDir, "config.schema.json"));
+	});
 });
 
 // VERSAILLES-184: the previous idempotency pin (a second run re-seeds and
