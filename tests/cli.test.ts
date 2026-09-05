@@ -2083,3 +2083,78 @@ describe("runCli generate — emitted imports resolve to the real source file (V
 		expect(basename(resolved)).toBe("order.ts");
 	});
 });
+
+// VERSAILLES-191: the PBT opt-in is never a silent zero at the CLI surface.
+// When config.propertyBased.enabled is true and zero property blocks are
+// planned (every clause resolves example-only — a numeric-bound precondition
+// + a plain non-effects invariant here), the generate handler must surface a
+// non-silent non-blocking warning in CliResult.warnings explaining that zero
+// property blocks were planned and why — same tier as PROPERTY_UNPLANNABLE,
+// exit 0 (deterministic-generation.contract.yaml plan_property_blocks
+// must_not; build-spec §9.6).
+describe("runCli generate — the PBT opt-in is never a silent zero (VERSAILLES-191)", () => {
+	it("propertyBased enabled + zero property-plannable clauses → a non-silent warning explains zero property blocks were planned, generation stays exit 0 (non-blocking)", async () => {
+		const cwd = await freshWorkspace("g-property-silent-zero");
+		await writeWorkspaceFile(cwd, "config.json", {
+			...SEEDED_CONFIG,
+			propertyBased: { enabled: true, numRuns: 100 },
+		});
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			contracts: {
+				OrderService: {
+					invariants: [
+						{ id: "OrderService.inv0", expr: 'status != "TERMINATED"' },
+					],
+					operations: {
+						withdraw: {
+							id: "OrderService.withdraw",
+							params: [{ name: "amount", type: "number" }],
+							preconditions: [
+								{ id: "OrderService.withdraw.pre0", expr: "amount >= 10" },
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "withdraw-hash",
+						},
+					},
+				},
+			},
+		});
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order",
+					fields: { status: "string" },
+				},
+			},
+		});
+
+		const result = await runCli(["generate"], { cwd });
+
+		// Generation still succeeds — the warning tier is non-blocking
+		// (ADR-0004), exactly like PROPERTY_UNPLANNABLE: exit 0.
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+
+		// NON-SILENT: at least one warning explains that zero property blocks
+		// were planned and why — the opt-in never produces zero blocks with
+		// zero warnings silently.
+		expect(result.warnings.length).toBeGreaterThan(0);
+		const zeroWarning = result.warnings.find((warning) =>
+			/zero property blocks/i.test(warning.detail),
+		);
+		expect(zeroWarning).toBeDefined();
+		expect(zeroWarning?.code.length).toBeGreaterThan(0);
+		expect(zeroWarning?.detail.length).toBeGreaterThan(0);
+
+		// Zero property blocks → the generated surface has NO fast-check
+		// surface for the operation.
+		const content = await readFile(
+			join(cwd, ".versailles", "generated", "OrderService.test.ts"),
+			"utf8",
+		);
+		expect(content).not.toContain("fast-check");
+		expect(content).not.toContain("fc.property");
+	});
+});

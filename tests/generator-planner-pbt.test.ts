@@ -555,7 +555,17 @@ describe("planPropertyBlocks — strategy gating: example-shaped clauses yield N
 
 		expect(descriptors).toEqual([]);
 		expect(strategies["OrderService.setStatus.pre0"]).toBe("example");
-		expect(warnings).toEqual([]);
+		// VERSAILLES-191: the PBT opt-in is never a silent zero — enabled with
+		// zero property-plannable clauses surfaces a non-silent non-blocking
+		// PROPERTY_ZERO_PLANNED warning (same LoaderWarning tier as
+		// PROPERTY_UNPLANNABLE — CliResult.warnings, exit 0).
+		expect(warnings.length).toBeGreaterThan(0);
+		const zeroWarning = warnings.find((warning) =>
+			/zero property blocks/i.test(warning.detail),
+		);
+		expect(zeroWarning).toBeDefined();
+		expect(zeroWarning?.code).toBe("PROPERTY_ZERO_PLANNED");
+		expect(zeroWarning?.field).toBe("propertyBased");
 		expectStrategyCoverage(ctx, strategies);
 	});
 
@@ -565,7 +575,17 @@ describe("planPropertyBlocks — strategy gating: example-shaped clauses yield N
 
 		expect(descriptors).toEqual([]);
 		expect(strategies["OrderService.withdraw.pre0"]).toBe("example");
-		expect(warnings).toEqual([]);
+		// VERSAILLES-191: the PBT opt-in is never a silent zero — enabled with
+		// zero property-plannable clauses surfaces a non-silent non-blocking
+		// PROPERTY_ZERO_PLANNED warning (same LoaderWarning tier as
+		// PROPERTY_UNPLANNABLE — CliResult.warnings, exit 0).
+		expect(warnings.length).toBeGreaterThan(0);
+		const zeroWarning = warnings.find((warning) =>
+			/zero property blocks/i.test(warning.detail),
+		);
+		expect(zeroWarning).toBeDefined();
+		expect(zeroWarning?.code).toBe("PROPERTY_ZERO_PLANNED");
+		expect(zeroWarning?.field).toBe("propertyBased");
 		expectStrategyCoverage(ctx, strategies);
 	});
 });
@@ -1051,7 +1071,7 @@ function accountPbtContext(
 }
 
 describe("planPropertyBlocks — invariant-preservation + postcondition strategy mapping", () => {
-	it("plans an invariant-preserving property for the effects-overlap invariant; literal postconditions stay example; the bothSideFieldRef equality postcondition with a manifest-FIELD operand is PLANNED via the FIELD-BOUND layout (Center B1, VERSAILLES-165)", () => {
+	it("VERSAILLES-191 + Center B1: computable withdraw postconditions (field-op-expr relations) are PLANNED region-property satisfies blocks; the effects-overlap invariant is PROPERTY_UNPLANNABLE (field-bound sibling blocking); the bothSideFieldRef equality postcondition with a manifest-FIELD operand is PLANNED via the FIELD-BOUND layout", () => {
 		const ctx = accountPbtContext({ enabled: true, numRuns: 100 });
 		const suite = planTestCases(ctx);
 		const { descriptors, strategies, warnings } = planPropertyBlocks(
@@ -1059,17 +1079,40 @@ describe("planPropertyBlocks — invariant-preservation + postcondition strategy
 			ctx,
 		);
 
-		// Effects-overlap invariant (balance is mutated by withdraw) →
-		// invariant-preserving property, oracle = the codegen'd invariant.
-		// Its oracle (balance) => balance >= 0 is SINGLE-param → planable.
+		// The effects-overlap invariant (balance is mutated by withdraw) would
+		// normally be invariant-preserving — but the withdraw postconditions
+		// (post0 `old(balance) - amount == balance`, post1 `old(balance) >=
+		// balance`) are now field-bound multi-param guards (VERSAILLES-191).
+		// The invariant block cannot filter with the field-bound siblings (the
+		// mirror/record layouts cannot reference manifest fields in their
+		// filters), so inv0 is PROPERTY_UNPLANNABLE — the existing deliberate
+		// FIELD-BOUND sibling-blocking semantics (sound: the invariant block
+		// can't filter the field-bound postconditions). The invariant
+		// descriptor is ABSENT and a non-silent warning explains why; the
+		// strategy record keeps "property" (a SELECTOR decision; the PLANNER
+		// finds the clause unplannable) and the coverage gap stays visible.
 		const invariant = descriptors.find(
 			(d) => d.id === "AccountService.withdraw.property-invariant-preserving-0",
 		);
-		expect(invariant).toBeDefined();
-		expect(invariant).toMatchObject({
+		expect(invariant).toBeUndefined();
+		const invWarning = warnings.find((w) => w.field === "AccountService.inv0");
+		expect(invWarning).toBeDefined();
+		expect(invWarning?.code).toBe("PROPERTY_UNPLANNABLE");
+
+		// The computable withdraw postconditions ARE planned — a field-op-expr
+		// relation (`old(balance) - amount == balance`, `old(balance) >=
+		// balance`) is the own-clause field-bound shape (VERSAILLES-191), so it
+		// routes to the FIELD-BOUND layout: op-param-only descriptor params
+		// ([amount], no field source spec, no mirrorOf), the codegen'd
+		// preState-carrying oracle, outcome satisfies. Never example-only.
+		const post0 = descriptors.find(
+			(d) => d.id === "AccountService.withdraw.property-satisfies-0",
+		);
+		expect(post0).toBeDefined();
+		expect(post0).toEqual({
+			id: "AccountService.withdraw.property-satisfies-0",
 			component: "AccountService",
 			operation: "withdraw",
-			outcome: "invariant-preserving",
 			params: [
 				{
 					param: "amount",
@@ -1079,13 +1122,42 @@ describe("planPropertyBlocks — invariant-preservation + postcondition strategy
 				},
 			],
 			clauses: [
-				{ clauseId: "AccountService.inv0", code: "(balance) => balance >= 0" },
+				{
+					clauseId: "AccountService.withdraw.post0",
+					code: "(amount, balance, preState) => preState.balance - amount === balance",
+				},
 			],
-			traces: ["AccountService.inv0"],
+			outcome: "satisfies",
+			traces: ["AccountService.withdraw.post0"],
+			seed: derivePropertySeed(["AccountService.withdraw.post0"], "1.0"),
 		});
-		expect(invariant?.seed).toBe(
-			derivePropertySeed(["AccountService.inv0"], "1.0"),
+
+		const post1 = descriptors.find(
+			(d) => d.id === "AccountService.withdraw.property-satisfies-1",
 		);
+		expect(post1).toBeDefined();
+		expect(post1).toEqual({
+			id: "AccountService.withdraw.property-satisfies-1",
+			component: "AccountService",
+			operation: "withdraw",
+			params: [
+				{
+					param: "amount",
+					typeRef: "number",
+					kind: "number",
+					bounds: { min: 10, max: 100 },
+				},
+			],
+			clauses: [
+				{
+					clauseId: "AccountService.withdraw.post1",
+					code: "(balance, preState) => preState.balance >= balance",
+				},
+			],
+			outcome: "satisfies",
+			traces: ["AccountService.withdraw.post1"],
+			seed: derivePropertySeed(["AccountService.withdraw.post1"], "1.0"),
+		});
 
 		// bothSideFieldRef equality postcondition (status == newStatus)
 		// codegen's to a TWO-param oracle (status, newStatus). Center B1: the
@@ -1140,14 +1212,15 @@ describe("planPropertyBlocks — invariant-preservation + postcondition strategy
 
 		// Per-clause strategy record — the SELECTOR still maps the
 		// bothSideFieldRef shape to "property" (the strategy is a selector
-		// decision; the PLANNER finds the clause unplannable). Literal-
-		// computable postconditions stay example.
+		// decision; the PLANNER finds the clause unplannable). VERSAILLES-191:
+		// the computable withdraw postconditions (field-op-expr relations) are
+		// REGION PROPERTIES — property, never example.
 		expect(strategies).toEqual({
 			"AccountService.inv0": "property",
 			"AccountService.withdraw.pre0": "example",
 			"AccountService.withdraw.pre1": "example",
-			"AccountService.withdraw.post0": "example",
-			"AccountService.withdraw.post1": "example",
+			"AccountService.withdraw.post0": "property",
+			"AccountService.withdraw.post1": "property",
 			"AccountService.setStatus.pre0": "example",
 			"AccountService.setStatus.post0": "property",
 		});
@@ -1905,6 +1978,99 @@ describe("planPropertyBlocks — zero-param field-field equality is PROPERTY_UNP
 	});
 });
 
+// ── VERSAILLES-191: zero-param field-op-expr postcondition ──────────────────
+// `old(balance) >= balance` on a ZERO-param operation (`settle()`): the
+// strategy change routes literal-computable field-op-expr postconditions to
+// property blocks, but the FIELD-BOUND layout samples op-param arbitraries
+// only — with zero op params the emitter would render `fc.property(, () => {`
+// (syntax garbage, ADR-0021 totality-of-emission violation). The Fix-2
+// zero-param gate covers bothSideFieldRef equalities via
+// `ownFieldOperands.length === 2`, but `isFieldOpExprRelation` clauses slip
+// through (fieldBoundFieldOperands reports [] for the relation shape — the
+// expr side is never a fieldRef). Ratified intent: the clause is
+// PROPERTY_UNPLANNABLE — warning present, descriptor absent (never
+// `params: []`), strategy stays property, coverage gap visible.
+
+function zeroParamFieldOpExprPostconditionContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		contracts: {
+			SettlementService: {
+				invariants: [],
+				operations: {
+					settle: {
+						id: "SettlementService.settle",
+						params: [],
+						preconditions: [],
+						postconditions: [
+							{
+								id: "SettlementService.settle.post0",
+								expr: "old(balance) >= balance",
+							},
+						],
+						effects: [],
+						sourceHash: "settle-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		manifests: {
+			SettlementService: {
+				sourceHash: "man-settlement",
+				fields: { balance: "number" },
+			},
+		},
+	};
+	return makeContext(contracts, manifests, EMPTY_PREDICATES, {
+		enabled: true,
+		numRuns: 100,
+	});
+}
+
+describe("planPropertyBlocks — zero-param field-op-expr postcondition with old() is PROPERTY_UNPLANNABLE (VERSAILLES-191, Red today)", () => {
+	it("old(balance) >= balance on settle() cannot be sampled — warning present, descriptor absent (never params: []), strategy stays property, coverage gap visible", () => {
+		const ctx = zeroParamFieldOpExprPostconditionContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
+		);
+
+		// Fixture clause-code verification: `old(balance) >= balance` codegen's
+		// to a TWO-param oracle `(balance, preState)` — the operation has ZERO
+		// op params, so the FIELD-BOUND layout has nothing to sample (the same
+		// `fc.property(, ...)` garbage the field-field Fix-2 gate rejects).
+		const code = renderOracle(ctx, "SettlementService.settle.post0");
+		expect(code).toBe("(balance, preState) => preState.balance >= balance");
+		expect(oracleParamsOf(code)).toEqual(["balance", "preState"]);
+
+		// The SELECTOR still records property (the strategy change);
+		// the PLANNER must find the zero-param relation unplannable.
+		expect(strategies["SettlementService.settle.post0"]).toBe("property");
+
+		// Same LoaderWarning channel as the Fix-2 zero-param field-field case.
+		const warning = warnings.find(
+			(w) => w.field === "SettlementService.settle.post0",
+		);
+		expect(warning).toBeDefined();
+		expect(warning?.code).toBe("PROPERTY_UNPLANNABLE");
+		expect(warning?.detail.length).toBeGreaterThan(0);
+
+		// The clause contributes NO descriptor — never a silent zero, never an
+		// empty-param `fc.property(, () =>` block (ADR-0021 totality).
+		expect(
+			descriptors.some((d) =>
+				d.traces.includes("SettlementService.settle.post0"),
+			),
+		).toBe(false);
+
+		// The coverage gap stays visible.
+		expect(suite.clauseIds).toContain("SettlementService.settle.post0");
+		expectStrategyCoverage(ctx, strategies);
+	});
+});
+
 // ── Determinism (ADR-0002 / ADR-0017) ───────────────────────────────────────
 
 describe("planPropertyBlocks — determinism (ADR-0002, re-scoped by ADR-0017)", () => {
@@ -2084,5 +2250,327 @@ describe("planPropertyBlocks — strategy coverage is total over the source clau
 		for (const clauseId of suite.clauseIds) {
 			expect(strategies[clauseId]).toBeDefined();
 		}
+	});
+});
+
+// ── VERSAILLES-191: computable postconditions are REGION PROPERTIES ─────────
+// A postcondition `field op expr` relation like `balance == old(balance) +
+// price` is literal-computable (postconditionAssertions derives a real
+// matcher), so the concrete satisfaction case pins ONE deterministic point —
+// but the RELATION constrains a whole region across the valid input space.
+// build-spec §9.6 (VERSAILLES-191): the strategy table must NOT route a
+// computable postcondition to example-only — it must plan a property block
+// when PBT is enabled (deterministic-generation.contract.yaml
+// plan_property_blocks must_not). The property block checks the relation
+// across the valid region; the concrete satisfaction case stays too.
+function computablePostconditionRegionContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					purchase: {
+						id: "OrderService.purchase",
+						params: [{ name: "price", type: "number" }],
+						preconditions: [],
+						postconditions: [
+							{
+								id: "OrderService.purchase.post0",
+								expr: "balance == old(balance) + price",
+							},
+						],
+						effects: [{ field: "balance", kind: "mutate" }],
+						sourceHash: "purchase-computable-post-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		manifests: {
+			OrderService: {
+				sourceHash: "man-purchase-computable-post",
+				fields: { balance: "number" },
+			},
+		},
+	};
+	return makeContext(contracts, manifests, EMPTY_PREDICATES, {
+		enabled: true,
+		numRuns: 100,
+	});
+}
+
+describe("planPropertyBlocks — computable postconditions are region properties, never example-only (VERSAILLES-191)", () => {
+	it("a `field op expr` postcondition (balance == old(balance) + price) plans a satisfies property block — the strategy record routes it to property, never example", () => {
+		const ctx = computablePostconditionRegionContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
+		);
+
+		// Fixture clause-code verification: the oracle references the manifest
+		// FIELD balance (mapped to instance.balance by the emitter's
+		// FIELD-BOUND layout) plus the sampled op param price and the captured
+		// pre-state — the codegen'd arrow is the same source every satisfies
+		// block embeds.
+		const code = renderOracle(ctx, "OrderService.purchase.post0");
+		expect(code).toBe(
+			"(balance, price, preState) => balance === preState.balance + price",
+		);
+
+		// The strategy table fix: a computable postcondition is a REGION
+		// property — the concrete satisfaction case pins one point, the
+		// property block checks the relation across the valid region. It is
+		// NEVER routed example-only.
+		expect(strategies["OrderService.purchase.post0"]).toBe("property");
+
+		// A satisfies property block IS planned for the postcondition — the
+		// clause's own oracle filters/asserts the relation across the region.
+		const descriptor = descriptors.find((d) =>
+			d.traces.includes("OrderService.purchase.post0"),
+		);
+		expect(descriptor).toBeDefined();
+		expect(descriptor).toMatchObject({
+			component: "OrderService",
+			operation: "purchase",
+			outcome: "satisfies",
+			params: [{ param: "price", typeRef: "number", kind: "number" }],
+			clauses: [
+				{
+					clauseId: "OrderService.purchase.post0",
+					code: "(balance, price, preState) => balance === preState.balance + price",
+				},
+			],
+			traces: ["OrderService.purchase.post0"],
+		});
+		expect(descriptor?.id).toMatch(
+			/^OrderService\.purchase\.property-satisfies-\d+$/,
+		);
+		expect(descriptor?.seed).toBe(
+			derivePropertySeed(["OrderService.purchase.post0"], "1.0"),
+		);
+
+		// The region property IS planned — no PROPERTY_UNPLANNABLE warning for
+		// the postcondition, and its clause id stays in the coverage stream.
+		expect(
+			warnings.some((w) => w.field === "OrderService.purchase.post0"),
+		).toBe(false);
+		expect(suite.clauseIds).toContain("OrderService.purchase.post0");
+		expectStrategyCoverage(ctx, strategies);
+	});
+
+	it("`expr op field` postconditions (old(balance) - amount == balance / old(balance) >= balance) also route to property and plan satisfies blocks", () => {
+		const ctx = accountPbtContext({ enabled: true, numRuns: 100 });
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies } = planPropertyBlocks(suite, ctx);
+
+		// post0 `old(balance) - amount == balance` and post1 `old(balance) >=
+		// balance` are BOTH computable (`expr op field` relations — the field
+		// is on the right, the old()-referencing expr on the left) → region
+		// properties → property, never example.
+		expect(strategies["AccountService.withdraw.post0"]).toBe("property");
+		expect(strategies["AccountService.withdraw.post1"]).toBe("property");
+
+		const post0 = descriptors.find((d) =>
+			d.traces.includes("AccountService.withdraw.post0"),
+		);
+		const post1 = descriptors.find((d) =>
+			d.traces.includes("AccountService.withdraw.post1"),
+		);
+		expect(post0).toBeDefined();
+		expect(post0).toMatchObject({ outcome: "satisfies" });
+		expect(post1).toBeDefined();
+		expect(post1).toMatchObject({ outcome: "satisfies" });
+		expect(suite.clauseIds).toContain("AccountService.withdraw.post0");
+		expect(suite.clauseIds).toContain("AccountService.withdraw.post1");
+		expectStrategyCoverage(ctx, strategies);
+	});
+});
+
+// ── VERSAILLES-191: the PBT opt-in is never a silent zero ───────────────────
+// When config.propertyBased.enabled is true and ZERO property blocks are
+// planned (every clause resolved example-only), the generator must surface a
+// non-silent non-blocking warning explaining why — never zero blocks with
+// zero warnings (deterministic-generation.contract.yaml plan_property_blocks
+// must_not; build-spec §9.6). The warning rides the same LoaderWarning tier
+// as PROPERTY_UNPLANNABLE (CliResult.warnings, exit 0).
+function neverSilentZeroContext(
+	propertyBased?: WorkspaceConfig["propertyBased"],
+): VersaillesContext {
+	const contracts: ContractsFile = {
+		contracts: {
+			OrderService: {
+				invariants: [
+					{ id: "OrderService.inv0", expr: 'status != "TERMINATED"' },
+				],
+				operations: {
+					withdraw: {
+						id: "OrderService.withdraw",
+						params: [{ name: "amount", type: "number" }],
+						preconditions: [
+							{ id: "OrderService.withdraw.pre0", expr: "amount >= 10" },
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "withdraw-never-silent-zero-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		manifests: {
+			OrderService: {
+				sourceHash: "man-never-silent-zero",
+				fields: { status: "string" },
+			},
+		},
+	};
+	return makeContext(contracts, manifests, EMPTY_PREDICATES, propertyBased);
+}
+
+describe("planPropertyBlocks — the PBT opt-in is never a silent zero (VERSAILLES-191)", () => {
+	it("enabled with zero property-plannable clauses → a non-silent warning explains that zero property blocks were planned (never zero blocks with zero warnings)", () => {
+		const ctx = neverSilentZeroContext({ enabled: true, numRuns: 100 });
+		const { descriptors, strategies, warnings } = planPropertyBlocksFor(ctx);
+
+		// Zero property blocks: the numeric-bound precondition and the plain
+		// non-effects invariant are example-only keepers — no property block
+		// is planned for them (the boundary sweep + vacuous preservation fully
+		// characterize them).
+		expect(descriptors).toEqual([]);
+		expect(strategies["OrderService.withdraw.pre0"]).toBe("example");
+		expect(strategies["OrderService.inv0"]).toBe("example");
+
+		// NON-SILENT: at least one warning explains that zero property blocks
+		// were planned and why — the opt-in is never a silent no-op.
+		expect(warnings.length).toBeGreaterThan(0);
+		const zeroWarning = warnings.find((warning) =>
+			/zero property blocks/i.test(warning.detail),
+		);
+		expect(zeroWarning).toBeDefined();
+		expect(zeroWarning?.code.length).toBeGreaterThan(0);
+		expect(zeroWarning?.detail.length).toBeGreaterThan(0);
+		expectStrategyCoverage(ctx, strategies);
+	});
+
+	it("absent (disabled default) → zero property blocks and NO warning — the regression guard: pbtEnabled false/absent never warns", () => {
+		const ctx = neverSilentZeroContext();
+		const { descriptors, warnings } = planPropertyBlocksFor(ctx);
+
+		expect(descriptors).toEqual([]);
+		expect(warnings).toEqual([]);
+	});
+
+	it("explicit enabled: false → zero property blocks and NO warning", () => {
+		const ctx = neverSilentZeroContext({ enabled: false, numRuns: 100 });
+		const { descriptors, warnings } = planPropertyBlocksFor(ctx);
+
+		expect(descriptors).toEqual([]);
+		expect(warnings).toEqual([]);
+	});
+});
+
+// ── VERSAILLES-191: strategy table keepers STAY example-only ────────────────
+// PBT is used when necessary, not when unnecessary. Shapes the concrete cases
+// fully characterize keep their example strategy even after the computable-
+// postcondition fix: the boundary sweep for numeric-bound preconditions, the
+// partition sweep for `in` clauses, and vacuous preservation for plain
+// invariants with no effects-overlap (deterministic-generation.contract.yaml
+// plan_property_blocks; build-spec §9.6 "And" of VERSAILLES-191). A
+// predicateCall precondition (property-with-falsifier) keeps the accept-side
+// property so the operation still HAS a property block — the keeper
+// assertions below are about the keepers, not a silent zero.
+function keeperShapesContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		contracts: {
+			OrderService: {
+				invariants: [
+					{ id: "OrderService.inv0", expr: 'status != "TERMINATED"' },
+				],
+				operations: {
+					manage: {
+						id: "OrderService.manage",
+						params: [
+							{ name: "amount", type: "number" },
+							{ name: "newStatus", type: "string" },
+						],
+						preconditions: [
+							{ id: "OrderService.manage.pre0", expr: "amount >= 10" },
+							{
+								id: "OrderService.manage.pre1",
+								expr: 'newStatus in ["ACTIVE", "FROZEN"]',
+							},
+							{
+								id: "OrderService.manage.pre2",
+								expr: "isPositive(amount)",
+							},
+						],
+						postconditions: [],
+						effects: [],
+						sourceHash: "manage-keepers-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		manifests: {
+			OrderService: {
+				sourceHash: "man-keepers",
+				fields: { status: "string" },
+			},
+		},
+	};
+	const predicates: PredicatesFile = {
+		predicates: {
+			isPositive: {
+				params: ["amount"],
+				paramTypes: ["number"],
+				returnType: "boolean",
+				sourceRef: "src/predicates.ts",
+			},
+		},
+	};
+	return makeContext(contracts, manifests, predicates, {
+		enabled: true,
+		numRuns: 100,
+	});
+}
+
+describe("planPropertyBlocks — strategy table keepers stay example-only (VERSAILLES-191)", () => {
+	it("numeric-bound preconditions, `in` clauses, and plain invariants keep the example strategy — no property block is planned for them", () => {
+		const ctx = keeperShapesContext();
+		const suite = planTestCases(ctx);
+		const { descriptors, strategies, warnings } = planPropertyBlocks(
+			suite,
+			ctx,
+		);
+
+		// The keepers stay example-only — the boundary sweep, partition
+		// sweep, and vacuous preservation fully characterize them.
+		expect(strategies["OrderService.manage.pre0"]).toBe("example");
+		expect(strategies["OrderService.manage.pre1"]).toBe("example");
+		expect(strategies["OrderService.inv0"]).toBe("example");
+
+		// No descriptor traces a keeper.
+		for (const keeper of [
+			"OrderService.manage.pre0",
+			"OrderService.manage.pre1",
+			"OrderService.inv0",
+		]) {
+			expect(descriptors.some((d) => d.traces.includes(keeper))).toBe(false);
+		}
+
+		// The predicateCall clause keeps its accept-side property (so the
+		// operation has property coverage) and nothing is unplannable.
+		expect(strategies["OrderService.manage.pre2"]).toBe(
+			"property-with-falsifier",
+		);
+		expect(descriptors).toHaveLength(1);
+		expect(descriptors[0].traces).toEqual(["OrderService.manage.pre2"]);
+		expect(warnings).toEqual([]);
+		expectStrategyCoverage(ctx, strategies);
 	});
 });

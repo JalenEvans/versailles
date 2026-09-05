@@ -559,6 +559,149 @@ function assertableClauses(descriptor: PropertyDescriptor) {
 		}));
 }
 
+// ── preState capture (VERSAILLES-191) ────────────────────────────────────────
+// A codegen'd clause oracle carries a preState parameter when the clause
+// contains an `old(field)` reference: codegen.ts appends the preState name
+// (default "preState") LAST to the oracle head and renders every old()
+// reference as `<preStateName>.<root><suffixes>` — a dotted access on that
+// parameter. In the FIELD-BOUND layout every NON-op-param oracle parameter is
+// a manifest FIELD and renders as a bare single-segment fieldRef (the planner
+// only treats single-segment fieldRefs as fields), so a dotted-access base
+// that is not a sampled op-param can only be the preState parameter. The
+// property block must CAPTURE the old()-referenced fields off the bound
+// instance BEFORE the op call mutates them and pass the captured object to
+// the oracle — never `instance.preState` (the preState parameter is not a
+// manifest field, so `instance.preState` is undefined at runtime — the
+// TypeError this capture closes).
+
+/** True when `param` appears in `code` as a dotted-access base (`param.`). */
+function isDottedAccessBase(param: string, code: string): boolean {
+	const re = new RegExp(`(^|[^A-Za-z0-9_$])${escapeRegExp(param)}\\.`);
+	return re.test(code);
+}
+
+/**
+ * The preState oracle parameter of a clause (VERSAILLES-191), or null when the
+ * clause carries none: the codegen'd old() capture parameter — a callback
+ * param that is NOT a sampled op-param and that the oracle body references as
+ * a dotted-access base (the only way old(field) renders).
+ */
+function preStateParamOf(code: string, paramNames: Set<string>): string | null {
+	for (const param of oracleParamsOf(code)) {
+		if (paramNames.has(param)) {
+			continue;
+		}
+		if (isDottedAccessBase(param, code)) {
+			return param;
+		}
+	}
+	return null;
+}
+
+/**
+ * The manifest-FIELD roots an oracle's old() references — the pre-call state
+ * the generated property block captures off the bound instance — extracted
+ * from the body's `<preStateName>.<root>` dotted accesses in first-referenced
+ * order (deduped).
+ */
+function preStateFieldsOf(code: string, preStateParam: string): string[] {
+	const fields: string[] = [];
+	const seen = new Set<string>();
+	const re = new RegExp(
+		`(^|[^A-Za-z0-9_$])${escapeRegExp(preStateParam)}\\.([A-Za-z_$][A-Za-z0-9_$]*)`,
+		"g",
+	);
+	let match: RegExpExecArray | null = re.exec(code);
+	while (match !== null) {
+		const root = match[2];
+		if (!seen.has(root)) {
+			seen.add(root);
+			fields.push(root);
+		}
+		match = re.exec(code);
+	}
+	return fields;
+}
+
+/**
+ * The preState capture for a descriptor: the union of its clauses' preState
+ * params + old()-referenced fields, or null when no clause carries a preState
+ * param. Two clauses with DIFFERENT preState names are refused loudly (a
+ * single capture cannot bind both — the second clause's preState param would
+ * silently fall through to `instance.<name>`).
+ */
+function preStateCaptureOf(
+	descriptor: PropertyDescriptor,
+	paramNames: Set<string>,
+): { param: string; fields: string[] } | null {
+	let param: string | null = null;
+	const fields: string[] = [];
+	const seen = new Set<string>();
+	for (const clause of descriptor.clauses) {
+		const p = preStateParamOf(clause.code, paramNames);
+		if (p === null) {
+			continue;
+		}
+		if (param !== null && p !== param) {
+			throw new Error(
+				`Refusing to emit: property "${descriptor.id}" clauses reference different preState names ("${param}" and "${p}") — a single capture cannot bind both`,
+			);
+		}
+		param = p;
+		for (const root of preStateFieldsOf(clause.code, p)) {
+			if (!seen.has(root)) {
+				seen.add(root);
+				fields.push(root);
+			}
+		}
+	}
+	return param === null ? null : { param, fields };
+}
+
+/**
+ * The `const <preState> = { <field>: <instance read> };` capture lines, or []
+ * when the descriptor carries no preState param (or its name collides with a
+ * sampled op-param — a pathological contract naming an operation param
+ * "preState"; the codegen only refuses preStateName collisions with the
+ * clause's own fieldRef roots, so a collision here would redeclare the
+ * callback param and must not emit).
+ */
+function renderPreStateCapture(
+	descriptor: PropertyDescriptor,
+	paramNames: Set<string>,
+	fieldAccess?: EmitOptions["fieldAccess"],
+): string[] {
+	const preState = preStateCaptureOf(descriptor, paramNames);
+	if (preState === null || paramNames.has(preState.param)) {
+		return [];
+	}
+	const captures = preState.fields
+		.map(
+			(field) =>
+				`${field}: ${fieldRead(descriptor.component, field, fieldAccess)}`,
+		)
+		.join(", ");
+	return [`\t\t\tconst ${preState.param} = { ${captures} };`];
+}
+
+/**
+ * The oracle assertion argument for one oracle param: the sampled callback
+ * local (op-param), the captured preState local, or the instance field read.
+ * preState is never mapped to `instance.preState` (VERSAILLES-191).
+ */
+function oracleAssertionArg(
+	param: string,
+	paramNames: Set<string>,
+	preStateParam: string | null | undefined,
+	descriptor: PropertyDescriptor,
+	fieldAccess?: EmitOptions["fieldAccess"],
+): string {
+	if (paramNames.has(param) || param === preStateParam) {
+		return param;
+	}
+	return fieldRead(descriptor.component, param, fieldAccess);
+}
+
 function renderCase(
 	case_: PlannedCase,
 	component: string,
@@ -1043,17 +1186,28 @@ function renderPropertyBlock(
 		);
 		// Bind the component instance inside the callback, before the call.
 		lines.push(`\t\t\tconst instance = new ${descriptor.component}();`);
+		// VERSAILLES-191: capture the old()-referenced fields off the bound
+		// instance BEFORE the op call mutates them (the oracle's preState
+		// parameter binds this captured object — never `instance.preState`,
+		// which is undefined at runtime).
+		lines.push(...renderPreStateCapture(descriptor, paramNames, fieldAccess));
 		const call = renderPropertyCall(descriptor, methods, true);
 		lines.push(`\t\t\t${call};`);
 		// Oracle assertion: params stay as callback locals; the field param is
-		// read from the bound instance (instance.<field>).
+		// read from the bound instance (instance.<field>); the preState param
+		// binds the captured object.
 		const asserted = assertableClauses(descriptor);
+		const preStateParam = preStateCaptureOf(descriptor, paramNames)?.param;
 		for (const a of asserted) {
 			const args = a.oracleParams
 				.map((p) =>
-					paramNames.has(p)
-						? p
-						: fieldRead(descriptor.component, p, fieldAccess),
+					oracleAssertionArg(
+						p,
+						paramNames,
+						preStateParam,
+						descriptor,
+						fieldAccess,
+					),
 				)
 				.join(", ");
 			lines.push(`\t\t\texpect(${a.constName}(${args})).toBe(true);`);
@@ -1202,7 +1356,9 @@ function renderPropertyBlock(
 
 	// Oracle assertion (GAP 3): the block's own clauses. An oracle parameter
 	// that is not a callback param is a manifest FIELD — the block binds the
-	// component instance and asserts instance.<field> through the oracle.
+	// component instance and asserts instance.<field> through the oracle — or
+	// the codegen'd preState capture param (VERSAILLES-191), which binds the
+	// captured pre-call object instead of instance.<preState>.
 	const asserted = assertableClauses(descriptor);
 	const instanceBound = asserted.some((a) =>
 		a.oracleParams.some((p) => !paramNames.has(p)),
@@ -1212,12 +1368,23 @@ function renderPropertyBlock(
 	if (instanceBound) {
 		lines.push(`\t\t\tconst instance = new ${descriptor.component}();`);
 	}
+	// VERSAILLES-191: capture the old()-referenced fields BEFORE the op call
+	// mutates them (only ever emitted when the instance is bound — a preState
+	// param is never a sampled op-param, so instanceBound is true here).
+	lines.push(...renderPreStateCapture(descriptor, paramNames, fieldAccess));
 	lines.push(`\t\t\t${call};`);
 
+	const preStateParam = preStateCaptureOf(descriptor, paramNames)?.param;
 	for (const a of asserted) {
 		const args = a.oracleParams
 			.map((p) =>
-				paramNames.has(p) ? p : fieldRead(descriptor.component, p, fieldAccess),
+				oracleAssertionArg(
+					p,
+					paramNames,
+					preStateParam,
+					descriptor,
+					fieldAccess,
+				),
 			)
 			.join(", ");
 		lines.push(`\t\t\texpect(${a.constName}(${args})).toBe(true);`);

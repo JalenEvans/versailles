@@ -100,7 +100,7 @@ import { selectStrategy } from "../packages/engine/src/generator/strategy.js";
  * | precondition  compound (and/or)            | property                  |
  * | precondition  bothSideFieldRef             | property                  |
  * | precondition  other / uncomputable         | property                  |
- * | postcondition literal (computable)         | example                   |
+ * | postcondition literal (computable)         | property (pbtEnabled) / example (disabled) |
  * | postcondition uncomputable                 | property                  |
  * | invariant     effects-overlap              | property                  |
  * | invariant     plain (no effect overlap)    | example                   |
@@ -124,10 +124,14 @@ import { selectStrategy } from "../packages/engine/src/generator/strategy.js";
  *    bounded AND compound → property — compound precedence). The selector
  *    itself never re-derives the classification from the raw Node; it is
  *    total over the ClauseShape union (never undefined).
- * 3. expected-rejection is the ONLY shape whose strategy depends on
- *    pbtEnabled: enabled → property (replaces the §9.2 bounded sweep,
- *    contract plan_property_blocks); disabled → example (the sweep is the
- *    non-PBT fallback). Every other shape ignores the flag.
+ * 3. expected-rejection and postcondition-literal (VERSAILLES-191) are the
+ *    ONLY shapes whose strategy depends on pbtEnabled: expected-rejection
+ *    enabled → property (replaces the §9.2 bounded sweep, contract
+ *    plan_property_blocks); disabled → example (the sweep is the non-PBT
+ *    fallback). A literal-computable postcondition (`field op expr` relation
+ *    like `balance == old(balance) + price`) is a REGION property — property
+ *    when PBT is enabled, example only on the disabled/absent v1 path. Every
+ *    other shape ignores the flag.
  * 4. Both-side-fieldRef compares (`status == newStatus`) and uncomputable
  *    expressions share the "property" strategy — the planner's
  *    postconditionAssertions already skips them (no unique subject / no
@@ -152,7 +156,11 @@ const DOCUMENTED_EXPRS: Record<string, string> = {
 	"precondition/compound": 'amount >= 10 and sku != ""',
 	"precondition/bothSideFieldRef": "status == newStatus",
 	"precondition/other": "newTier != null",
-	"postcondition/literal": "old(balance) - amount == balance",
+	// VERSAILLES-191: the literal-computable postcondition is the `field op
+	// expr` REGION-PROPERTY shape — `balance == old(balance) + price` (the
+	// canonical example): the concrete satisfaction case pins ONE point, the
+	// property block checks the relation across the valid region.
+	"postcondition/literal": "balance == old(balance) + price",
 	"postcondition/uncomputable": "status == newStatus",
 	"invariant/effects-overlap": "balance >= 0",
 	"invariant/plain": 'status != "TERMINATED"',
@@ -211,10 +219,20 @@ describe("selectStrategy — documented mapping (build-spec §9.6 + plan_propert
 			options: { pbtEnabled: true },
 			expected: "property",
 		},
-		// postcondition rows
+		// postcondition rows — VERSAILLES-191: a literal-computable
+		// postcondition (`field op expr` relation) is a REGION property — the
+		// concrete satisfaction case pins one deterministic point, the property
+		// block checks the relation across the valid region — so it plans a
+		// property block when PBT is enabled, and only falls back to example on
+		// the disabled/absent path.
 		{
 			shape: { surface: "postcondition", kind: "literal" },
 			options: { pbtEnabled: true },
+			expected: "property",
+		},
+		{
+			shape: { surface: "postcondition", kind: "literal" },
+			options: { pbtEnabled: false },
 			expected: "example",
 		},
 		{
@@ -485,5 +503,28 @@ describe("PBT strategy — ClauseSurface admission (ADR-0017 Phase 3)", () => {
 		expect(surfaces).toContain("postcondition");
 		expect(surfaces).toContain("invariant");
 		expect(surfaces).toContain("expected-rejection");
+	});
+});
+
+// ── VERSAILLES-191: computable postconditions are REGION PROPERTIES ─────────
+// A literal-computable postcondition (`field op expr` relation like
+// `balance == old(balance) + price`) is a region property: the concrete
+// satisfaction case pins ONE deterministic point, while a property block
+// checks the relation across the valid region. The strategy table must NOT
+// route it example-only — it must plan a property block when PBT is enabled
+// (build-spec §9.6, deterministic-generation.contract.yaml
+// plan_property_blocks must_not).
+describe("selectStrategy — computable postconditions are region properties, never example-only (VERSAILLES-191)", () => {
+	it("a postcondition literal (computable field-op-expr relation) → property, not example", () => {
+		// `balance == old(balance) + price` resolves to the literal-computable
+		// postcondition shape — postconditionAssertions derives a real matcher,
+		// so the concrete satisfaction case asserts ONE point; the region
+		// property explores the whole valid region. PBT adds value → property.
+		const shape: ClauseShape = {
+			surface: "postcondition",
+			kind: "literal",
+		};
+		expect(selectStrategy(shape, { pbtEnabled: true })).toBe("property");
+		expect(selectStrategy(shape, { pbtEnabled: true })).not.toBe("example");
 	});
 });
