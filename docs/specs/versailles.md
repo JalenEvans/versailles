@@ -46,6 +46,12 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - **Then** the command fails with structured errors (never an unstructured throw), and generation does not run
 - **And** `check` / `generate` / `extract-manifests` route through the single shared workspace gate (`requireValidWorkspace`), so every invalid-context failure path exits `1` with the standardized empty output envelope `{}` — no command re-implements the invalid-context envelope (VERSAILLES-171)
 
+### An unexpected throw at the process boundary becomes the INTERNAL envelope
+
+- **Given** any invocation where `runCli` escapes with an unhandled throw (a bug path, not a designed failure)
+- **When** the `bin/versailles` top-level catch runs
+- **Then** it prints the standardized failure envelope `{ ok: false, errors: [{ code: "INTERNAL", detail }], warnings: [], exitCode: 1 }` and exits `1` — the process boundary never emits an unstructured crash, so CI still parses machine-readable JSON (VERSAILLES-188)
+
 ### Root-level version flags short-circuit before dispatch
 
 - **Given** `versailles -v` or `versailles --version` from any directory (with or without a `.versailles/` workspace)
@@ -83,6 +89,15 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - **When** the generator emits violation cases
 - **Then** for each clause there is an input satisfying all *other* clauses but falsifying this one, and the test asserts rejection using the configured idiom (`config.json`, default `throws`)
 
+### `init` scaffolds a fresh workspace and refuses to overwrite an existing one (VERSAILLES-184)
+
+- **Given** a project with no `.versailles/` workspace
+- **When** `versailles init` runs
+- **Then** it scaffolds `.versailles/` with the three jointly-loaded files (config.json + empty contracts.json + empty manifests.json) and exits `0`
+- **Given** a project with an existing `.versailles/` workspace containing authored content (e.g. a non-empty `contracts.json`)
+- **When** `versailles init` runs again
+- **Then** it does NOT modify any workspace file and returns a structured error (exit `1`) — `init` never silently erases authored contracts/manifests (build-spec §2; VERSAILLES-184)
+
 ## Constraints
 
 - The expression grammar is boolean-valued only: no assignment, no loops, no statements; anything outside the grammar is a parse error.
@@ -90,6 +105,7 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - Predicate calls resolve only to declared predicates in the top-level `predicates` map; no purity gate applies (ADR-0019).
 - Generation is a pure function of validated contracts; regeneration is idempotent and full-file; `generated/` is tool-owned and never hand-edited. The tool never invokes an LLM — no LLM client, no prompting logic, no LLM retry loop anywhere in the tool (ADR-0010).
 - `.versailles/` files are never interpreted in isolation; all tools load them as a unit.
+- `init` `must_not` overwrite an existing workspace's authored files — when `.versailles/` exists with content, `init` refuses with a structured error (exit `1`) rather than re-seeding the stores (VERSAILLES-184).
 
 ## Non-Goals
 
@@ -105,6 +121,8 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-09-04 | maintainer | Process-boundary INTERNAL envelope (VERSAILLES-188): the `bin/versailles` top-level catch wraps any unexpected throw from `runCli` into the standardized failure envelope `{ ok: false, errors: [{ code: "INTERNAL", detail }], warnings: [], exitCode: 1 }` (exit 1) — the process boundary never emits an unstructured crash |
+| 2026-09-04 | maintainer | Beta triage (VERSAILLES-184): `init` scaffolds a fresh workspace but refuses to overwrite an existing one — no silent destruction of authored contracts.json/manifests.json; structured error, exit 1 |
 | 2026-08-11 | maintainer | Initial draft from build spec |
 | 2026-08-11 | maintainer | v1 scope pinned by ADR-0009: TS/C#/Python + vitest/xUnit/pytest, TS+vitest first |
 | 2026-08-11 | maintainer | Linked Plans section added pointing to the v1 pipeline implementation plan |

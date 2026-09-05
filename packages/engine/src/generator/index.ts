@@ -77,6 +77,7 @@ export type {
 	AssertionDescriptor,
 	CaseKind,
 	CoverageManifest,
+	CoverageStatus,
 	EmitOptions,
 	EmittedFile,
 	EmitterFramework,

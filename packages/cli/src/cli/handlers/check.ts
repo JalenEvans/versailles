@@ -14,9 +14,11 @@
  * failure-path output is the standardized {} (never { staleIds: [] }).
  */
 import {
+	ExtractorDependencyMissingError,
 	computeSourceHash,
 	extractManifests,
 } from "../../../../frontend-ts/src/extractors/index.js";
+import type { ExtractorResult } from "../../../../frontend-ts/src/extractors/types.js";
 import {
 	contextWarnings,
 	expandSourceRoots,
@@ -47,7 +49,26 @@ export async function handleCheck(cwd: string): Promise<CliResult> {
 	// cwd is the project root: recomputed entries' sourcePath is anchored
 	// project-root-relative (VERSAILLES-24) — check only compares structural
 	// hashes, but the extracted entries stay consistent with extract-manifests.
-	const extracted = extractManifests(roots, cwd);
+	//
+	// VERSAILLES-191 W1: the designed extractor dependency error must survive
+	// the handler boundary as its own code (EXTRACTOR_DEPENDENCY_MISSING) —
+	// never the generic INTERNAL mask from runCli's catch. Everything else
+	// rethrows to that last-resort catch.
+	let extracted: ExtractorResult;
+	try {
+		extracted = extractManifests(roots, cwd);
+	} catch (error) {
+		if (error instanceof ExtractorDependencyMissingError) {
+			return {
+				ok: false,
+				errors: [{ code: error.code, detail: error.detail }],
+				warnings: [],
+				exitCode: 1,
+				output: {},
+			};
+		}
+		throw error;
+	}
 	const extractionWarnings = extractorWarnings(extracted.warnings);
 
 	const staleIds: string[] = [];

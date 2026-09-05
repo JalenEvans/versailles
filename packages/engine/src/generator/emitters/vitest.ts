@@ -16,11 +16,16 @@
  * cases on a void-returning INSTANCE operation WITH assertions bind the
  * component INSTANCE — `const instance = new <Component>(); instance.<op>(...);
  * expect(instance.<field>)...` — so assertions target instance state, never
- * the void return value (VERSAILLES-26). A STATIC void operation with
- * assertions renders the bare call `<Component>.<op>(...);` with no
- * instance.<field> assertion — the static call never touches a constructed
- * instance, so an instance assertion would be meaningless (VERSAILLES-26
- * follow-up, W1). Without the `methods` option
+ * the void return value (VERSAILLES-26). The same instance-bound receiver
+ * applies to PRIMITIVE-returning (number/string/boolean) INSTANCE operations:
+ * a primitive return value has no fields, so `result.<field>` reads undefined
+ * and can never pass (VERSAILLES-185); object-returning operations keep the
+ * `result.<field>` receiver. A STATIC void operation with assertions renders
+ * the bare call `<Component>.<op>(...);` with no instance.<field> assertion —
+ * the static call never touches a constructed instance, so an instance
+ * assertion would be meaningless (VERSAILLES-26 follow-up, W1), and a STATIC
+ * primitive operation keeps the result-bound render (no instance to bind).
+ * Without the `methods` option
  * (legacy) the historical static options-object call
  * `<Component>.<op>({ ...inputs })` with a toBeDefined assertion is preserved
  * byte-identically.
@@ -28,6 +33,7 @@
 import type {
 	ArbitrarySpec,
 	AssertionDescriptor,
+	CoverageStatus,
 	EmitOptions,
 	EmittedFile,
 	OperationCaseGroup,
@@ -87,6 +93,10 @@ export function emitVitest(
 	const fieldTypes = options?.fieldTypes;
 	const fieldReadonly = options?.fieldReadonly;
 	const warnings = options?.warnings;
+	// VERSAILLES-186: the header trace comment mirrors the suite's coverage
+	// status — brownfield keeps the verified `// traces:` form, greenfield
+	// surfaces the provisional state (never reading as verified coverage).
+	const coverageStatus = suite.coverageStatus ?? "verified";
 	const groups = groupByComponent(suite);
 	const files: EmittedFile[] = [];
 	for (const component of Object.keys(groups)) {
@@ -95,6 +105,7 @@ export function emitVitest(
 			component,
 			groups[component],
 			suite.clauseIds,
+			coverageStatus,
 			modulePaths,
 			methods,
 			predicates,
@@ -133,6 +144,7 @@ function renderComponentFile(
 	component: string,
 	group: ComponentGroup,
 	clauseIds: string[],
+	coverageStatus: CoverageStatus,
 	modulePaths: Record<string, string>,
 	methods: EmitOptions["methods"],
 	predicates: EmitOptions["predicates"],
@@ -169,10 +181,16 @@ function renderComponentFile(
 	// generated surface covers (the full source clause set, so zero-coverage
 	// gaps stay visible against the manifest). Clause ids are escaped with
 	// JSON.stringify so a hostile id can never break out of the comment into
-	// an executable line (Center W1).
-	lines.push(
-		`// traces: ${clauseIds.map((id) => JSON.stringify(id)).join(", ")}`,
-	);
+	// an executable line (Center W1). VERSAILLES-186: the comment mirrors the
+	// coverage status — brownfield keeps the byte-identical verified
+	// `// traces: "id", ...` form; greenfield emits a provisional-marked
+	// variant (`// traces (provisional): ...`) that never starts with the
+	// verified `// traces:` prefix and still lists the traced clause ids.
+	const tracesLine =
+		coverageStatus === "provisional"
+			? `// traces (provisional): ${clauseIds.map((id) => JSON.stringify(id)).join(", ")}`
+			: `// traces: ${clauseIds.map((id) => JSON.stringify(id)).join(", ")}`;
+	lines.push(tracesLine);
 	lines.push('import { describe, expect, it } from "vitest";');
 	lines.push("");
 	// modulePaths override wins when present and non-empty; an absent (legacy)
@@ -315,9 +333,11 @@ const MATCHER: Record<AssertionDescriptor["op"], string> = {
 
 /**
  * Renders a real vitest matcher on the subject field. The receiver is either
- * "result" (a non-void operation's return value) or "instance" (a bound
- * component instance for void-returning operations, VERSAILLES-26) — a void
- * call's return value is undefined and must never be the assertion subject.
+ * "result" (an object-returning operation's return value) or "instance" (a
+ * bound component instance for void-returning operations, VERSAILLES-26, and
+ * for PRIMITIVE-returning operations, VERSAILLES-185 — a primitive return
+ * value has no fields, so `result.<field>` would read undefined) — a
+ * fieldless call's return value must never be the assertion subject.
  *
  * ADR-0021: an INSTANCE-receiver assertion on a non-public field renders
  * through the deliberate `(instance as any).<field>` escape (the manifest
@@ -470,12 +490,43 @@ function oracleParamType(
 }
 
 /**
+ * The TS type for a codegen'd preState capture parameter (ADR-0021, B1): an
+ * object literal type with one key per old()-referenced manifest field, typed
+ * from the field model (`preState: { balance: number }`), composing for
+ * multi-field captures (`{ balance: number, count: number }`). Returns null
+ * when ANY captured field's typeRef has no renderable TS form (or the field
+ * model is absent) — the legacy byte-identical pin keeps the param untyped
+ * then, and the EMISSION_UNRENDERABLE warning for the field already fired in
+ * renderComponentFile (never a silent untyped field).
+ */
+function preStateParamType(
+	fields: string[],
+	component: string,
+	fieldTypes?: EmitOptions["fieldTypes"],
+): string | null {
+	const entries: string[] = [];
+	for (const field of fields) {
+		const fieldType = fieldTypes?.[component]?.[field];
+		const tsType = fieldType === undefined ? null : typeRefToTs(fieldType);
+		if (tsType === null) {
+			return null;
+		}
+		entries.push(`${field}: ${tsType}`);
+	}
+	return `{ ${entries.join(", ")} }`;
+}
+
+/**
  * Embeds a codegen'd clause predicate with ADR-0021 type annotations injected
  * into the lambda's parameter list: the byte-pinned `(<params>) => <expr>`
  * head is rebuilt with `param: type` on each parameter whose type is
  * renderable (op params unconditionally, field params from the field model).
- * When no parameter carries a type the rebuilt head is byte-identical to the
- * codegen'd source (`(a, b) => ...` → `(a, b) => ...`) — the legacy
+ * B1 (VERSAILLES-191): the codegen'd preState capture param — neither an op
+ * param nor a manifest field — is typed as the object literal of its
+ * old()-referenced fields (`preState: { balance: number }`), closing the
+ * TS7006 implicit-any hole the untyped preState param left in generated
+ * oracles. When no parameter carries a type the rebuilt head is byte-identical
+ * to the codegen'd source (`(a, b) => ...` → `(a, b) => ...`) — the legacy
  * guarantee. The body is never touched.
  */
 function renderOracleCode(
@@ -488,7 +539,17 @@ function renderOracleCode(
 	if (params.length === 0) {
 		return code;
 	}
+	const paramNames = new Set(descriptor.params.map((spec) => spec.param));
+	const preState = preStateCaptureOf(descriptor, paramNames);
 	const typed = params.map((param) => {
+		if (preState !== null && param === preState.param) {
+			const preStateType = preStateParamType(
+				preState.fields,
+				component,
+				fieldTypes,
+			);
+			return preStateType === null ? param : `${param}: ${preStateType}`;
+		}
 		const type = oracleParamType(param, descriptor, component, fieldTypes);
 		return type === null ? param : `${param}: ${type}`;
 	});
@@ -539,6 +600,149 @@ function assertableClauses(descriptor: PropertyDescriptor) {
 		}));
 }
 
+// ── preState capture (VERSAILLES-191) ────────────────────────────────────────
+// A codegen'd clause oracle carries a preState parameter when the clause
+// contains an `old(field)` reference: codegen.ts appends the preState name
+// (default "preState") LAST to the oracle head and renders every old()
+// reference as `<preStateName>.<root><suffixes>` — a dotted access on that
+// parameter. In the FIELD-BOUND layout every NON-op-param oracle parameter is
+// a manifest FIELD and renders as a bare single-segment fieldRef (the planner
+// only treats single-segment fieldRefs as fields), so a dotted-access base
+// that is not a sampled op-param can only be the preState parameter. The
+// property block must CAPTURE the old()-referenced fields off the bound
+// instance BEFORE the op call mutates them and pass the captured object to
+// the oracle — never `instance.preState` (the preState parameter is not a
+// manifest field, so `instance.preState` is undefined at runtime — the
+// TypeError this capture closes).
+
+/** True when `param` appears in `code` as a dotted-access base (`param.`). */
+function isDottedAccessBase(param: string, code: string): boolean {
+	const re = new RegExp(`(^|[^A-Za-z0-9_$])${escapeRegExp(param)}\\.`);
+	return re.test(code);
+}
+
+/**
+ * The preState oracle parameter of a clause (VERSAILLES-191), or null when the
+ * clause carries none: the codegen'd old() capture parameter — a callback
+ * param that is NOT a sampled op-param and that the oracle body references as
+ * a dotted-access base (the only way old(field) renders).
+ */
+function preStateParamOf(code: string, paramNames: Set<string>): string | null {
+	for (const param of oracleParamsOf(code)) {
+		if (paramNames.has(param)) {
+			continue;
+		}
+		if (isDottedAccessBase(param, code)) {
+			return param;
+		}
+	}
+	return null;
+}
+
+/**
+ * The manifest-FIELD roots an oracle's old() references — the pre-call state
+ * the generated property block captures off the bound instance — extracted
+ * from the body's `<preStateName>.<root>` dotted accesses in first-referenced
+ * order (deduped).
+ */
+function preStateFieldsOf(code: string, preStateParam: string): string[] {
+	const fields: string[] = [];
+	const seen = new Set<string>();
+	const re = new RegExp(
+		`(^|[^A-Za-z0-9_$])${escapeRegExp(preStateParam)}\\.([A-Za-z_$][A-Za-z0-9_$]*)`,
+		"g",
+	);
+	let match: RegExpExecArray | null = re.exec(code);
+	while (match !== null) {
+		const root = match[2];
+		if (!seen.has(root)) {
+			seen.add(root);
+			fields.push(root);
+		}
+		match = re.exec(code);
+	}
+	return fields;
+}
+
+/**
+ * The preState capture for a descriptor: the union of its clauses' preState
+ * params + old()-referenced fields, or null when no clause carries a preState
+ * param. Two clauses with DIFFERENT preState names are refused loudly (a
+ * single capture cannot bind both — the second clause's preState param would
+ * silently fall through to `instance.<name>`).
+ */
+function preStateCaptureOf(
+	descriptor: PropertyDescriptor,
+	paramNames: Set<string>,
+): { param: string; fields: string[] } | null {
+	let param: string | null = null;
+	const fields: string[] = [];
+	const seen = new Set<string>();
+	for (const clause of descriptor.clauses) {
+		const p = preStateParamOf(clause.code, paramNames);
+		if (p === null) {
+			continue;
+		}
+		if (param !== null && p !== param) {
+			throw new Error(
+				`Refusing to emit: property "${descriptor.id}" clauses reference different preState names ("${param}" and "${p}") — a single capture cannot bind both`,
+			);
+		}
+		param = p;
+		for (const root of preStateFieldsOf(clause.code, p)) {
+			if (!seen.has(root)) {
+				seen.add(root);
+				fields.push(root);
+			}
+		}
+	}
+	return param === null ? null : { param, fields };
+}
+
+/**
+ * The `const <preState> = { <field>: <instance read> };` capture lines, or []
+ * when the descriptor carries no preState param (or its name collides with a
+ * sampled op-param — a pathological contract naming an operation param
+ * "preState"; the codegen only refuses preStateName collisions with the
+ * clause's own fieldRef roots, so a collision here would redeclare the
+ * callback param and must not emit).
+ */
+function renderPreStateCapture(
+	descriptor: PropertyDescriptor,
+	paramNames: Set<string>,
+	fieldAccess?: EmitOptions["fieldAccess"],
+): string[] {
+	const preState = preStateCaptureOf(descriptor, paramNames);
+	if (preState === null || paramNames.has(preState.param)) {
+		return [];
+	}
+	const captures = preState.fields
+		.map(
+			(field) =>
+				`${field}: ${fieldRead(descriptor.component, field, fieldAccess)}`,
+		)
+		.join(", ");
+	return [`\t\t\tconst ${preState.param} = { ${captures} };`];
+}
+
+/**
+ * The oracle assertion argument for one oracle param: the sampled callback
+ * local (op-param), the captured preState local, or the instance field read.
+ * preState is never mapped to `instance.preState` (VERSAILLES-191).
+ */
+function oracleAssertionArg(
+	param: string,
+	paramNames: Set<string>,
+	preStateParam: string | null | undefined,
+	descriptor: PropertyDescriptor,
+	fieldAccess?: EmitOptions["fieldAccess"],
+): string {
+	if (paramNames.has(param) || param === preStateParam) {
+		return param;
+	}
+	return fieldRead(descriptor.component, param, fieldAccess);
+}
+
 function renderCase(
 	case_: PlannedCase,
 	component: string,
@@ -574,66 +778,86 @@ function renderCase(
 		}
 	} else {
 		const assertions = case_.expects.assertions ?? [];
-		if (voidAccept) {
-			if (meta.static) {
-				// W1 (VERSAILLES-26 follow-up,
-				// deterministic-generation.contract.yaml): a STATIC void
-				// operation's accept/invariant case renders the bare call —
-				// `<Component>.<op>(...);` — with NO instance binding, NO
-				// result binding, and NO assertions. The static call never
-				// touches a constructed instance, so `const instance = new
-				// <Component>(); <Component>.<op>(...); expect(instance.<field>)`
-				// would assert state on an object the call cannot have
-				// modified — a silently meaningless assertion. Instance void
-				// ops keep the V-26 instance-state render below.
-				lines.push(`\t\t${call};`);
-			} else if (assertions.length > 0) {
-				// VERSAILLES-26: a void-returning operation's return value is
-				// undefined, so `const result = ...; expect(result.<field>)`
-				// throws TypeError at runtime. The case binds the component
-				// INSTANCE and asserts instance state — `const instance = new
-				// <Component>(); instance.<op>(...); expect(instance.<field>)`
-				// (§9.4). Only INSTANCE void ops reach this branch (the static
-				// void carve-out above handles the static variant), so the
-				// call always runs on the bound instance.
-				lines.push(`\t\tconst instance = new ${component}();`);
-				// B1: the assertion literal is derived by the planner from its
-				// captured pre-call state, so the emitter must establish that
-				// state on the bound instance before the call runs.
-				//
-				// ADR-0021: a pre-state WRITE to a non-public field (per the
-				// manifest fieldAccess) — or to a readonly field, whose
-				// compile-time-only restriction the cast bypasses at runtime —
-				// renders through the deliberate `(instance as any).<field>`
-				// escape. Public fields never cast; legacy (no field model)
-				// keeps `instance.<field>` byte-identical.
-				const paramNames = new Set(meta.params);
-				for (const key of Object.keys(case_.inputs)) {
-					if (!paramNames.has(key)) {
-						assertIdentifier(key, "pre-state input key");
-						const target = shouldCastWrite(
-							component,
-							key,
-							fieldAccess,
-							fieldReadonly,
-						)
-							? `(instance as any).${key}`
-							: `instance.${key}`;
-						lines.push(`\t\t${target} = ${renderValue(case_.inputs[key])};`);
-					}
+		// VERSAILLES-185: a PRIMITIVE return type (number/string/boolean) has
+		// no fields — `result.<field>` on the primitive return value reads
+		// `undefined` and can never pass. A field-based assertion on a
+		// primitive-returning operation must target the bound INSTANCE's
+		// state, exactly like the V-26 void render. Static ops never bind an
+		// instance (a static call never touches a constructed object), so the
+		// static primitive-returning op keeps the result-bound render below.
+		const primitiveReturn =
+			meta?.returnType === "number" ||
+			meta?.returnType === "string" ||
+			meta?.returnType === "boolean";
+		// The instance-bound accept-with-assertions render applies to an
+		// INSTANCE operation whose return type cannot carry field assertions —
+		// void (V-26) or primitive (V-185) — when the case asserts a field.
+		// Static ops (the W1 static-void bare call and the static non-void
+		// result-bound pin), object-returning ops (result.<field>), and
+		// fieldless accept cases without assertions all stay on their existing
+		// paths.
+		const instanceStateAccept =
+			meta !== undefined &&
+			!meta.static &&
+			(voidAccept || primitiveReturn) &&
+			assertions.length > 0;
+		if (instanceStateAccept) {
+			// VERSAILLES-26/185: a void- or primitive-returning operation's
+			// return value carries no fields — `const result = ...;
+			// expect(result.<field>)` reads `undefined` on the void return
+			// (V-26) or on the primitive number/string/boolean return (V-185)
+			// and can never pass. The case binds the component INSTANCE and
+			// asserts instance state — `const instance = new <Component>();
+			// instance.<op>(...); expect(instance.<field>)` (§9.4).
+			// instanceStateAccept guarantees an INSTANCE (non-static) op, so
+			// the call always runs on the bound instance.
+			lines.push(`\t\tconst instance = new ${component}();`);
+			// B1: the assertion literal is derived by the planner from its
+			// captured pre-call state, so the emitter must establish that
+			// state on the bound instance before the call runs.
+			//
+			// ADR-0021: a pre-state WRITE to a non-public field (per the
+			// manifest fieldAccess) — or to a readonly field, whose
+			// compile-time-only restriction the cast bypasses at runtime —
+			// renders through the deliberate `(instance as any).<field>`
+			// escape. Public fields never cast; legacy (no field model)
+			// keeps `instance.<field>` byte-identical.
+			const paramNames = new Set(meta.params);
+			for (const key of Object.keys(case_.inputs)) {
+				if (!paramNames.has(key)) {
+					assertIdentifier(key, "pre-state input key");
+					const target = shouldCastWrite(
+						component,
+						key,
+						fieldAccess,
+						fieldReadonly,
+					)
+						? `(instance as any).${key}`
+						: `instance.${key}`;
+					lines.push(`\t\t${target} = ${renderValue(case_.inputs[key])};`);
 				}
-				lines.push(
-					`\t\tinstance.${operation}${renderPositionalArgs(case_, component, operation, methods)};`,
-				);
-				for (const assertion of assertions) {
-					lines.push(
-						`\t\t${renderAssertion(assertion, "instance", component, fieldAccess)};`,
-					);
-				}
-			} else {
-				// Bare call — no result binding, no return-value assertion.
-				lines.push(`\t\t${call};`);
 			}
+			lines.push(
+				`\t\tinstance.${operation}${renderPositionalArgs(case_, component, operation, methods)};`,
+			);
+			for (const assertion of assertions) {
+				lines.push(
+					`\t\t${renderAssertion(assertion, "instance", component, fieldAccess)};`,
+				);
+			}
+		} else if (voidAccept) {
+			// The remaining void-accept cases render the bare call:
+			// - W1 (VERSAILLES-26 follow-up,
+			//   deterministic-generation.contract.yaml): a STATIC void
+			//   operation's accept/invariant case — `<Component>.<op>(...);`
+			//   — with NO instance binding, NO result binding, and NO
+			//   assertions. The static call never touches a constructed
+			//   instance, so `expect(instance.<field>)` would assert state on
+			//   an object the call cannot have modified — a silently
+			//   meaningless assertion.
+			// - an INSTANCE void accept case WITHOUT assertions (the F1 pin) —
+			//   no result binding, no return-value assertion.
+			lines.push(`\t\t${call};`);
 		} else {
 			lines.push(`\t\tconst result = ${call};`);
 			lines.push("\t\texpect(result).toBeDefined();");
@@ -987,33 +1211,82 @@ function renderPropertyBlock(
 			assertIdentifier(spec.param, "param name");
 			lines.push(`\t\tconst ${spec.param} = ${renderArbitrary(spec)};`);
 		}
+		// B2 (valid-region soundness, VERSAILLES-191): the field-bound layout
+		// samples ONLY the op-param arbitraries — a bare `fc.string()` /
+		// `fc.integer()` would sample values outside the operation's valid
+		// region (`sku === ""`, `price <= 0`) and the real source throws, so
+		// the generated property fails at runtime. Apply the renderable
+		// SINGLE-param guard oracles — the operation's example-strategy
+		// preconditions the planner attached as descriptor.guards (`sku != ""`,
+		// `price > 0`) — as per-param `.filter(...)` on the sampled
+		// arbitraries. Only SINGLE-param oracles can filter (fast-check's
+		// .filter() passes ONE value); the block's own field-referencing clause
+		// is always multi-param and is asserted, never filtered. A param with
+		// no single-param guard stays bare (bounded via its ArbitrarySpec
+		// bounds, or genuinely unconstrained — the planner's field-op-expr
+		// leak gate keeps constrained-but-unfilterable params out of this
+		// layout). The `.filter(...)` applies INLINE in the fc.property call
+		// (never at the arbitrary declaration — the filter oracle const must be
+		// initialized before the callback reference evaluates), matching the
+		// single-param layout's byte-pinned wiring.
+		const singleParamFilters = new Map<string, string>();
+		for (const param of params) {
+			const first = guardOracles.find(
+				(oracle) =>
+					oracle.oracleParams.length === 1 &&
+					oracle.oracleParams.includes(param),
+			);
+			if (first !== undefined) {
+				singleParamFilters.set(param, first.constName);
+			}
+		}
 		// The block EMBEDS exactly the guard oracles it uses — its own asserted
-		// clauses (the field-referencing oracle is asserted, never filtered) —
-		// in guard order, never a dead const.
-		const embedded = guardOracles.filter((oracle) =>
-			ownClauseIds.has(oracle.clauseId),
+		// clauses (the field-referencing oracle is asserted, never filtered)
+		// plus the per-param filter oracles — in guard order, never a dead
+		// const.
+		const filterConsts = new Set(singleParamFilters.values());
+		const embedded = guardOracles.filter(
+			(oracle) =>
+				filterConsts.has(oracle.constName) || ownClauseIds.has(oracle.clauseId),
 		);
 		for (const oracle of embedded) {
 			lines.push(
 				`\t\tconst ${oracle.constName} = ${renderOracleCode(oracle.code, descriptor, descriptor.component, fieldTypes)};`,
 			);
 		}
+		const arbitraryExprs = descriptor.params.map((spec) => {
+			const filter = singleParamFilters.get(spec.param);
+			return filter === undefined
+				? spec.param
+				: `${spec.param}.filter(${filter})`;
+		});
 		lines.push(
-			`\t\tconst prop = fc.property(${params.join(", ")}, (${params.join(", ")}) => {`,
+			`\t\tconst prop = fc.property(${arbitraryExprs.join(", ")}, (${params.join(", ")}) => {`,
 		);
 		// Bind the component instance inside the callback, before the call.
 		lines.push(`\t\t\tconst instance = new ${descriptor.component}();`);
+		// VERSAILLES-191: capture the old()-referenced fields off the bound
+		// instance BEFORE the op call mutates them (the oracle's preState
+		// parameter binds this captured object — never `instance.preState`,
+		// which is undefined at runtime).
+		lines.push(...renderPreStateCapture(descriptor, paramNames, fieldAccess));
 		const call = renderPropertyCall(descriptor, methods, true);
 		lines.push(`\t\t\t${call};`);
 		// Oracle assertion: params stay as callback locals; the field param is
-		// read from the bound instance (instance.<field>).
+		// read from the bound instance (instance.<field>); the preState param
+		// binds the captured object.
 		const asserted = assertableClauses(descriptor);
+		const preStateParam = preStateCaptureOf(descriptor, paramNames)?.param;
 		for (const a of asserted) {
 			const args = a.oracleParams
 				.map((p) =>
-					paramNames.has(p)
-						? p
-						: fieldRead(descriptor.component, p, fieldAccess),
+					oracleAssertionArg(
+						p,
+						paramNames,
+						preStateParam,
+						descriptor,
+						fieldAccess,
+					),
 				)
 				.join(", ");
 			lines.push(`\t\t\texpect(${a.constName}(${args})).toBe(true);`);
@@ -1162,7 +1435,9 @@ function renderPropertyBlock(
 
 	// Oracle assertion (GAP 3): the block's own clauses. An oracle parameter
 	// that is not a callback param is a manifest FIELD — the block binds the
-	// component instance and asserts instance.<field> through the oracle.
+	// component instance and asserts instance.<field> through the oracle — or
+	// the codegen'd preState capture param (VERSAILLES-191), which binds the
+	// captured pre-call object instead of instance.<preState>.
 	const asserted = assertableClauses(descriptor);
 	const instanceBound = asserted.some((a) =>
 		a.oracleParams.some((p) => !paramNames.has(p)),
@@ -1172,12 +1447,23 @@ function renderPropertyBlock(
 	if (instanceBound) {
 		lines.push(`\t\t\tconst instance = new ${descriptor.component}();`);
 	}
+	// VERSAILLES-191: capture the old()-referenced fields BEFORE the op call
+	// mutates them (only ever emitted when the instance is bound — a preState
+	// param is never a sampled op-param, so instanceBound is true here).
+	lines.push(...renderPreStateCapture(descriptor, paramNames, fieldAccess));
 	lines.push(`\t\t\t${call};`);
 
+	const preStateParam = preStateCaptureOf(descriptor, paramNames)?.param;
 	for (const a of asserted) {
 		const args = a.oracleParams
 			.map((p) =>
-				paramNames.has(p) ? p : fieldRead(descriptor.component, p, fieldAccess),
+				oracleAssertionArg(
+					p,
+					paramNames,
+					preStateParam,
+					descriptor,
+					fieldAccess,
+				),
 			)
 			.join(", ");
 		lines.push(`\t\t\texpect(${a.constName}(${args})).toBe(true);`);

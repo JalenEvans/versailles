@@ -89,6 +89,12 @@ export type OperationCaseGroup = {
  * PREDICATE_UNPLANNABLE for a predicate-call precondition the planner cannot
  * falsify — so a coverage gap is never silent. The generate handler merges
  * these into CliResult.warnings (same ADR-0004 tier as validationWarnings).
+ * `coverageStatus` (VERSAILLES-186) discriminates the coverage semantics:
+ * "verified" on the brownfield path (manifests present, module imports
+ * resolvable — the generated tests can load and the coverage is real) vs
+ * "provisional" on the greenfield path (contracts only, no manifests/source —
+ * the generated tests are traced but cannot load until the source exists,
+ * TDD-Red ADR-0011). Absent → "verified" (the legacy byte-identical shape).
  */
 export type PlannedSuite = {
 	operations: OperationCaseGroup[];
@@ -100,6 +106,13 @@ export type PlannedSuite = {
 	 * LoaderWarning shape). Absent/empty when planning is fully plannable.
 	 */
 	warnings?: LoaderWarning[];
+	/**
+	 * VERSAILLES-186: "verified" (brownfield — manifests present, imports
+	 * resolvable) or "provisional" (greenfield — contracts only, generated
+	 * tests traced but not executable). Absent defaults to "verified" so
+	 * hand-built suites keep the byte-identical verified surface.
+	 */
+	coverageStatus?: CoverageStatus;
 };
 
 /** A full-file output unit — ready for idempotent full-file regeneration. */
@@ -203,8 +216,26 @@ export type EmitOptions = {
 	warnings?: LoaderWarning[];
 };
 
-/** Maps every source clause ID → the test IDs tracing it (§9.3). */
-export type CoverageManifest = { coverage: Record<string, string[]> };
+/**
+ * VERSAILLES-186 coverage semantics: "verified" coverage is real executable
+ * coverage of the generated tests (brownfield — manifests present, module
+ * imports resolvable); "provisional" coverage means the tests are generated
+ * and traced but NOT executable yet (greenfield — contracts only, no
+ * manifests/source, TDD-Red ADR-0011). The generator must never present
+ * greenfield coverage as verified.
+ */
+export type CoverageStatus = "verified" | "provisional";
+
+/**
+ * Maps every source clause ID → the test IDs tracing it (§9.3). `status`
+ * (VERSAILLES-186) reports whether that coverage is verified (brownfield —
+ * the generated tests load and run) or provisional (greenfield — generated
+ * and traced, not executable).
+ */
+export type CoverageManifest = {
+	coverage: Record<string, string[]>;
+	status: CoverageStatus;
+};
 
 /** Frameworks the emitter seam can dispatch to (ADR-0008/0009). */
 export type EmitterFramework = "vitest" | "xunit" | "pytest";
@@ -276,16 +307,20 @@ export type PropertyDescriptor = {
 	/**
 	 * Sibling guard oracles (build-spec §9.6 "single-param oracles keep the
 	 * per-param arbitrary + .filter shape", the guard-set soundness fix): the
-	 * renderable SINGLE-PARAM example-strategy clauses of the same
-	 * (component, operation) — e.g. an inline numeric-bound precondition
-	 * `price > 0` whose own strategy stays "example" (no property block of
-	 * its own; the concrete boundary cases remain the spine). The emitter
-	 * renders each guard as a `.filter(<oracle>)` on the sibling block's
-	 * arbitrary so a sampled input never violates a sibling precondition —
-	 * never a bare unbounded `fc.integer()` for a lower-only bound. Present
-	 * ONLY on descriptors whose own clause oracle is single-param (the
-	 * per-param `.filter` layout); multi-param own-clause descriptors
-	 * (mirror / record / FIELD-BOUND) never filter with sibling guards.
+	 * renderable SINGLE-PARAM guard clauses of the same (component, operation)
+	 * that the emitter renders as `.filter(<oracle>)` on the block's arbitrary
+	 * so a sampled input never violates a sibling precondition — never a bare
+	 * unbounded `fc.integer()` for a lower-only bound. Two producers:
+	 * example-strategy clauses (`price > 0` — no property block of its own;
+	 * the concrete boundary cases remain the spine) and, for a field-op-expr
+	 * relation (VERSAILLES-191) with an UNBOUNDED op param, the single-param
+	 * guard-candidate oracles (`sku != ""` — property-strategy clauses the
+	 * field-bound sibling blocked from planning, so their oracle reaches the
+	 * FIELD-BOUND layout only through this descriptor). Present on
+	 * single-param own-clause descriptors (the per-param `.filter` layout) and
+	 * on unbounded-param field-op-expr relations (the FIELD-BOUND layout);
+	 * multi-param own-clause descriptors (mirror / record / bounded
+	 * field-op-expr relations) never filter with sibling guards.
 	 */
 	guards?: PropertyClause[];
 	outcome: PropertyOutcome;

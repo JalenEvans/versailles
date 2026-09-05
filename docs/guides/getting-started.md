@@ -58,9 +58,9 @@ versailles init
 └── manifests.json     # empty store: {}  (filled by extract-manifests, brownfield only)
 ```
 
-`config.json` is seeded with TypeScript + vitest defaults, a `"$schema": "../../config.schema.json"` pointer (the machine-checkable source of truth for the config shape — the replacement for the removed version gates, [ADR-0018](../decisions/0018-additive-only-format-versioning.md)), and `staleness.blockOnStale: true`. There are **no version fields anywhere** in the workspace: `contracts.json` and `manifests.json` start as empty stores — you author the contract next, and you never hand-author the manifest.
+`config.json` is seeded with TypeScript + vitest defaults, a `"$schema": "../config.schema.json"` pointer (the machine-checkable source of truth for the config shape — the replacement for the removed version gates, [ADR-0018](../decisions/0018-additive-only-format-versioning.md)), and `staleness.blockOnStale: true`. There are **no version fields anywhere** in the workspace: `contracts.json` and `manifests.json` start as empty stores — you author the contract next, and you never hand-author the manifest.
 
-> `init` re-seeds the schema files, so only run it on a fresh project — not one you've already authored.
+> `init` refuses to overwrite an existing workspace — it only scaffolds a fresh project.
 
 ## Step 1 — Author your first contract
 

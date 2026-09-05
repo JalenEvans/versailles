@@ -10,13 +10,20 @@
  */
 import { computeSourceHash, fnv1aHex } from "./hash.js";
 import { mergeManifests } from "./merge.js";
-import type { ExtractorResult } from "./types.js";
-import { resolveExportedFunction, typescriptExtractor } from "./typescript.js";
+import type { ExtractorPlugin, ExtractorResult } from "./types.js";
+import {
+	ExtractorDependencyMissingError,
+	resolveExportedFunction,
+	typescriptExtractor,
+} from "./typescript.js";
 import type { ResolvedFunction } from "./typescript.js";
 
 export { computeSourceHash, fnv1aHex } from "./hash.js";
 export { mergeManifests } from "./merge.js";
-export { resolveExportedFunction } from "./typescript.js";
+export {
+	ExtractorDependencyMissingError,
+	resolveExportedFunction,
+} from "./typescript.js";
 export type { ResolvedFunction } from "./typescript.js";
 export type {
 	Confidence,
@@ -30,13 +37,7 @@ export type {
 
 const EXTRACTOR_PLUGINS = {
 	typescript: typescriptExtractor,
-} as const satisfies Record<
-	string,
-	{
-		language: string;
-		extract: (sourceRoots: string[], projectRoot?: string) => ExtractorResult;
-	}
->;
+} as const satisfies Record<string, ExtractorPlugin>;
 
 /**
  * Plugin registry seam (ADR-0008): select the extractor by config.language.
@@ -45,13 +46,19 @@ const EXTRACTOR_PLUGINS = {
  */
 export function getExtractorPlugin(
 	language: string,
-): (typeof EXTRACTOR_PLUGINS)[keyof typeof EXTRACTOR_PLUGINS] | undefined {
+): ExtractorPlugin | undefined {
 	return EXTRACTOR_PLUGINS[language as keyof typeof EXTRACTOR_PLUGINS];
 }
 
 /**
  * Synchronous manifest extraction for TypeScript source roots — the default
  * pipeline path, dispatched through the plugin seam.
+ *
+ * The public surface stays SYNCHRONOUS (VERSAILLES-190): the plugin's async
+ * `extract` (dynamic `await import("typescript")`) is for await-capable
+ * callers; `extractManifests` uses the plugin's synchronous extract path,
+ * which lazy-loads the compiler API via createRequire and throws the
+ * structured EXTRACTOR_DEPENDENCY_MISSING error when `typescript` is absent.
  *
  * @param sourceRoots Directory roots to scan (glob expansion is a CLI
  *   concern); files are scanned recursively under these roots only.
@@ -71,5 +78,5 @@ export function extractManifests(
 	if (plugin === undefined) {
 		throw new Error("No extractor plugin registered for language 'typescript'");
 	}
-	return plugin.extract(sourceRoots, projectRoot);
+	return plugin.extractSync(sourceRoots, projectRoot);
 }

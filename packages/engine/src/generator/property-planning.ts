@@ -378,6 +378,37 @@ function fieldBoundFieldOperands(
 	return fields;
 }
 
+/**
+ * True for a `field op expr` / `expr op field` RELATION — exactly one side a
+ * single-segment fieldRef, the other side a NON-LITERAL expression
+ * (VERSAILLES-191). e.g. `balance == old(balance) + price`, `old(balance) -
+ * amount == balance`, `old(balance) >= balance`. This is the
+ * literal-computable postcondition shape (postconditionIsComputable: a
+ * `field op expr` compare with a resolvable expr side — the concrete
+ * satisfaction case pins ONE deterministic point, while the relation
+ * constrains a whole region across the valid input space). Like a
+ * bothSideFieldRef equality, the relation's field is instance state — never a
+ * sampled arbitrary, never a record key — so it routes through the emitter's
+ * FIELD-BOUND layout and must never trip the PROPERTY_UNPLANNABLE gate. A
+ * literal other side (`balance >= 0`) is NOT this shape (single-param); a
+ * both-fieldRef compare is not this shape (the bothSideFieldRef family).
+ */
+function isFieldOpExprRelation(ast: Node): boolean {
+	if (ast.type !== "compare") {
+		return false;
+	}
+	const leftVar = fieldRefName(ast.left);
+	const rightVar = fieldRefName(ast.right);
+	if (leftVar === null && rightVar === null) {
+		return false;
+	}
+	if (leftVar !== null && rightVar !== null) {
+		return false;
+	}
+	const expr = leftVar !== null ? ast.right : ast.left;
+	return expr.type !== "literal";
+}
+
 /** A normalized sum/difference coupling leaf `p1 ± p2 <op> C`. */
 type CouplingLeaf = {
 	arithOp: "+" | "-";
@@ -586,13 +617,15 @@ function classifyMultiParamGuard(
 	if (mirror !== null) {
 		return { kind: "mirror", source: mirror.source, target: mirror.target };
 	}
-	// Center B1: a bothSideFieldRef equality `field == param` (at least one
-	// operand a manifest FIELD, not an op param) is neither mirror-able (the
+	// Center B1 + VERSAILLES-191: a bothSideFieldRef equality `field == param`
+	// (at least one operand a manifest FIELD, not an op param) and a `field op
+	// expr` relation (`balance == old(balance) + price` — the literal-
+	// computable postcondition REGION PROPERTY) are neither mirror-able (the
 	// field is instance state, never a sampled arbitrary) nor record-filterable
-	// (the field can never be destructured from the record) — but it IS
-	// plannable via the emitter's FIELD-BOUND layout, so it must NOT trip the
+	// (the field can never be destructured from the record) — but they ARE
+	// plannable via the emitter's FIELD-BOUND layout, so they must NOT trip the
 	// PROPERTY_UNPLANNABLE gate below.
-	if (bothSideFieldRefEquality(ast)) {
+	if (bothSideFieldRefEquality(ast) || isFieldOpExprRelation(ast)) {
 		return { kind: "field-bound" };
 	}
 	const failure = recordLeafFailure(ast, lower, upper, opParamNames);
@@ -944,41 +977,61 @@ export function planPropertyBlocks(
 					});
 					return;
 				}
-				// Fix 2 (LOW, Center re-review): the clause's OWN
-				// bothSideFieldRef equality whose operands are ALL manifest
-				// fields (`f1 == f2` — zero op params to sample) cannot produce
-				// a valid fast-check property: the FIELD-BOUND layout samples
-				// op-param arbitraries only, so with no op params it would
-				// emit `fc.property(, () => {` syntax garbage. Route to
-				// PROPERTY_UNPLANNABLE — warning, descriptor absent, strategy
-				// stays "property".
+				// Fix 2 (LOW, Center re-review) + VERSAILLES-191: a zero-param
+				// field-bound clause cannot produce a valid fast-check
+				// property: the FIELD-BOUND layout samples op-param
+				// arbitraries only, so with no op params it would emit
+				// `fc.property(, () => {` syntax garbage. Two shapes trip
+				// this gate: the clause's OWN bothSideFieldRef equality whose
+				// operands are ALL manifest fields (`f1 == f2` — zero op
+				// params to sample), and a field-op-expr relation on a
+				// ZERO-op-param operation (`old(balance) >= balance` on
+				// `settle()`) — `fieldBoundFieldOperands` reports [] for the
+				// relation shape (the expr side is never a fieldRef), so the
+				// relation is keyed on `opParamNames.size === 0` instead.
+				// Route to PROPERTY_UNPLANNABLE — warning, descriptor absent,
+				// strategy stays "property".
 				const ownFieldOperands = fieldBoundFieldOperands(ast, opParamNames);
+				const zeroParamFieldBound =
+					ownFieldOperands.length === 2 ||
+					(isFieldOpExprRelation(ast) && opParamNames.size === 0);
 				if (
 					(outcome === "satisfies" || outcome === "invariant-preserving") &&
-					ownFieldOperands.length === 2
+					zeroParamFieldBound
 				) {
 					warnings.push({
 						code: "PROPERTY_UNPLANNABLE",
 						field: clauseId,
-						detail: `Cannot plan a property block for ${clauseId}: the bothSideFieldRef equality's operands are ALL manifest fields (${ownFieldOperands.join(", ")}) — no operation param can drive fast-check's fc.property, so the FIELD-BOUND layout has no arbitrary to sample`,
+						detail:
+							ownFieldOperands.length === 2
+								? `Cannot plan a property block for ${clauseId}: the bothSideFieldRef equality's operands are ALL manifest fields (${ownFieldOperands.join(", ")}) — no operation param can drive fast-check's fc.property, so the FIELD-BOUND layout has no arbitrary to sample`
+								: `Cannot plan a property block for ${clauseId}: the field-op-expr relation references instance state only and ${componentName}.${operationName} has no op params to sample — no operation param can drive fast-check's fc.property, so the FIELD-BOUND layout has no arbitrary to sample`,
 					});
 					return;
 				}
-				// Fix 1 (MEDIUM, Center re-review): when the operation's guard
-				// set contains a field-referencing multi-param oracle (`f ==
-				// a`), ONLY descriptors whose OWN clause is such a field-bound
-				// equality are plannable — via the emitter's FIELD-BOUND
-				// layout, which never filters with siblings. Every OTHER
-				// satisfies/invariant-preserving descriptor would need to
-				// filter with the field-referencing sibling — the mirror and
-				// record layouts cannot reference manifest fields in their
-				// filters — so it is PROPERTY_UNPLANNABLE (warning, descriptor
-				// absent, strategy stays "property"). The SELECTOR still
-				// records "property"; the coverage gap stays visible.
+				// Fix 1 (MEDIUM, Center re-review) + VERSAILLES-191: when the
+				// operation's guard set contains a field-referencing multi-param
+				// oracle (`f == a` or a `field op expr` relation like `balance
+				// == old(balance) + price`), ONLY descriptors whose OWN clause
+				// is such a field-bound relation are plannable — via the
+				// emitter's FIELD-BOUND layout, which never filters with
+				// siblings. Every OTHER satisfies/invariant-preserving
+				// descriptor would need to filter with the field-referencing
+				// sibling — the mirror and record layouts cannot reference
+				// manifest fields in their filters — so it is
+				// PROPERTY_UNPLANNABLE (warning, descriptor absent, strategy
+				// stays "property"). The SELECTOR still records "property"; the
+				// coverage gap stays visible. ownFieldOperands (a
+				// bothSideFieldRef-`==`-only helper) reports [] for a
+				// field-op-expr relation — the expr side is never a fieldRef —
+				// so the own-clause field-bound test ORs in the relation
+				// shape.
+				const ownFieldBoundClause =
+					ownFieldOperands.length > 0 || isFieldOpExprRelation(ast);
 				if (
 					(outcome === "satisfies" || outcome === "invariant-preserving") &&
 					multiParamFieldBound !== null &&
-					ownFieldOperands.length === 0
+					!ownFieldBoundClause
 				) {
 					warnings.push({
 						code: "PROPERTY_UNPLANNABLE",
@@ -1035,15 +1088,96 @@ export function planPropertyBlocks(
 				// carry no `guards` (keeps the record/field-bound pins
 				// byte-identical).
 				const ownOracleParams = oracleParamsOf(code);
+				// B2 (valid-region soundness, VERSAILLES-191): a field-op-expr
+				// relation (e.g. `balance == old(balance) + price`) renders the
+				// emitter's FIELD-BOUND layout, which samples ONLY op-param
+				// arbitraries. The sampled values must stay inside the
+				// operation's VALID region or the real source throws and the
+				// generated property fails at runtime (the "Property failed
+				// after 2 tests … Counterexample: ["",0]" blocker). Every op
+				// param must therefore be covered — fully bounded (both bounds
+				// resolved → the bounds object constrains the arbitrary) or
+				// filterable by a renderable SINGLE-param guard oracle (an
+				// example-strategy precondition like `price > 0` / `sku != ""`
+				// that joined exampleGuardOracles, or a single-param
+				// property-strategy sibling oracle). A param that a precondition
+				// REFERENCES yet is covered by neither is leaky — the per-param
+				// filter cannot bound it — so the clause falls back to
+				// PROPERTY_UNPLANNABLE (direction (b)) with a clear warning.
+				// Params with NO referencing precondition are genuinely
+				// unconstrained: every sampled value is valid, so the block
+				// stays planned (the computable-postcondition region property).
+				const relation = isFieldOpExprRelation(ast);
+				if (
+					relation &&
+					(outcome === "satisfies" || outcome === "invariant-preserving")
+				) {
+					const singleParamGuards = [
+						...exampleGuardOracles,
+						...guardOracles.filter((o) => oracleParamsOf(o.code).length <= 1),
+					];
+					const preconditionRefs = new Set<string>();
+					for (const pre of operation.preconditions ?? []) {
+						const preAst = context.parsedContracts[pre.id];
+						if (preAst !== undefined) {
+							collectFieldRefs(preAst, preconditionRefs);
+						}
+					}
+					for (const spec of params) {
+						if (spec.bounds !== undefined) {
+							continue;
+						}
+						if (!preconditionRefs.has(spec.param)) {
+							continue;
+						}
+						const filterable = singleParamGuards.some((o) =>
+							oracleParamsOf(o.code).includes(spec.param),
+						);
+						if (!filterable) {
+							warnings.push({
+								code: "PROPERTY_UNPLANNABLE",
+								field: clauseId,
+								detail: `Cannot plan a property block for ${clauseId}: operation ${componentName}.${operationName} param "${spec.param}" is constrained by a precondition the FIELD-BOUND layout cannot apply as a per-param filter (no full bounds object and no renderable single-param guard oracle) — the sampled region would leave the valid region and the generated property would fail at runtime`,
+							});
+							return;
+						}
+					}
+				}
+				// §9.6 guard-set wiring (B2): the renderable single-param guard
+				// oracles a block's per-param `.filter` layout consumes. For a
+				// single-param own-clause descriptor the guard set is the
+				// example-strategy subset (exampleGuardOracles — the clauses
+				// with no descriptor of their own). A field-op-expr relation
+				// with an UNBOUNDED op param needs the FULL single-param guard
+				// set: the example-strategy oracles PLUS the single-param
+				// guard-candidate oracles (guardOracles) — the property-strategy
+				// clauses like `sku != ""` that the field-bound sibling
+				// BLOCKED from planning their own descriptor (multiParamFieldBound),
+				// so their oracle reaches the FIELD-BOUND layout only via the
+				// relation descriptor's guards. A field-op-expr relation whose
+				// params are ALL fully bounded carries no guards (the bounds
+				// object already constrains the arbitraries); bothSideFieldRef
+				// equality field-bound descriptors (Center B1) and mirror /
+				// record own-clause descriptors never filter with sibling
+				// guards (byte-identical pins).
+				const guardsToAttach =
+					ownOracleParams.length <= 1
+						? exampleGuardOracles
+						: relation && params.some((spec) => spec.bounds === undefined)
+							? [
+									...exampleGuardOracles,
+									...guardOracles.filter(
+										(o) => oracleParamsOf(o.code).length <= 1,
+									),
+								]
+							: [];
 				descriptors.push({
 					id: nextId(outcome),
 					component: componentName,
 					operation: operationName,
 					params,
 					clauses: [{ clauseId, code }],
-					...(exampleGuardOracles.length > 0 && ownOracleParams.length <= 1
-						? { guards: exampleGuardOracles }
-						: {}),
+					...(guardsToAttach.length > 0 ? { guards: guardsToAttach } : {}),
 					outcome,
 					traces: [clauseId],
 					// Seed wiring: the explicit override wins; otherwise the
@@ -1166,6 +1300,25 @@ export function planPropertyBlocks(
 				seed: seedOverride ?? derivePropertySeed(traces, grammarVersion),
 			});
 		}
+	}
+
+	// VERSAILLES-191: the PBT opt-in is never a silent zero. When
+	// propertyBased.enabled is true but ZERO property blocks were planned —
+	// every clause resolved example-only (the concrete cases fully
+	// characterize them: the boundary sweep for numeric-bound preconditions,
+	// the partition sweep for `in` clauses, vacuous preservation for plain
+	// non-effects invariants) or was unplannable for PBT — surface a
+	// non-silent non-blocking warning explaining why, on the same
+	// LoaderWarning tier as PROPERTY_UNPLANNABLE (CliResult.warnings, exit 0).
+	// The warning fires only on the enabled path; the disabled/absent path
+	// returns earlier with zero warnings (the v1 byte-identical pin).
+	if (descriptors.length === 0) {
+		warnings.push({
+			code: "PROPERTY_ZERO_PLANNED",
+			field: "propertyBased",
+			detail:
+				"propertyBased.enabled is true but zero property blocks were planned: every clause in the contract resolved example-only (the concrete cases fully characterize them — numeric-bound / `in` preconditions, plain non-effects invariants) or was unplannable for PBT (see PROPERTY_UNPLANNABLE warnings), so no region property was planned over the concrete suite",
+		});
 	}
 
 	return { descriptors, strategies, warnings };

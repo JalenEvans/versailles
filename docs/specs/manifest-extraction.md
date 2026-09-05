@@ -110,6 +110,12 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 - **When** it scans source and writes `manifests.json`
 - **Then** it uses static analysis APIs only — there are no LLM call sites in the tool (ADR-0005 clarification, ADR-0010)
 
+### The TypeScript extractor lazy-loads `typescript` and fails with EXTRACTOR_DEPENDENCY_MISSING when it is unresolvable
+
+- **Given** a TypeScript extraction (`config.language: "typescript"`) where the `typescript` package cannot be resolved (not installed / not resolvable at runtime)
+- **When** the extract path first touches the compiler API (the lazy loader runs — never at module load)
+- **Then** the run fails with the structured `EXTRACTOR_DEPENDENCY_MISSING` error (`{ code: "EXTRACTOR_DEPENDENCY_MISSING", detail: "TypeScript extraction requires the 'typescript' package (npm i typescript)" }`) — never a raw module-not-found crash; the CLI surfaces it as its own code with exit 1, never the generic INTERNAL mask (VERSAILLES-190, VERSAILLES-191 W1)
+
 ## Constraints
 
 - `must_not` treat manifests as a hand-authored source of truth — they are derived artifacts produced by static analysis (build-spec §3.3, ADR-0005).
@@ -123,6 +129,7 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 - `must_not` omit the `methods` key from a refreshed covered entry with zero methods — an empty map `{}` must be persisted as the first-class zero-methods signal; omitting the key is reserved for preserved legacy entries the extractor never touched (VERSAILLES-25 follow-up).
 - `must_not` treat missing `fieldAccess`/`fieldReadonly` keys as a hard error — their absence is a legacy-entry condition; such entries load permissively and default to accessible/not-readonly (ADR-0004, ADR-0018, ADR-0021).
 - `must_not` silently drop unresolvable method signatures — they follow the permissive policy and surface a warning (ADR-0004).
+- `must_not` let an unresolvable `typescript` dependency crash extraction with a raw module-not-found throw — the lazy loader (inside the extract path only, never at module load) translates resolution failure into the structured `EXTRACTOR_DEPENDENCY_MISSING` error (VERSAILLES-190).
 - `must_not` place language-specific extraction code in the core — all extraction lives behind the `ExtractorPlugin` seam (ADR-0008).
 
 ## Non-Goals
@@ -145,3 +152,4 @@ Manifest extraction derives the grounding layer for the whole pipeline — `mani
 | 2026-08-18 | maintainer | Mirrored the review-warning contract follow-ups (fix/generator-emitter-runnability): (W3/VERSAILLES-25) refreshed entries always persist the methods key — possibly {} — as the first-class zero-methods signal, only preserved legacy entries may lack it; (W2/VERSAILLES-24) the disjoint-roots sourcePath fallback is relative(sourceRoots[0], file) or omission of the field — never the absolute file path |
 | 2026-08-20 | maintainer | Lifecycle flipped draft → implemented: context shipped and verified for beta |
 | 2026-09-01 | maintainer | Emission-soundness input model (ADR-0021, VERSAILLES-182): per-field access (`fieldAccess`: public/protected/private) and readonly (`fieldReadonly`: boolean) captured from TS source modifiers — the emitter's input for deciding plain `instance.<field>` access vs the deliberate `(instance as any).<field>` cast; legacy entries without these keys load permissively (default accessible/not readonly, ADR-0004/0018) |
+| 2026-09-04 | maintainer | Dependency-missing surface (VERSAILLES-190): the TypeScript extractor lazy-loads the `typescript` package inside the extract path only and, when it is unresolvable, fails with the structured `EXTRACTOR_DEPENDENCY_MISSING` error (`{ code, detail }` — never a raw module-not-found crash); the CLI handlers surface it as its own code with exit 1, never the generic INTERNAL mask (VERSAILLES-191 W1) |

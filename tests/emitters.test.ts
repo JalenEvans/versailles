@@ -1362,24 +1362,26 @@ describe("emitSuite — void-op accept/invariant cases assert INSTANCE state, ne
 		expect(order?.content).not.toContain("expect(result)");
 	});
 
-	it("keeps const result = ...; expect(result).toBeDefined(); expect(result.<field>) for a NON-void op's invariant case — no regression", () => {
+	it("binds the INSTANCE and asserts instance.<field> for a PRIMITIVE-returning op's invariant case — never result.<field> on a primitive return (VERSAILLES-185)", () => {
 		const files = emitSuite(voidInvariantSuite(), "vitest", {
 			methods: ORDER_NONVOID_METHODS,
 		});
 		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
 		expect(order).toBeDefined();
 
-		// returnType "number" — the return value is the assertion receiver.
+		// returnType "number" — a primitive return value has no fields, so
+		// `result.subtotal` reads undefined and the assertion could never pass.
+		// The case binds the component INSTANCE and asserts instance state,
+		// exactly like the void-returning render (VERSAILLES-185).
+		expect(order?.content).toContain("const instance = new Order();");
+		expect(order?.content).toContain('instance.addItem("initial");');
 		expect(order?.content).toContain(
-			'const result = new Order().addItem("initial");',
+			"expect(instance.subtotal).toBeGreaterThanOrEqual(0)",
 		);
-		expect(order?.content).toContain("expect(result).toBeDefined();");
-		expect(order?.content).toContain(
-			"expect(result.subtotal).toBeGreaterThanOrEqual(0)",
-		);
-		// The instance-binding form is void-only — a non-void op never uses it.
-		expect(order?.content).not.toContain("const instance =");
-		expect(order?.content).not.toContain("instance.addItem(");
+		// The primitive return value is never the assertion receiver.
+		expect(order?.content).not.toContain("const result =");
+		expect(order?.content).not.toContain("result.subtotal");
+		expect(order?.content).not.toContain("expect(result)");
 	});
 
 	it("keeps the bare call for a void op accept case WITHOUT assertions — no const result binding (F1 pin)", () => {
@@ -1504,6 +1506,127 @@ describe("emitSuite — a postcondition-satisfaction case WITH assertions on a v
 
 		// A void call's return value is undefined — result.<field> would throw
 		// TypeError at runtime; the void-with-assertions path must not bind it.
+		expect(order?.content).not.toContain("const result =");
+		expect(order?.content).not.toContain("result.balance");
+		expect(order?.content).not.toContain("expect(result)");
+	});
+});
+
+// ── VERSAILLES-185: PRIMITIVE-returning ops with field-based postconditions
+// assert INSTANCE state, never result.<field> ───────────────────────────────
+//
+// A primitive return value (number/string/boolean) has no fields, so
+// `expect(result.<field>)` reads `undefined` on the primitive return and the
+// assertion can never pass. The FIXED receiver is fully shape-aware
+// (deterministic-generation.contract.yaml §9.4, VERSAILLES-185): a
+// primitive-returning INSTANCE operation binds the component instance and
+// asserts instance.<field> — exactly like the V-26 void render — while an
+// object-returning operation keeps the `result.<field>` receiver. Red today:
+// the emitter sends EVERY non-void accept case down the result-bound branch,
+// so a primitive-returning case renders `const result = <call>;
+// expect(result.<field>)` — the assertion can never pass.
+
+/** A postcondition-satisfaction PlannedCase on a PRIMITIVE-returning INSTANCE op (subject: balance). */
+function primitivePostconditionSuite(): PlannedSuite {
+	return {
+		clauseIds: ["Order.addItem.post0"],
+		operations: [
+			{
+				component: "Order",
+				operation: "addItem",
+				cases: [
+					{
+						id: "Order.addItem.postcondition-satisfaction-0",
+						kind: "postcondition-satisfaction",
+						description:
+							"valid input asserting postconditions Order.addItem.post0",
+						inputs: { sku: "initial", price: 1, balance: 50 },
+						expects: {
+							outcome: "accept",
+							postconditions: ["Order.addItem.post0"],
+							// The V-146 planner output: old(balance) + price
+							// resolved against the captured pre-state (50) and
+							// the valid param (1) → literal 51.
+							assertions: [{ subject: "balance", op: "==", literal: 51 }],
+						},
+						traces: ["Order.addItem.post0"],
+					},
+				],
+			},
+		],
+		invariantCases: [],
+	};
+}
+
+const ORDER_PRIMITIVE_METHODS = {
+	Order: {
+		addItem: { static: false, params: ["sku", "price"], returnType: "number" },
+	},
+};
+
+const ORDER_OBJECT_METHODS = {
+	Order: {
+		addItem: { static: false, params: ["sku", "price"], returnType: "Order" },
+	},
+};
+
+describe("emitSuite — PRIMITIVE-returning ops assert INSTANCE state, never result.<field>; object-returning ops keep result.<field> (VERSAILLES-185, §9.4)", () => {
+	it("binds the INSTANCE, seeds the captured pre-state, calls the op on it, and asserts instance.<field> for a PRIMITIVE-returning op's postcondition case — never const result / result.<field> (Red today)", () => {
+		const files = emitSuite(primitivePostconditionSuite(), "vitest", {
+			methods: ORDER_PRIMITIVE_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// returnType "number" — result.balance on the primitive return would be
+		// undefined and could never pass. The case binds the instance, seeds
+		// balance from the captured pre-state (balance is not a declared param),
+		// calls the op on the instance, and asserts instance state.
+		expect(order?.content).toContain("const instance = new Order();");
+		expect(order?.content).toContain("instance.balance = 50;");
+		expect(order?.content).toContain('instance.addItem("initial", 1);');
+		expect(order?.content).toContain("expect(instance.balance).toEqual(51)");
+
+		// The primitive return value is never the assertion receiver.
+		expect(order?.content).not.toContain("const result =");
+		expect(order?.content).not.toContain("result.balance");
+		expect(order?.content).not.toContain("expect(result)");
+	});
+
+	it("keeps const result = ...; expect(result).toBeDefined(); expect(result.<field>) for an OBJECT-returning op's postcondition case — no regression on the existing receiver", () => {
+		const files = emitSuite(primitivePostconditionSuite(), "vitest", {
+			methods: ORDER_OBJECT_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// returnType "Order" (non-primitive per the manifest model) — the
+		// return object's fields are the assertion receivers, exactly as today.
+		expect(order?.content).toContain(
+			'const result = new Order().addItem("initial", 1);',
+		);
+		expect(order?.content).toContain("expect(result).toBeDefined();");
+		expect(order?.content).toContain("expect(result.balance).toEqual(51)");
+		// The instance-binding form is primitive/void-only — an
+		// object-returning op never uses it.
+		expect(order?.content).not.toContain("const instance =");
+		expect(order?.content).not.toContain("instance.addItem(");
+	});
+
+	it("keeps the instance-bound render for a VOID-returning op's postcondition case — no regression on the V-26 receiver", () => {
+		const files = emitSuite(primitivePostconditionSuite(), "vitest", {
+			methods: ORDER_VOID_POSTCONDITION_METHODS,
+		});
+		const order = files.find((file) => file.path.endsWith("Order.test.ts"));
+		expect(order).toBeDefined();
+
+		// A void call's return value is undefined — the V-26 instance-bound
+		// render stays the receiver for the void-returning op.
+		expect(order?.content).toContain("const instance = new Order();");
+		expect(order?.content).toContain("instance.balance = 50;");
+		expect(order?.content).toContain('instance.addItem("initial", 1);');
+		expect(order?.content).toContain("expect(instance.balance).toEqual(51)");
+		// A void call's return value is undefined — never bound, never asserted.
 		expect(order?.content).not.toContain("const result =");
 		expect(order?.content).not.toContain("result.balance");
 		expect(order?.content).not.toContain("expect(result)");

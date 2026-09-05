@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+// VERSAILLES-188: the marker the loader-hook fixture throws — asserted to
+// NEVER surface as a raw crash on stderr (only inside the envelope detail).
+import { BOOM } from "./fixtures/throw-runcli-loader.mjs";
 
 /**
  * Packaging lifecycle (VERSAILLES-16, "Get Ready For Beta" sprint Phase 2):
@@ -37,14 +40,29 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const PACKAGE_JSON_PATH = join(REPO_ROOT, "package.json");
 const SHIM_PATH = join(REPO_ROOT, "bin", "versailles");
+// VERSAILLES-188: --import preload that registers the loader hook swapping
+// the dist runCli for one that throws (see tests/fixtures/).
+const THROW_RUNCLI_PRELOAD = join(
+	REPO_ROOT,
+	"tests",
+	"fixtures",
+	"register-throw-runcli.mjs",
+);
 
 type PackageJson = {
 	name?: string;
+	main?: string;
+	types?: string;
+	exports?: string | Record<string, unknown>;
 	scripts?: Record<string, string>;
 	license?: string;
 	repository?: { url?: string };
 	author?: string | { name?: string };
 	keywords?: string[];
+	dependencies?: Record<string, string>;
+	devDependencies?: Record<string, string>;
+	optionalDependencies?: Record<string, string>;
+	peerDependencies?: Record<string, string>;
 };
 
 async function readPackageJson(): Promise<PackageJson> {
@@ -178,6 +196,137 @@ describe("package.json publish metadata (VERSAILLES-19)", () => {
 	});
 });
 
+// ── package.json dependency hygiene (VERSAILLES-190) ───────────────────────
+// The TypeScript extractor lazy-loads the compiler API inside the extract
+// path (VERSAILLES-190), so `typescript` is a dev-time/peer concern only: the
+// tsc build (scripts.build/prepare) and consumers who actually run
+// extract-manifests on a TS project need it, but a non-TS consumer of the
+// runtime package must not pay the install cost. This pins that `typescript`
+// is never a hard runtime `dependency`.
+
+describe("package.json dependency hygiene (VERSAILLES-190)", () => {
+	it("does not declare `typescript` as a hard runtime dependency — the TS extractor lazy-loads it (optional/peer/dev only)", async () => {
+		const pkg = await readPackageJson();
+
+		expect(pkg.dependencies?.typescript).toBeUndefined();
+	});
+});
+
+// ── package entry point — CLI-only (VERSAILLES-189, ADR-0023) ──────────────
+// The published package advertised a library entry point: package.json:8-15
+// wired main/types/exports["."] to ./dist/src/index.js, but src/index.ts is a
+// one-line stub exporting only packageName — a silent dead end for programmatic
+// consumers doing `import { ... } from "versailles-dbc"`. ADR-0023 (accepted,
+// Option B): the package is CLI-only. The fields are REMOVED (primary), or kept
+// pointing only at a documented no-op that throws a helpful "run the
+// `versailles` binary" error — never at the stub library module — and `exports`
+// must not open deep import paths to planner/emitter internals. Integration is
+// via the `versailles` binary as a subprocess (ADR-0010), never in-process
+// imports. The bin/versailles shim E2E above pins the CLI path itself; these
+// tests pin the metadata honesty (ADR-0023 confirmation).
+
+/** Resolve the module path the package metadata advertises as its entry —
+ * `exports["."].import` first, then `main` — or undefined when no entry is
+ * advertised (the primary Option B shape: fields removed). */
+function advertisedEntryPath(pkg: PackageJson): string | undefined {
+	const exportsValue = pkg.exports;
+	if (typeof exportsValue === "object" && exportsValue !== null) {
+		const root = exportsValue["."];
+		if (typeof root === "string") return root;
+		if (typeof root === "object" && root !== null) {
+			const importTarget = root.import;
+			if (typeof importTarget === "string") return importTarget;
+		}
+	}
+	if (typeof pkg.main === "string") return pkg.main;
+	return undefined;
+}
+
+describe("package entry point — CLI-only surface (VERSAILLES-189, ADR-0023)", () => {
+	it("advertises no library entry — `main`/`types`/`exports` are absent (primary) or never point at the stub `dist/src/index.js`", async () => {
+		const pkg = await readPackageJson();
+
+		// Primary Option B: fields removed — absence is the cleanest CLI-only
+		// signal. Acceptable variant (ADR-0023): kept, but pointing only at a
+		// documented no-op. Both must NEVER advertise the compiled one-line stub
+		// library module (src/index.ts → dist/src/index.js) as importable.
+		for (const field of ["main", "types", "exports"] as const) {
+			const value = pkg[field];
+			if (value === undefined) continue;
+			expect(
+				JSON.stringify(value),
+				`"${field}" must not advertise the stub library module dist/src/index.js — the package is CLI-only (ADR-0023)`,
+			).not.toContain("dist/src/index");
+		}
+	});
+
+	it("`exports` exposes no deep import paths — no wildcard, no planner/emitter internals", async () => {
+		const pkg = await readPackageJson();
+
+		if (pkg.exports === undefined) return; // primary Option B — no exports map at all
+		const exportsValue = pkg.exports;
+		if (typeof exportsValue === "string") {
+			// String shorthand — a single root entry; nothing deep to open, but
+			// it must not reach internals either.
+			expect(exportsValue).not.toMatch(/dist\/packages|planner|emitter/);
+			return;
+		}
+		for (const key of Object.keys(exportsValue)) {
+			// Only the root "." is allowed; "./..." keys or "*" wildcards open
+			// planner/emitter internals to consumers (ADR-0010, ADR-0020).
+			expect(
+				key,
+				`exports key "${key}" must not be a deep import path — the package is CLI-only (ADR-0023)`,
+			).not.toMatch(/^\.\//);
+			expect(
+				key,
+				`exports key "${key}" must not be a wildcard — the package is CLI-only (ADR-0023)`,
+			).not.toMatch(/\*/);
+		}
+		expect(JSON.stringify(exportsValue)).not.toMatch(
+			/dist\/packages|planner|emitter/,
+		);
+	});
+
+	it("the package entry (if it resolves) exposes no importable library API — any named export is at most `packageName`", async () => {
+		const pkg = await readPackageJson();
+
+		const entry = advertisedEntryPath(pkg);
+		if (entry === undefined) return; // primary Option B — no entry to import
+		const entryPath = resolve(REPO_ROOT, entry);
+
+		let mod: Record<string, unknown>;
+		try {
+			mod = (await import(entryPath)) as Record<string, unknown>;
+		} catch {
+			// Acceptable no-op variant (ADR-0023): the entry throws a helpful
+			// "run the `versailles` binary" error on import — not an importable
+			// library surface, so the CLI-only pin is satisfied.
+			return;
+		}
+
+		// Never initWorkspace / planTestCases / emitSuite / coverageManifest —
+		// the v2+ library-API candidates (ADR-0020, docs/specs/versailles.md §
+		// Programmatic surface) must not leak through the published entry.
+		for (const name of Object.keys(mod)) {
+			expect(
+				name,
+				`named export "${name}" must not be exposed — the package is CLI-only (ADR-0023)`,
+			).toBe("packageName");
+		}
+		expect(mod.packageName).toBe("versailles-dbc");
+	});
+
+	it("README documents the package as CLI-only — integration via the `versailles` binary as a subprocess, never in-process imports", async () => {
+		const readme = await readFile(join(REPO_ROOT, "README.md"), "utf8");
+
+		// Tolerant of wording (ADR-0023 confirmation): an explicit CLI-only
+		// statement, a command-line-interface framing, or a subprocess
+		// integration statement all satisfy the pin.
+		expect(readme).toMatch(/(cli-only|command[- ]?line interface|subprocess)/i);
+	});
+});
+
 // ── Envelope through runCli (VERSAILLES-16) ────────────────────────────────
 // The bin shim does exactly: runCli(argv) → JSON.stringify(result) on stdout →
 // process.exit(result.exitCode). The envelope / exit-code matrix itself (clean
@@ -289,5 +438,76 @@ describe("bin/versailles shim — real shipped surface (VERSAILLES-16)", () => {
 		expect(envelope.errors).toContainEqual(
 			expect.objectContaining({ code: "UNKNOWN_COMMAND" }),
 		);
+	});
+
+	// ── bin/versailles top-level crash safety (VERSAILLES-188) ──────────────
+	// bin/versailles is a thin shim with NO try/catch around runCli: any
+	// unexpected throw escapes as an unhandled crash (raw stack trace on
+	// stderr, empty stdout, non-deterministic exit) instead of the structured
+	// envelope the CLI contract promises (build-spec §10, ADR-0010). The fix
+	// wraps the runCli call so an escaping throw prints
+	// { ok: false, errors: [{ code: "INTERNAL", ... }], warnings: [], exitCode: 1 }
+	// and exits 1 — never an unstructured crash. These tests PIN that fix.
+	//
+	// Harness: the REAL shim is spawned with the register-throw-runcli.mjs
+	// --import preload, whose loader hook substitutes the dist runCli for a
+	// stub that ALWAYS throws. The bin itself is untouched — the crash-safety
+	// surface exercised is exactly the shipped bin/versailles file.
+
+	it("--version → stdout parses to the envelope, ok true, exit 0 — regression guard that the normal surface stays intact (VERSAILLES-188)", async () => {
+		const cwd = await freshWorkspace("shim-version");
+		const run = spawnSync("node", [SHIM_PATH, "--version"], {
+			cwd,
+			encoding: "utf8",
+		});
+
+		expect(
+			run.status,
+			`shim exited ${run.status}:\n${run.stdout}\n${run.stderr}`,
+		).toBe(0);
+		const envelope = JSON.parse(run.stdout) as CliResultShape;
+		expect(envelope.ok).toBe(true);
+		expect(envelope.exitCode).toBe(0);
+		expect(envelope.errors).toEqual([]);
+		expect(envelope.output).toMatchObject({ version: expect.any(String) });
+	});
+
+	it("when runCli throws, the bin prints the structured { ok: false } envelope, exits 1, and never crashes with a raw stack on stderr (VERSAILLES-188)", async () => {
+		const cwd = await freshWorkspace("shim-crash");
+		// --import preload swaps the dist runCli for one that throws; the bin
+		// must convert that escaping throw into the envelope, not crash.
+		const run = spawnSync(
+			"node",
+			["--import", THROW_RUNCLI_PRELOAD, SHIM_PATH, "--version"],
+			{ cwd, encoding: "utf8" },
+		);
+
+		// Non-zero exit (1) — the deterministic failure envelope, never the
+		// non-deterministic unhandled-crash status.
+		expect(
+			run.status,
+			`shim exited ${run.status}:\n${run.stdout}\n${run.stderr}`,
+		).toBe(1);
+		// The envelope must actually be printed (pre-fix stdout is EMPTY — the
+		// throw escapes before JSON.stringify ever runs).
+		expect(
+			run.stdout.trim().length,
+			`stdout must be the JSON envelope — got: ${JSON.stringify(run.stdout)}\nstderr: ${run.stderr}`,
+		).toBeGreaterThan(0);
+		const envelope = JSON.parse(run.stdout) as CliResultShape;
+		expect(envelope.ok).toBe(false);
+		expect(envelope.exitCode).toBe(1);
+		expect(Array.isArray(envelope.errors)).toBe(true);
+		expect(envelope.errors).toContainEqual(
+			expect.objectContaining({ code: "INTERNAL" }),
+		);
+		// The actual error must be surfaced machine-readably inside the
+		// envelope detail — never swallowed, never a raw crash.
+		expect(JSON.stringify(envelope.errors)).toContain(BOOM);
+		// No unstructured crash: the raw throw must never reach stderr.
+		expect(
+			run.stderr,
+			`stderr must not contain the raw crash:\n${run.stderr}`,
+		).not.toContain(BOOM);
 	});
 });

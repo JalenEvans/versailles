@@ -2,8 +2,8 @@
  * TypeScript manifest extractor plugin (ADR-0008/0009, build-spec §7).
  *
  * Walks exported class/interface declarations under the source roots with
- * ts.createProgram + the type checker, resolving declared field types to the
- * typeRef grammar (build-spec §3.3):
+ * the compiler API's createProgram + the type checker, resolving declared
+ * field types to the typeRef grammar (build-spec §3.3):
  *   string | number | boolean | <ComponentName> | list<typeRef> |
  *   optional<typeRef> | enum<v1,v2,...>
  *
@@ -41,12 +41,21 @@
  *   the optional extractManifests projectRoot argument (the CLI's cwd); when
  *   absent it is inferred as the common directory prefix of the source roots.
  *
- * Synchronous: ts.createProgram is synchronous (directory glob expansion is a
- * CLI concern, not the extractor's).
+ * Synchronous extraction: the compiler API's createProgram is synchronous
+ * (directory glob expansion is a CLI concern, not the extractor's). The
+ * `typescript` runtime dependency is LAZY (VERSAILLES-190): the compiler API
+ * is an optional dependency, loaded only inside the extract path — never at
+ * module load — so `init`/`validate`/`generate`/`check` consumers who never
+ * run a TypeScript extraction do not pay the compiler install cost.
  */
 import { readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join, relative, sep } from "node:path";
-import ts from "typescript";
+
+// Type-only: erased at compile time, so module load never touches the
+// `typescript` package at runtime (VERSAILLES-190). Type positions use `ts.`;
+// the lazily-loaded runtime value lives in `tsRuntime`.
+import type * as ts from "typescript";
 
 import { computeSourceHash } from "./hash.js";
 import type {
@@ -59,6 +68,76 @@ import type {
 } from "./types.js";
 
 /**
+ * Structured extractor failure when the `typescript` package cannot be
+ * resolved at extraction time (VERSAILLES-190). Follows the CLI's
+ * { code, detail } structured-error conventions (ADR-0010) — the consumer
+ * gets an actionable message instead of a raw module-not-found throw leaking
+ * out of the CLI.
+ */
+export class ExtractorDependencyMissingError extends Error {
+	readonly code = "EXTRACTOR_DEPENDENCY_MISSING" as const;
+	readonly detail: string;
+
+	constructor(detail: string) {
+		super(detail);
+		this.name = "ExtractorDependencyMissingError";
+		this.detail = detail;
+	}
+}
+
+/**
+ * Lazy `typescript` namespace (VERSAILLES-190).
+ *
+ * `typescript` is an optional dependency: the compiler API is only touched
+ * inside the extract path. `tsRuntime` starts undefined and is populated by
+ * the first loader that runs; every helper in this module reads it strictly
+ * after a loader has run. Two loaders back the same cache:
+ *
+ * - `loadTypeScriptSync` — `createRequire` require(), the synchronous path
+ *   used by the public `extractManifests` / `resolveExportedFunction`
+ *   surfaces (the CLI stays synchronous; ADR-0008 seam unchanged).
+ * - `loadTypeScriptAsync` — dynamic `await import("typescript")`, the plugin
+ *   seam's extract path (tolerates both a missing package and mock runners
+ *   that only intercept ESM imports).
+ *
+ * Both translate any resolution failure into the structured
+ * EXTRACTOR_DEPENDENCY_MISSING error above.
+ */
+let tsRuntime = undefined as unknown as typeof import("typescript");
+
+/** createRequire scoped to this module — synchronous lazy resolution. */
+const nodeRequire = createRequire(import.meta.url);
+
+/** Message shared by both loaders' structured failure. */
+const TYPESCRIPT_MISSING_DETAIL =
+	"TypeScript extraction requires the 'typescript' package (npm i typescript)";
+
+function loadTypeScriptSync(): void {
+	if (typeof tsRuntime === "undefined") {
+		try {
+			tsRuntime = nodeRequire("typescript") as typeof import("typescript");
+		} catch {
+			throw new ExtractorDependencyMissingError(TYPESCRIPT_MISSING_DETAIL);
+		}
+	}
+}
+
+async function loadTypeScriptAsync(): Promise<void> {
+	if (typeof tsRuntime === "undefined") {
+		try {
+			// CJS interop: the namespace's `default` is module.exports — the
+			// same value the static `import ts from "typescript"` produced.
+			const mod = (await import("typescript")) as {
+				default: typeof import("typescript");
+			};
+			tsRuntime = mod.default;
+		} catch {
+			throw new ExtractorDependencyMissingError(TYPESCRIPT_MISSING_DETAIL);
+		}
+	}
+}
+
+/**
  * Structural-analysis-only compiler options.
  *
  * lib is pinned to es2015 (NOT the full default set) and types to none:
@@ -66,17 +145,23 @@ import type {
  * extractor only needs primitives + Array/ReadonlyArray (both present in
  * es2015) to resolve the typeRef grammar. This keeps check/extract-manifests
  * fast (~ms instead of seconds) without changing extraction semantics.
+ *
+ * Built lazily (after `ts` is loaded) — the old module-level constant
+ * evaluated ts.ScriptTarget/ModuleKind/ModuleResolutionKind at import time,
+ * which is exactly what VERSAILLES-190 removes.
  */
-const COMPILER_OPTIONS: ts.CompilerOptions = {
-	target: ts.ScriptTarget.ES2022,
-	module: ts.ModuleKind.NodeNext,
-	moduleResolution: ts.ModuleResolutionKind.NodeNext,
-	strict: true,
-	noEmit: true,
-	skipLibCheck: true,
-	lib: ["lib.es2015.d.ts"],
-	types: [],
-};
+function getCompilerOptions(): ts.CompilerOptions {
+	return {
+		target: tsRuntime.ScriptTarget.ES2022,
+		module: tsRuntime.ModuleKind.NodeNext,
+		moduleResolution: tsRuntime.ModuleResolutionKind.NodeNext,
+		strict: true,
+		noEmit: true,
+		skipLibCheck: true,
+		lib: ["lib.es2015.d.ts"],
+		types: [],
+	};
+}
 
 type NamedComponentDeclaration = (
 	| ts.ClassDeclaration
@@ -114,24 +199,24 @@ function scanTypeScriptFiles(sourceRoots: string[]): string[] {
 
 /** Exported class/interface declarations are the extraction roots. */
 function isExported(decl: NamedComponentDeclaration): boolean {
-	const modifiers = ts.canHaveModifiers(decl)
-		? ts.getModifiers(decl)
+	const modifiers = tsRuntime.canHaveModifiers(decl)
+		? tsRuntime.getModifiers(decl)
 		: undefined;
 	return (
 		modifiers?.some(
-			(modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+			(modifier) => modifier.kind === tsRuntime.SyntaxKind.ExportKeyword,
 		) ?? false
 	);
 }
 
 /** Export check for top-level FunctionDeclarations (predicate-registry seam). */
 function isExportedFunction(decl: ts.FunctionDeclaration): boolean {
-	const modifiers = ts.canHaveModifiers(decl)
-		? ts.getModifiers(decl)
+	const modifiers = tsRuntime.canHaveModifiers(decl)
+		? tsRuntime.getModifiers(decl)
 		: undefined;
 	return (
 		modifiers?.some(
-			(modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+			(modifier) => modifier.kind === tsRuntime.SyntaxKind.ExportKeyword,
 		) ?? false
 	);
 }
@@ -140,19 +225,22 @@ function isComponentDeclaration(
 	node: ts.Statement,
 ): node is NamedComponentDeclaration {
 	return (
-		(ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) &&
+		(tsRuntime.isClassDeclaration(node) ||
+			tsRuntime.isInterfaceDeclaration(node)) &&
 		node.name !== undefined
 	);
 }
 
 /** Methods (and accessors) are never fields — data members only. */
 function isFieldMember(node: ts.Node): node is FieldMember {
-	return ts.isPropertyDeclaration(node) || ts.isPropertySignature(node);
+	return (
+		tsRuntime.isPropertyDeclaration(node) || tsRuntime.isPropertySignature(node)
+	);
 }
 
 function fieldNameOf(member: FieldMember): string {
 	const name = member.name;
-	return ts.isIdentifier(name) ? name.text : name.getText();
+	return tsRuntime.isIdentifier(name) ? name.text : name.getText();
 }
 
 /**
@@ -161,22 +249,24 @@ function fieldNameOf(member: FieldMember): string {
  * manifest purpose — they are data accessors, skipped (fields only).
  */
 function isMethodMember(node: ts.Node): node is MethodMember {
-	return ts.isMethodDeclaration(node) || ts.isMethodSignature(node);
+	return (
+		tsRuntime.isMethodDeclaration(node) || tsRuntime.isMethodSignature(node)
+	);
 }
 
 function methodNameOf(member: MethodMember): string {
 	const name = member.name;
-	return ts.isIdentifier(name) ? name.text : name.getText();
+	return tsRuntime.isIdentifier(name) ? name.text : name.getText();
 }
 
 /** Static detection via the modifier list (ts.getModifiers, TS 5.0+). */
 function isStaticMember(member: MethodMember): boolean {
-	const modifiers = ts.canHaveModifiers(member)
-		? ts.getModifiers(member)
+	const modifiers = tsRuntime.canHaveModifiers(member)
+		? tsRuntime.getModifiers(member)
 		: undefined;
 	return (
 		modifiers?.some(
-			(modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword,
+			(modifier) => modifier.kind === tsRuntime.SyntaxKind.StaticKeyword,
 		) ?? false
 	);
 }
@@ -185,7 +275,7 @@ function isStaticMember(member: MethodMember): boolean {
 function paramNamesOf(member: MethodMember): string[] {
 	return member.parameters.map((parameter) => {
 		const name = parameter.name;
-		return ts.isIdentifier(name) ? name.text : name.getText();
+		return tsRuntime.isIdentifier(name) ? name.text : name.getText();
 	});
 }
 
@@ -203,10 +293,10 @@ function resolveReturnType(
 ): string | undefined {
 	if (member.type === undefined) return undefined;
 	const type = checker.getTypeFromTypeNode(member.type);
-	if (type.flags & ts.TypeFlags.Void) return "void";
-	if (type.flags & ts.TypeFlags.Boolean) return "boolean";
-	if (type.flags & ts.TypeFlags.String) return "string";
-	if (type.flags & ts.TypeFlags.Number) return "number";
+	if (type.flags & tsRuntime.TypeFlags.Void) return "void";
+	if (type.flags & tsRuntime.TypeFlags.Boolean) return "boolean";
+	if (type.flags & tsRuntime.TypeFlags.String) return "string";
+	if (type.flags & tsRuntime.TypeFlags.Number) return "number";
 	return undefined;
 }
 
@@ -277,13 +367,15 @@ function sourcePathOf(
  * defaults to "public" — never omitted, never a hard error.
  */
 function accessOf(member: FieldMember): "public" | "protected" | "private" {
-	const modifiers = ts.canHaveModifiers(member)
-		? ts.getModifiers(member)
+	const modifiers = tsRuntime.canHaveModifiers(member)
+		? tsRuntime.getModifiers(member)
 		: undefined;
-	if (modifiers?.some((m) => m.kind === ts.SyntaxKind.PrivateKeyword)) {
+	if (modifiers?.some((m) => m.kind === tsRuntime.SyntaxKind.PrivateKeyword)) {
 		return "private";
 	}
-	if (modifiers?.some((m) => m.kind === ts.SyntaxKind.ProtectedKeyword)) {
+	if (
+		modifiers?.some((m) => m.kind === tsRuntime.SyntaxKind.ProtectedKeyword)
+	) {
 		return "protected";
 	}
 	return "public";
@@ -294,11 +386,12 @@ function accessOf(member: FieldMember): "public" | "protected" | "private" {
  * the permissive policy an absent readonly modifier defaults to false.
  */
 function readonlyOf(member: FieldMember): boolean {
-	const modifiers = ts.canHaveModifiers(member)
-		? ts.getModifiers(member)
+	const modifiers = tsRuntime.canHaveModifiers(member)
+		? tsRuntime.getModifiers(member)
 		: undefined;
 	return (
-		modifiers?.some((m) => m.kind === ts.SyntaxKind.ReadonlyKeyword) ?? false
+		modifiers?.some((m) => m.kind === tsRuntime.SyntaxKind.ReadonlyKeyword) ??
+		false
 	);
 }
 
@@ -364,22 +457,24 @@ function renderTypeRef(
 ): string {
 	// boolean BEFORE union: the checker models `boolean` as a true|false union
 	// whose flags carry both Union and Boolean.
-	if (type.flags & ts.TypeFlags.Boolean) return "boolean";
-	if (type.flags & ts.TypeFlags.String) return "string";
-	if (type.flags & ts.TypeFlags.Number) return "number";
+	if (type.flags & tsRuntime.TypeFlags.Boolean) return "boolean";
+	if (type.flags & tsRuntime.TypeFlags.String) return "string";
+	if (type.flags & tsRuntime.TypeFlags.Number) return "number";
 
-	if (type.flags & ts.TypeFlags.StringLiteral) {
+	if (type.flags & tsRuntime.TypeFlags.StringLiteral) {
 		return `enum<${(type as ts.StringLiteralType).value}>`;
 	}
-	if (type.flags & ts.TypeFlags.NumberLiteral) {
+	if (type.flags & tsRuntime.TypeFlags.NumberLiteral) {
 		return `enum<${(type as ts.NumberLiteralType).value}>`;
 	}
-	if (type.flags & ts.TypeFlags.BooleanLiteral) return "boolean";
+	if (type.flags & tsRuntime.TypeFlags.BooleanLiteral) return "boolean";
 
-	if (type.flags & ts.TypeFlags.Union) {
+	if (type.flags & tsRuntime.TypeFlags.Union) {
 		const parts = (type as ts.UnionType).types;
 		// All-boolean-literal unions are the checker's internal boolean model.
-		if (parts.every((part) => part.flags & ts.TypeFlags.BooleanLiteral)) {
+		if (
+			parts.every((part) => part.flags & tsRuntime.TypeFlags.BooleanLiteral)
+		) {
 			return "boolean";
 		}
 		// Literal-only union → enum<v1,v2,...> preserving source order.
@@ -391,7 +486,10 @@ function renderTypeRef(
 	}
 
 	if (isArrayType(checker, type)) {
-		const element = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
+		const element = checker.getIndexTypeOfType(
+			type,
+			tsRuntime.IndexKind.Number,
+		);
 		if (element !== undefined) {
 			return `list<${renderTypeRef(checker, element, refs)}>`;
 		}
@@ -412,17 +510,17 @@ function renderTypeRef(
 
 function isLiteralType(type: ts.Type): boolean {
 	return (
-		(type.flags & ts.TypeFlags.StringLiteral) !== 0 ||
-		(type.flags & ts.TypeFlags.NumberLiteral) !== 0 ||
-		(type.flags & ts.TypeFlags.BooleanLiteral) !== 0
+		(type.flags & tsRuntime.TypeFlags.StringLiteral) !== 0 ||
+		(type.flags & tsRuntime.TypeFlags.NumberLiteral) !== 0 ||
+		(type.flags & tsRuntime.TypeFlags.BooleanLiteral) !== 0
 	);
 }
 
 function literalValueOf(checker: ts.TypeChecker, type: ts.Type): string {
-	if (type.flags & ts.TypeFlags.StringLiteral) {
+	if (type.flags & tsRuntime.TypeFlags.StringLiteral) {
 		return String((type as ts.StringLiteralType).value);
 	}
-	if (type.flags & ts.TypeFlags.NumberLiteral) {
+	if (type.flags & tsRuntime.TypeFlags.NumberLiteral) {
 		return String((type as ts.NumberLiteralType).value);
 	}
 	// Boolean literals expose no public value; typeToString yields true/false.
@@ -437,17 +535,25 @@ function literalValueOf(checker: ts.TypeChecker, type: ts.Type): string {
 function isArrayType(checker: ts.TypeChecker, type: ts.Type): boolean {
 	const symbolName = type.symbol?.getName();
 	if (symbolName !== "Array" && symbolName !== "ReadonlyArray") return false;
-	return checker.getIndexTypeOfType(type, ts.IndexKind.Number) !== undefined;
+	return (
+		checker.getIndexTypeOfType(type, tsRuntime.IndexKind.Number) !== undefined
+	);
 }
 
-function extractTypeScript(
+/**
+ * Shared extraction pipeline — runs ONLY after a loader has populated the
+ * module-level `ts` namespace (VERSAILLES-190). Byte-identical to the
+ * pre-lazy-load extraction: the lazy load changes HOW `ts` is obtained, never
+ * what the analysis produces.
+ */
+function extractTypeScriptCore(
 	sourceRoots: string[],
 	projectRoot?: string,
 ): ExtractorResult {
 	const files = scanTypeScriptFiles(sourceRoots);
-	const program = ts.createProgram({
+	const program = tsRuntime.createProgram({
 		rootNames: files,
-		options: COMPILER_OPTIONS,
+		options: getCompilerOptions(),
 	});
 	const checker = program.getTypeChecker();
 
@@ -532,10 +638,40 @@ function extractTypeScript(
 	return { manifests, warnings };
 }
 
+/**
+ * Async plugin-seam extract (ADR-0008/0009) — lazy-loads the compiler API via
+ * dynamic `await import("typescript")` and fails with the structured
+ * EXTRACTOR_DEPENDENCY_MISSING error when the optional dependency is absent
+ * (VERSAILLES-190). The plugin seam is async-capable so the dependency-missing
+ * path is mock-observable in test runners that only intercept ESM imports.
+ */
+async function extractTypeScript(
+	sourceRoots: string[],
+	projectRoot?: string,
+): Promise<ExtractorResult> {
+	await loadTypeScriptAsync();
+	return extractTypeScriptCore(sourceRoots, projectRoot);
+}
+
+/**
+ * Synchronous extract for the public `extractManifests` surface — the CLI and
+ * the repo's sync test suites call it without awaiting. Lazy-loads via
+ * createRequire (synchronous) and fails with the same structured
+ * EXTRACTOR_DEPENDENCY_MISSING error when `typescript` is absent.
+ */
+function extractTypeScriptSync(
+	sourceRoots: string[],
+	projectRoot?: string,
+): ExtractorResult {
+	loadTypeScriptSync();
+	return extractTypeScriptCore(sourceRoots, projectRoot);
+}
+
 /** TypeScript extractor plugin (ADR-0008/0009). */
 export const typescriptExtractor: ExtractorPlugin = {
 	language: "typescript",
 	extract: extractTypeScript,
+	extractSync: extractTypeScriptSync,
 };
 
 export type ResolvedFunction =
@@ -567,10 +703,13 @@ export function resolveExportedFunction(
 	moduleName: string,
 	functionName: string,
 ): ResolvedFunction {
+	// Synchronous lazy load — the predicate seam is called from sync core
+	// code (workspace loader) and must not require awaiting (VERSAILLES-190).
+	loadTypeScriptSync();
 	const files = scanTypeScriptFiles(sourceRoots);
-	const program = ts.createProgram({
+	const program = tsRuntime.createProgram({
 		rootNames: files,
-		options: COMPILER_OPTIONS,
+		options: getCompilerOptions(),
 	});
 	// Iterate the program's own source files (mirrors extractTypeScript) and
 	// match the module by file basename without `.ts`.
@@ -579,7 +718,7 @@ export function resolveExportedFunction(
 		if (moduleNameOf(sourceFile.fileName) !== moduleName) continue;
 		for (const statement of sourceFile.statements) {
 			if (
-				ts.isFunctionDeclaration(statement) &&
+				tsRuntime.isFunctionDeclaration(statement) &&
 				statement.name !== undefined &&
 				statement.name.text === functionName &&
 				isExportedFunction(statement)

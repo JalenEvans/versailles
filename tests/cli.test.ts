@@ -110,7 +110,7 @@ import { extractManifests } from "../packages/frontend-ts/src/extractors/index.j
 // (VERSAILLES-170): no grammarVersion/schemaVersion fields — the `$schema`
 // pointer string replaces the version ceremony.
 const SEEDED_CONFIG = {
-	$schema: "../../config.schema.json",
+	$schema: "../config.schema.json",
 	sourceRoots: ["src/**/*.ts"],
 	language: "typescript",
 	testFramework: "vitest",
@@ -225,6 +225,26 @@ async function writeSource(
 ): Promise<void> {
 	await mkdir(join(cwd, "src"), { recursive: true });
 	await writeFile(join(cwd, "src", fileName), content, "utf8");
+}
+
+async function readWorkspaceFile(
+	cwd: string,
+	fileName: string,
+): Promise<string> {
+	return readFile(join(cwd, ".versailles", fileName), "utf8");
+}
+
+/**
+ * A project cwd with NO .versailles/ — the fresh-init case. VERSAILLES-184:
+ * init scaffolds ONLY when no workspace exists, so the fresh-scaffold tests
+ * must run against a bare project (the pre-seeding freshWorkspace fixture
+ * would make init refuse).
+ */
+async function bareProjectCwd(name: string): Promise<string> {
+	const cwd = join(tempRoot, name);
+	await rm(cwd, { recursive: true, force: true });
+	await mkdir(cwd, { recursive: true });
+	return cwd;
 }
 
 /**
@@ -432,7 +452,7 @@ describe("runCli — usage errors (build-spec §12)", () => {
 
 describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => {
 	it("scaffolds the three jointly-loaded files with a schema-valid seeded config, exit 0", async () => {
-		const cwd = await freshWorkspace("i-scaffold");
+		const cwd = await bareProjectCwd("i-scaffold");
 		const result = await runCli(["init"], { cwd });
 
 		expect(result.ok).toBe(true);
@@ -453,7 +473,7 @@ describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => 
 	});
 
 	it("reports the created workspace dir in output", async () => {
-		const cwd = await freshWorkspace("i-output");
+		const cwd = await bareProjectCwd("i-output");
 		const result = await runCli(["init"], { cwd });
 
 		expect(result.output).toMatchObject({
@@ -461,13 +481,94 @@ describe("runCli init — scaffolds .versailles/ (build-spec §2, §12)", () => 
 		});
 	});
 
-	it("is idempotent: a second init on an existing workspace exits 0 and preserves the files", async () => {
-		const cwd = await freshWorkspace("i-idempotent");
-		await runCli(["init"], { cwd });
-		const second = await runCli(["init"], { cwd });
+	// VERSAILLES-184 Red-phase pin: the previous idempotency test (a second
+	// init exits 0 and re-seeds) encoded the bug — init silently re-wrote the
+	// stores over any authored content. Fixed behavior: init on an existing
+	// workspace REFUSES (exit 1, structured error) and leaves every workspace
+	// file byte-unchanged — the spec's "refuses to overwrite an existing one".
+	it("refuses to re-seed an existing workspace: exit 1, structured error, every file byte-unchanged", async () => {
+		const cwd = await freshWorkspace("i-existing-seeded");
+		const before = {
+			config: await readWorkspaceFile(cwd, "config.json"),
+			contracts: await readWorkspaceFile(cwd, "contracts.json"),
+			manifests: await readWorkspaceFile(cwd, "manifests.json"),
+		};
 
-		expect(second.ok).toBe(true);
-		expect(second.exitCode).toBe(0);
+		const result = await runCli(["init"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(result.errors.length).toBeGreaterThan(0);
+		expect(
+			result.errors.some((error) => /EXISTS|INIT|WORKSPACE/.test(error.code)),
+		).toBe(true);
+		expect(await readWorkspaceFile(cwd, "config.json")).toBe(before.config);
+		expect(await readWorkspaceFile(cwd, "contracts.json")).toBe(
+			before.contracts,
+		);
+		expect(await readWorkspaceFile(cwd, "manifests.json")).toBe(
+			before.manifests,
+		);
+	});
+
+	it("refuses to overwrite an existing workspace with authored contracts: exit 1, structured error, non-empty contracts.json survives byte-identical", async () => {
+		const cwd = await freshWorkspace("i-existing-authored");
+		// A genuinely authored store — a non-empty contracts.json with a real
+		// contract (the spec's refusal example: "a non-empty contracts.json").
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			contracts: {
+				OrderService: {
+					invariants: [],
+					operations: {
+						placeOrder: {
+							id: "OrderService.placeOrder",
+							params: [],
+							preconditions: [],
+							postconditions: [],
+							effects: [],
+							sourceHash: "authored-hash",
+						},
+					},
+				},
+			},
+		});
+		const before = {
+			config: await readWorkspaceFile(cwd, "config.json"),
+			contracts: await readWorkspaceFile(cwd, "contracts.json"),
+			manifests: await readWorkspaceFile(cwd, "manifests.json"),
+		};
+
+		const result = await runCli(["init"], { cwd });
+
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBe(1);
+		expect(result.errors.length).toBeGreaterThan(0);
+		expect(
+			result.errors.some((error) => /EXISTS|INIT|WORKSPACE/.test(error.code)),
+		).toBe(true);
+		// init never erases authored contracts/manifests — byte-identical.
+		expect(await readWorkspaceFile(cwd, "contracts.json")).toBe(
+			before.contracts,
+		);
+		expect(await readWorkspaceFile(cwd, "config.json")).toBe(before.config);
+		expect(await readWorkspaceFile(cwd, "manifests.json")).toBe(
+			before.manifests,
+		);
+	});
+
+	// VERSAILLES-184 edge: "exists with content" refuses. A .versailles/ that
+	// exists but contains NO workspace files has no content to destroy, so init
+	// re-scaffolds it (exit 0). DECISION for the implementation agent: if the
+	// fix instead treats ANY existing .versailles/ as a refusal trigger, relax
+	// this test — the content-bearing refusal tests above MUST stay.
+	it("re-scaffolds a completely empty .versailles/ directory (no workspace files) — exists-but-empty is not content, exit 0", async () => {
+		const cwd = await bareProjectCwd("i-existing-empty-dir");
+		await mkdir(join(cwd, ".versailles"), { recursive: true });
+
+		const result = await runCli(["init"], { cwd });
+
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
 		const entries = (await readdir(join(cwd, ".versailles"))).sort();
 		expect(entries).toEqual([
 			"config.json",
@@ -1980,5 +2081,80 @@ describe("runCli generate — emitted imports resolve to the real source file (V
 		const resolved = resolve(generatedDir, specifier);
 		expect(existsSync(resolved)).toBe(true);
 		expect(basename(resolved)).toBe("order.ts");
+	});
+});
+
+// VERSAILLES-191: the PBT opt-in is never a silent zero at the CLI surface.
+// When config.propertyBased.enabled is true and zero property blocks are
+// planned (every clause resolves example-only — a numeric-bound precondition
+// + a plain non-effects invariant here), the generate handler must surface a
+// non-silent non-blocking warning in CliResult.warnings explaining that zero
+// property blocks were planned and why — same tier as PROPERTY_UNPLANNABLE,
+// exit 0 (deterministic-generation.contract.yaml plan_property_blocks
+// must_not; build-spec §9.6).
+describe("runCli generate — the PBT opt-in is never a silent zero (VERSAILLES-191)", () => {
+	it("propertyBased enabled + zero property-plannable clauses → a non-silent warning explains zero property blocks were planned, generation stays exit 0 (non-blocking)", async () => {
+		const cwd = await freshWorkspace("g-property-silent-zero");
+		await writeWorkspaceFile(cwd, "config.json", {
+			...SEEDED_CONFIG,
+			propertyBased: { enabled: true, numRuns: 100 },
+		});
+		await writeWorkspaceFile(cwd, "contracts.json", {
+			contracts: {
+				OrderService: {
+					invariants: [
+						{ id: "OrderService.inv0", expr: 'status != "TERMINATED"' },
+					],
+					operations: {
+						withdraw: {
+							id: "OrderService.withdraw",
+							params: [{ name: "amount", type: "number" }],
+							preconditions: [
+								{ id: "OrderService.withdraw.pre0", expr: "amount >= 10" },
+							],
+							postconditions: [],
+							effects: [],
+							sourceHash: "withdraw-hash",
+						},
+					},
+				},
+			},
+		});
+		await writeWorkspaceFile(cwd, "manifests.json", {
+			manifests: {
+				OrderService: {
+					sourceHash: "man-order",
+					fields: { status: "string" },
+				},
+			},
+		});
+
+		const result = await runCli(["generate"], { cwd });
+
+		// Generation still succeeds — the warning tier is non-blocking
+		// (ADR-0004), exactly like PROPERTY_UNPLANNABLE: exit 0.
+		expect(result.ok).toBe(true);
+		expect(result.exitCode).toBe(0);
+		expect(result.errors).toEqual([]);
+
+		// NON-SILENT: at least one warning explains that zero property blocks
+		// were planned and why — the opt-in never produces zero blocks with
+		// zero warnings silently.
+		expect(result.warnings.length).toBeGreaterThan(0);
+		const zeroWarning = result.warnings.find((warning) =>
+			/zero property blocks/i.test(warning.detail),
+		);
+		expect(zeroWarning).toBeDefined();
+		expect(zeroWarning?.code.length).toBeGreaterThan(0);
+		expect(zeroWarning?.detail.length).toBeGreaterThan(0);
+
+		// Zero property blocks → the generated surface has NO fast-check
+		// surface for the operation.
+		const content = await readFile(
+			join(cwd, ".versailles", "generated", "OrderService.test.ts"),
+			"utf8",
+		);
+		expect(content).not.toContain("fast-check");
+		expect(content).not.toContain("fc.property");
 	});
 });

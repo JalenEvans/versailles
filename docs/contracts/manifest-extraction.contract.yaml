@@ -107,6 +107,7 @@ must:
   - "Preserve manifest entries for components not covered by the current scan, and remove them only when the caller passes the explicit prune flag (build-spec §7)."
   - "Scan only files under config.sourceRoots."
   - "Mechanically verify any externally-authored or externally-updated manifest content against actual source before writing manifests.json (ADR-0005)."
+  - "Lazy-load the typescript package only inside the extract path (never at module load) and, when it cannot be resolved, surface the structured EXTRACTOR_DEPENDENCY_MISSING error (detail: TypeScript extraction requires the 'typescript' package (npm i typescript)) so the CLI can report an actionable, installable-dependency error — never a raw module-not-found crash (VERSAILLES-190)."
 
 must_not:
   - "Must not treat manifests.json as a hand-authored source of truth — it is a derived artifact produced by static analysis (build-spec §3.3, ADR-0005)."
@@ -121,6 +122,7 @@ must_not:
   - "Must not omit the methods key from a refreshed covered entry with zero methods — an empty map {} must be persisted; omitting the key is reserved for preserved legacy entries the extractor never touched (VERSAILLES-25 follow-up)."
   - "Must not silently drop unresolvable method signatures — they follow the permissive policy and surface a warning (ADR-0004)."
   - "Must not place language-specific extraction code in the core — all extraction lives behind the ExtractorPlugin seam (ADR-0008)."
+  - "Must not let an unresolvable typescript dependency leak as a raw module-not-found throw — the lazy loader translates resolution failure into the structured EXTRACTOR_DEPENDENCY_MISSING error (VERSAILLES-190)."
 
 can:
   - "May surface per-field confidence metadata alongside manifest entries as an extension point (build-spec §5.1, ADR-0004)."
@@ -150,12 +152,14 @@ asserts:
   - "assert: a refreshed manifest entry for a component with zero methods persists methods: {} in the store — never an omitted key — so the planner's UNPLANNABLE_OPERATION guard fires for any planned op; only preserved legacy entries may lack the methods key (VERSAILLES-25 follow-up)."
   - "assert: an uncovered component's entry persists across extract_manifests_command runs without prune and is removed with prune."
   - "assert: no code path in the extractor invokes an LLM (no LLM call sites in the tool)."
+  - "assert: extraction when typescript is unresolvable fails with the structured EXTRACTOR_DEPENDENCY_MISSING error (detail matches /typescript/i) — never a raw module-not-found crash; importing the extractor module itself does not require typescript to be resolvable (VERSAILLES-190)."
 
 ---
 ## Changelog
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-09-04 | maintainer | Dependency-missing surface (VERSAILLES-190): the TypeScript extractor lazy-loads the typescript package inside the extract path only (never at module load); an unresolvable dependency surfaces the structured EXTRACTOR_DEPENDENCY_MISSING error — never a raw module-not-found crash (must/must_not/asserts) |
 | 2026-09-01 | maintainer | Per-field access and readonly capture (ADR-0021): the manifest now records each covered field's access (public | protected | private) and readonly from TS source modifiers (owns/purpose/invariants/must/must_not/can/asserts), and legacy manifest entries loaded without these fields default permissively to accessible (public) and not readonly (ADR-0004, ADR-0018). The structural sourceHash (build-spec §7 staleness hash) is unchanged |
 | 2026-08-11 | maintainer | Initial contract from docs/specs/manifest-extraction.md; build-spec §3.3, §7; ADR-0004/0005/0008/0009/0010 |
 | 2026-08-17 | maintainer | Extended for pipeline runnability (PR fix/generator-emitter-runnability): per-component method metadata (name, static/instance, ordered params, return type where determinable), sourcePath persistence through the manifests.json store, and sourceHash extended to cover sorted field pairs + sorted method-signature records (method bodies still excluded). Backs VERSAILLES-20/21 |

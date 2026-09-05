@@ -57,7 +57,9 @@ import type {
  *    table lookup: the same shape returns the same strategy across repeated
  *    calls, across generated shapes, and across shuffled call orders (the
  *    §9.6 strategy table is pinned exactly, including the expected-rejection
- *    pbtEnabled gate).
+ *    AND postcondition-literal pbtEnabled gates — VERSAILLES-191: a
+ *    literal-computable postcondition is a region property, property when PBT
+ *    is enabled, example only on the disabled/absent path).
  *
  * 3. Seed stability — derivePropertySeed(clauseIds, grammarVersion) is stable
  *    across repeated calls for ANY generated clause-id set (always an int32),
@@ -468,6 +470,11 @@ const STRATEGY_TABLE: Array<{
 	{
 		shape: { surface: "postcondition", kind: "literal" },
 		options: { pbtEnabled: true },
+		expected: "property",
+	},
+	{
+		shape: { surface: "postcondition", kind: "literal" },
+		options: { pbtEnabled: false },
 		expected: "example",
 	},
 	{

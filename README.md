@@ -61,6 +61,8 @@ npm install -g versailles-dbc@beta
 
 Then `versailles <command>` works anywhere. The npm package is `versailles-dbc`; the CLI binary is `versailles` ([ADR-0001](docs/decisions/0001-package-and-cli-naming.md)).
 
+> **CLI-only:** the package is a command-line tool, not a library — there is no in-process import surface in v1. Integrate by running the `versailles` binary as a subprocess: it speaks structured JSON on stdout and stable exit codes (0/1/2) for CI ([ADR-0010](docs/decisions/0010-cli-never-drives-llm.md), [ADR-0023](docs/decisions/0023-published-entry-point-cli-only.md)). `import ... from "versailles-dbc"` is not supported.
+
 > **Beta:** the current release is `0.1.0-beta.1`, published on the `beta` dist-tag — the `@beta` in the install command is intentional until the first stable release. Prefer installing from source? See [Contributing](#contributing).
 
 ## Quick start

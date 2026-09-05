@@ -82,7 +82,7 @@ drifts from what is committed.
 
 ```json
 {
-  "$schema": "../../config.schema.json",
+  "$schema": "../config.schema.json",
   "sourceRoots": ["src/**/*.ts"],
   "language": "typescript",
   "testFramework": "vitest",

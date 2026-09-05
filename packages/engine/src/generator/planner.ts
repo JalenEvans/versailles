@@ -49,6 +49,7 @@ import {
 import type {
 	CaseKind,
 	CoverageManifest,
+	CoverageStatus,
 	OperationCaseGroup,
 	PlannedCase,
 	PlannedSuite,
@@ -403,13 +404,23 @@ export function planTestCases(context: VersaillesContext): PlannedSuite {
 		}
 	}
 
-	return { operations, invariantCases, clauseIds, warnings };
+	// VERSAILLES-186: the greenfield signal is a null manifests store — the
+	// loader tolerates missing manifests.json when contracts.json is present
+	// (workspace.ts:720-735), and without manifests the generated tests cannot
+	// load until the source exists (TDD-Red, ADR-0011), so their coverage is
+	// provisional, never verified. Manifests present (brownfield) → verified.
+	const coverageStatus: CoverageStatus =
+		context.manifests === null ? "provisional" : "verified";
+
+	return { operations, invariantCases, clauseIds, warnings, coverageStatus };
 }
 
 /**
  * Builds the traceability manifest: every source clause ID → the test IDs
  * that trace it; clauses with no generated test stay representable as empty
- * arrays (§9.3). Pure function of the suite — deterministic.
+ * arrays (§9.3). Pure function of the suite — deterministic. `status`
+ * (VERSAILLES-186) mirrors the suite's coverageStatus ("verified" on
+ * brownfield, "provisional" on greenfield; absent suite field → "verified").
  */
 export function coverageManifest(suite: PlannedSuite): CoverageManifest {
 	const coverage: Record<string, string[]> = {};
@@ -424,7 +435,7 @@ export function coverageManifest(suite: PlannedSuite): CoverageManifest {
 			}
 		}
 	}
-	return { coverage };
+	return { coverage, status: suite.coverageStatus ?? "verified" };
 }
 
 function allCases(suite: PlannedSuite): PlannedCase[] {

@@ -18,10 +18,14 @@
 import { join } from "node:path";
 
 import {
+	ExtractorDependencyMissingError,
 	extractManifests,
 	mergeManifests,
 } from "../../../../frontend-ts/src/extractors/index.js";
-import type { ManifestMap } from "../../../../frontend-ts/src/extractors/types.js";
+import type {
+	ExtractorResult,
+	ManifestMap,
+} from "../../../../frontend-ts/src/extractors/types.js";
 import {
 	expandSourceRoots,
 	extractorWarnings,
@@ -56,7 +60,26 @@ export async function handleExtractManifests(
 	// The CLI's cwd is the PROJECT root (the dir containing .versailles/):
 	// sourcePath values are anchored project-root-relative so the generator's
 	// join(cwd, sourcePath) resolves to the real file (VERSAILLES-24).
-	const extracted = extractManifests(roots, cwd);
+	//
+	// VERSAILLES-191 W1: the designed extractor dependency error must survive
+	// the handler boundary as its own code (EXTRACTOR_DEPENDENCY_MISSING) —
+	// never the generic INTERNAL mask from runCli's catch. Everything else
+	// rethrows to that last-resort catch.
+	let extracted: ExtractorResult;
+	try {
+		extracted = extractManifests(roots, cwd);
+	} catch (error) {
+		if (error instanceof ExtractorDependencyMissingError) {
+			return {
+				ok: false,
+				errors: [{ code: error.code, detail: error.detail }],
+				warnings: [],
+				exitCode: 1,
+				output: {},
+			};
+		}
+		throw error;
+	}
 	const warnings = extractorWarnings(extracted.warnings);
 
 	// The loader store format ({ sourceHash, fields: Record, sourcePath?,

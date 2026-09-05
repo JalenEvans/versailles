@@ -15,6 +15,12 @@ The generator is the core value proposition of Versailles (ADR-0002): a pure, de
 
 Seeded property-based test (PBT) emission is an additive, opt-in capability (ADR-0017): when `config.propertyBased.enabled` is true, the generator additionally emits property blocks (vitest/fast-check first) whose per-param arbitraries derive from typeRefs and numeric constraint bounds, whose contract clauses are codegen'd into the test as the oracle, and whose runs are pinned by a seed derived deterministically from the context (clause IDs + grammar version) — so generation stays a pure function and regeneration stays byte-identical even though the emitted test explores many inputs at run time (ADR-0002 determinism re-scoped to generation-time only, ADR-0017).
 
+Property blocks are planned per the strategy table (build-spec §9.6): PBT is used when necessary, not when unnecessary (VERSAILLES-191). A clause gets a property block when the concrete cases cannot characterize the whole region it constrains — compound preconditions, predicate-call preconditions, both-side-fieldRef preconditions, uncomputable postconditions, effects-overlapping invariants, expected-rejection, and **computable postconditions**: a `field op expr` relation like `balance == old(balance) + price` is a region property — the concrete satisfaction case pins one deterministic point, the property block checks the relation across the valid region. Shapes the concrete cases fully characterize stay example-only (the boundary sweep for numeric-bound preconditions, the partition sweep for `in` clauses, and vacuous preservation for plain invariants with no effects-overlap). The opt-in is never a silent no-op: when `propertyBased.enabled` is true and zero property blocks are planned, a non-silent non-blocking warning explains why.
+
+Coverage semantics distinguish **verified** from **provisional** (VERSAILLES-186). On the brownfield path — manifests present, module imports resolvable — `coverage.json` and the generated `// traces:` comments report verified coverage of generated tests. On the greenfield path — contracts only, no manifests, no source — the generated tests cannot load until the source exists (the deliberate TDD-Red phase, ADR-0011), so their coverage is **provisional**: tests are generated and traced but not executable, and the output surfaces that state instead of reading as verified coverage.
+
+Assertion receivers are fully shape-aware (VERSAILLES-185): void-returning instance operations bind the component instance and assert `instance.<field>`; **primitive-returning** instance operations (manifest `returnType` number/string/boolean) do the same — `result.<field>` on a primitive return value is always `undefined`, so field-based postconditions on a primitive-returning operation assert the bound instance's state, never the return value. Object-returning operations keep `result.<field>` assertions.
+
 Emission is **total** (ADR-0021): for every valid workspace, the emitted suite type-checks under the documented baseline strict tsconfig — the example ships `strict: true` + `allowImportingTsExtensions` and its CI gate runs `tsc --noEmit` over the generated output — or the emitter surfaces a non-silent `EMISSION_UNRENDERABLE` warning (same tier as `UNPLANNABLE_OPERATION` / `PROPERTY_UNPLANNABLE`); silently type-broken output never ships. Soundness comes from a complete input model: the manifest carries per-field access (`fieldAccess`: public/protected/private) and `fieldReadonly`, PBT oracle lambdas are emitted with explicit param types from contract/manifest types (never implicit `any`), and non-public fields are reached through the deliberate, documented `(instance as any).<field>` cast decided from manifest access data — public fields are never cast. The planner is split into responsibility-bounded modules (ADR-0020) — `planner` (thin orchestrator), `concrete-cases`, `input-synthesis`, `clause-analysis`, `evaluator`, `property-planning`, and the shared `oracle` — so these emission decisions land in named, reviewable seams.
 
 ## Scope
@@ -215,6 +221,33 @@ Emission is **total** (ADR-0021): for every valid workspace, the emitted suite t
 - **When** the generator plans property blocks
 - **Then** the clause surfaces a non-silent non-blocking `PROPERTY_UNPLANNABLE` warning in `CliResult.warnings` (exit 0 — same tier as `PREDICATE_UNPLANNABLE`), the property block is skipped, and the clause's coverage gap stays visible in `coverage.json` (VERSAILLES-165)
 
+### Primitive-returning operations assert instance state, never `result.<field>` (VERSAILLES-185)
+
+- **Given** an instance operation with a primitive manifest `returnType` (e.g. `double(n: number): number` with `returnType: "number"`) and a field-based postcondition (e.g. `total == old(total) + n`)
+- **When** the emitter renders the postcondition-satisfaction / invariant accept case
+- **Then** the case binds the component instance and asserts instance state — `const instance = new <Component>(); instance.<field> = <captured>; instance.<op>(...); expect(instance.<field>).toEqual(<literal>)` — never `const result = <call>; expect(result.<field>)`, which reads `undefined` on a primitive return and can never pass (build-spec §9.4; VERSAILLES-185)
+- **And** an object-returning operation (returnType absent or non-primitive per the manifest model) keeps the `result.<field>` render — no regression on the existing receiver behavior
+
+### Greenfield coverage is provisional, never verified (VERSAILLES-186)
+
+- **Given** a greenfield workspace (contracts present, no manifests, no source — the deliberate TDD-Red phase)
+- **When** `versailles generate` runs
+- **Then** the generated tests still trace every clause, but `coverage.json` (and the output surface) report that coverage as **provisional** — tests generated and traced, not executable, because the module import cannot load until the source exists — and the output never reads as verified coverage (build-spec §9.3; VERSAILLES-186)
+- **And** on the brownfield path (manifests present, imports resolvable) the coverage report is unchanged and verified
+
+### PBT opt-in is never a silent zero (VERSAILLES-191)
+
+- **Given** `config.propertyBased.enabled: true` and a contract whose clauses all resolve to example-only strategies
+- **When** the generator plans property blocks
+- **Then** a non-silent non-blocking warning appears in `CliResult.warnings` (same tier as `PROPERTY_UNPLANNABLE`, exit 0) explaining that zero property blocks were planned and why — the opt-in never produces zero blocks with zero warnings silently
+
+### Property tests are used when necessary, not when unnecessary (VERSAILLES-191)
+
+- **Given** `config.propertyBased.enabled: true`
+- **When** the strategy table classifies a clause
+- **Then** a property block is planned for shapes the concrete cases cannot characterize: compound preconditions, predicate-call preconditions, both-side-fieldRef preconditions, uncomputable postconditions, effects-overlapping invariants, expected-rejection, and **computable postconditions** (`field op expr` relations like `balance == old(balance) + price` are region properties — the concrete satisfaction case pins one deterministic point, the property block checks the relation across the valid region)
+- **And** a property block is NOT planned for shapes the concrete cases fully characterize: numeric-bound preconditions (boundary sweep), `in` clauses (partition sweep), and plain invariants with no effects-overlap (vacuously preserved) — PBT is used when necessary, not when unnecessary
+
 ## Constraints
 
 - `must_not` run generation against a context where `isValid: false` — invalid contracts block generation (build-spec §9).
@@ -235,6 +268,10 @@ Emission is **total** (ADR-0021): for every valid workspace, the emitted suite t
 - The generator `must_not` emit silently type-broken output — every emitted suite either type-checks under the documented baseline strict tsconfig (incl. `allowImportingTsExtensions`) or surfaces a non-silent `EMISSION_UNRENDERABLE` warning; a silent type error never ships (ADR-0021).
 - The generator `must_not` emit PBT oracle lambdas with implicit-`any` params — every oracle lambda param carries an explicit type derived from the contract/manifest types (ADR-0021).
 - The generator `must_not` cast public-field instance access — `(instance as any).<field>` is reserved for non-public (protected/private) fields, decided from the manifest `fieldAccess`/`fieldReadonly` data (ADR-0021).
+- The generator `must_not` assert `result.<field>` on a primitive-returning operation — the assertion receiver `must` be the bound component instance (`instance.<field>`), never the primitive return value, which reads `undefined` (build-spec §9.4; VERSAILLES-185).
+- The generator `must_not` present greenfield coverage as verified — when manifests/source are absent and the generated tests cannot load, `coverage.json` `must` report the coverage as provisional (tests generated and traced, not executable), never as verified coverage (build-spec §9.3; VERSAILLES-186).
+- The generator `must_not` emit zero property blocks with zero warnings when `config.propertyBased.enabled` is true — a contract with no property-plannable clauses `must` surface a non-silent non-blocking warning explaining why (VERSAILLES-191).
+- The strategy table `must_not` route a computable postcondition (`field op expr` — a region property) to example-only — it `must` plan a property block when PBT is enabled (VERSAILLES-191).
 
 ## Non-Goals
 
@@ -250,6 +287,7 @@ Emission is **total** (ADR-0021): for every valid workspace, the emitted suite t
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-09-04 | maintainer | Beta triage (VERSAILLES-185/186/191): primitive-returning operations assert instance state, never `result.<field>`; greenfield coverage is provisional (tests generated and traced, not executable) until source exists, never verified; PBT strategy table — computable postconditions are region properties and get property blocks, boundary/partition/vacuous shapes stay example-only — and the PBT opt-in is never a silent zero (non-silent warning when zero blocks are planned) |
 | 2026-09-01 | maintainer | W1 emitter follow-up (VERSAILLES-175): container op-param typeRefs render recursively on oracle lambda params (`list<X>` → `X[]`, `optional<X>` → `X | undefined`, e.g. `(tags: string[]) => ...`), and an op-param with no renderable TS form even after the container extension (e.g. `list<Order>`) surfaces `EMISSION_UNRENDERABLE` with its oracles omitted from the block |
 | 2026-09-01 | maintainer | ADR-0021 emission soundness + ADR-0020 planner split reconciled (VERSAILLES-182): totality of emission — generated output type-checks under the documented baseline strict tsconfig (`strict: true` + `allowImportingTsExtensions`) or a non-silent `EMISSION_UNRENDERABLE` warning surfaces, never silently type-broken output; PBT oracle lambdas carry explicit param types from contract/manifest types (`(sku: string) => ...`), never implicit `any`; non-public fields are reached via the deliberate, documented `(instance as any).<field>` cast decided from manifest `fieldAccess`/`fieldReadonly` — public fields never cast; planner split into responsibility-bounded modules (`planner`, `concrete-cases`, `input-synthesis`, `clause-analysis`, `evaluator`, `property-planning`, `oracle`) |
 | 2026-08-29 | maintainer | Mirrored the FIELD-BOUND contract delta (VERSAILLES-165 final implementation, FIELD-BOUND + W1 + Fix-1/Fix-2): new FIELD-BOUND scenario — a bothSideFieldRef equality with a manifest-FIELD operand (`status == newStatus`) is planned, never unplannable, rendering op-params only with the field mapped to `instance.<field>`; mirror scenario example corrected to param-param (`fromBalance == toBalance`); `PROPERTY_UNPLANNABLE` scenarios extended with field-operand couplings, inverted derived bounds, zero-param field-field equalities, and the field-referencing sibling-guard rule |

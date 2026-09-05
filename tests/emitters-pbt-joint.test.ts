@@ -1601,3 +1601,140 @@ describe("emitted joint-sampling properties RUN under the REAL vitest runner (W1
 		}
 	});
 });
+
+// ── VERSAILLES-191: the emitter must CAPTURE pre-call state for a
+// field-op-expr postcondition's old() oracle (Red today) ─────────────────────
+// A newly-enabled field-op-expr postcondition with old() — e.g.
+// `balance == old(balance) + price` — codegens to a preState-carrying oracle
+// `(balance, price, preState) => balance === preState.balance + price`. The
+// FIELD-BOUND field-mapping renders every non-op-param oracle parameter as
+// `instance.<field>` — and `preState` is NOT a manifest field, so the emitter
+// currently emits `expect(OrderService_addItem_post0((instance as any).balance,
+// price, instance.preState)).toBe(true)`: a runtime TypeError
+// (`instance.preState` is undefined) because the pre-call state was never
+// captured. The oracle's `preState` parameter must bind a CAPTURED object,
+// not an instance field. The emitter MUST emit, before the call:
+//
+//   const preState = { balance: (instance as any).balance };
+//
+// — capturing the fields the oracle's `old(field)` references off the bound
+// instance BEFORE the op call mutates them — and pass THAT object to the
+// oracle assertion (`preState`, never `instance.preState`). This is the
+// property-block analogue of the concrete-case emitter's captured pre-state
+// seed (`instance.<field> = <captured>;` before the call, build-spec §9.4 /
+// VERSAILLES-26): a fresh instance carries no pre-call state.
+function execPreStateContext(): VersaillesContext {
+	const contracts: ContractsFile = {
+		contracts: {
+			OrderService: {
+				invariants: [],
+				operations: {
+					addItem: {
+						id: "OrderService.addItem",
+						params: [
+							{ name: "sku", type: "string" },
+							{ name: "price", type: "number" },
+						],
+						preconditions: [
+							{ id: "OrderService.addItem.pre0", expr: 'sku != ""' },
+							{ id: "OrderService.addItem.pre1", expr: "price > 0" },
+						],
+						postconditions: [
+							{
+								id: "OrderService.addItem.post0",
+								expr: "balance == old(balance) + price",
+							},
+						],
+						effects: [{ field: "balance", kind: "mutate" }],
+						sourceHash: "exec-prestate-hash",
+					},
+				},
+			},
+		},
+	};
+	const manifests: ManifestsFile = {
+		manifests: {
+			OrderService: {
+				sourceHash: "man-exec-prestate",
+				fields: { balance: "number" },
+			},
+		},
+	};
+	return execContext(contracts, { enabled: true, numRuns: 100 }, manifests);
+}
+
+describe("emitSuite vitest — a field-op-expr postcondition with old() captures pre-call state, never instance.preState (VERSAILLES-191, Red today)", () => {
+	it("emits `const preState = { ... }` capturing the referenced fields BEFORE the call and passes the captured object to the oracle — never instance.preState", () => {
+		const ctx = execPreStateContext();
+		const suite = planTestCases(ctx);
+		const plan = planPropertyBlocks(suite, ctx);
+
+		// Planner pin: the field-op-expr postcondition is a REGION property —
+		// planned as a satisfies block (never example-only).
+		expect(plan.strategies["OrderService.addItem.post0"]).toBe("property");
+		const descriptor = plan.descriptors.find((d) =>
+			d.traces.includes("OrderService.addItem.post0"),
+		);
+		expect(descriptor).toBeDefined();
+		// The oracle carries the preState param (old(balance) → preState.balance).
+		expect(descriptor?.clauses[0].code).toBe(
+			"(balance, price, preState) => balance === preState.balance + price",
+		);
+
+		const files = emitSuite(suite, "vitest", {
+			generatedDir: ".",
+			methods: {
+				OrderService: {
+					addItem: {
+						static: false,
+						params: ["sku", "price"],
+						returnType: "void",
+					},
+				},
+			},
+			fieldAccess: { OrderService: { balance: "private" } },
+			fieldTypes: { OrderService: { balance: "number" } },
+			propertyPlan: plan,
+			propertyNumRuns: 100,
+		});
+		const order = files.find((file) =>
+			file.path.endsWith("OrderService.test.ts"),
+		);
+		expect(order).toBeDefined();
+
+		// 1. The oracle's preState parameter binds a CAPTURED object — the
+		//    fields the oracle's old(field) references, read off the bound
+		//    instance. Never a dead `const preState = undefined` and never a
+		//    missing capture (the block must not reference instance.preState).
+		expect(order?.content).toContain(
+			"\t\t\tconst preState = { balance: (instance as any).balance };",
+		);
+		expect(order?.content).not.toContain("instance.preState");
+
+		// 2. The oracle assertion passes the CAPTURED object (preState), not
+		//    instance.preState; the post-state field read stays instance.<field>.
+		expect(order?.content).toContain(
+			"expect(OrderService_addItem_post0((instance as any).balance, price, preState)).toBe(true);",
+		);
+
+		// 3. The capture happens at the CORRECT time: after the instance is
+		//    bound, BEFORE the op call mutates the field. The emitted block
+		//    order must be: instance → preState capture → call → assertion.
+		const captureIndex = order?.content.indexOf(
+			"\t\t\tconst preState = { balance: (instance as any).balance };",
+		);
+		// NOTE: must disambiguate from the CONCRETE case's V-26 instance-bound
+		// call (`instance.addItem("initial", 1);`, tab-depth 2) which sits at an
+		// EARLIER index — the ordering assertion targets the property block's
+		// op call, uniquely identified by its parameter args (sku, price).
+		const callIndex = order?.content.indexOf("instance.addItem(sku, price)");
+		const bindIndex = order?.content.indexOf(
+			"\t\t\tconst instance = new OrderService();",
+		);
+		expect(captureIndex).toBeGreaterThan(-1);
+		expect(callIndex).toBeGreaterThan(-1);
+		expect(bindIndex).toBeGreaterThan(-1);
+		expect(bindIndex).toBeLessThan(captureIndex ?? -1);
+		expect(captureIndex ?? -1).toBeLessThan(callIndex ?? -1);
+	});
+});

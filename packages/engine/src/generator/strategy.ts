@@ -25,7 +25,7 @@
  * | precondition  compound (and/or)         | property                |
  * | precondition  bothSideFieldRef          | property                |
  * | precondition  other / uncomputable      | property                |
- * | postcondition literal (computable)      | example                 |
+ * | postcondition literal (computable)      | property (pbtEnabled) / example (disabled) |
  * | postcondition uncomputable              | property                |
  * | invariant     effects-overlap           | property                |
  * | invariant     plain (no effect overlap) | example                 |
@@ -35,9 +35,14 @@
  * The planner feeds the RESOLVED classification: a top-level compound wins
  * over any numeric-bound sub-expression (a clause that is BOTH numeric-
  * bounded AND compound → property — compound precedence). The selector never
- * re-derives the classification from the raw Node. expected-rejection is the
- * ONLY shape whose strategy depends on pbtEnabled; every other shape ignores
- * the flag.
+ * re-derives the classification from the raw Node. expected-rejection and
+ * postcondition-literal are the ONLY shapes whose strategy depends on
+ * pbtEnabled; every other shape ignores the flag. VERSAILLES-191: a
+ * literal-computable postcondition (`field op expr` — e.g. `balance ==
+ * old(balance) + price`) is a REGION property — the concrete satisfaction
+ * case pins one deterministic point, the property block checks the relation
+ * across the valid region — so it plans a property block when PBT is enabled
+ * and only falls back to example when PBT is off (the v1 output).
  */
 
 export type PbtStrategy = "example" | "property" | "property-with-falsifier";
@@ -98,8 +103,13 @@ export function selectStrategy(
 			return "property";
 		case "postcondition":
 			switch (shape.kind) {
+				// VERSAILLES-191: a literal-computable postcondition is a
+				// `field op expr` REGION PROPERTY — the concrete satisfaction
+				// case pins one point; the property block checks the relation
+				// across the valid region. property when PBT is enabled,
+				// example only on the disabled/absent v1 path.
 				case "literal":
-					return "example";
+					return options.pbtEnabled ? "property" : "example";
 				case "uncomputable":
 					return "property";
 			}

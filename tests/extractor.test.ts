@@ -1111,3 +1111,28 @@ describe("extractManifests — sourceHash covers method signatures, never bodies
 		);
 	});
 });
+
+// ── VERSAILLES-190 regression guard ────────────────────────────────────────
+// The fix makes the `typescript` runtime dependency lazy (optional/peer/dev):
+// the extractor must no longer import the compiler API at module load. These
+// tests run WITHOUT the typescript-unavailable mock (that pin lives in
+// tests/extractor-typescript-dependency.test.ts) — vitest/bun run in this
+// repo, where the real `typescript` IS installed — so this guard asserts the
+// happy path is unchanged: lazy-loading must never regress real extraction.
+
+describe("typescriptExtractor — real extraction unchanged with `typescript` present (VERSAILLES-190 regression guard)", () => {
+	it("extracts manifests normally through the plugin seam", async () => {
+		const dir = await fixtureDir("dep-present");
+		await writeFixture(dir, "account.ts", ACCOUNT_SOURCE);
+
+		const result = extractManifests([dir]);
+
+		expect(result.manifests.Account).toBeDefined();
+		expect(fieldOf(result.manifests.Account, "balance")).toMatchObject({
+			name: "balance",
+			typeRef: "number",
+			access: "public",
+			readonly: false,
+		});
+	});
+});

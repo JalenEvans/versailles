@@ -54,6 +54,12 @@ The `.versailles/` workspace — `config.json`, `contracts.json` (with its top-l
 - **When** the loader runs
 - **Then** the file loads permissively with no `VERSION_MISMATCH` — deprecated fields stay parseable until a tool-driven `migrate` rewrites them (ADR-0018, ADR-0004)
 
+### The seeded config `$schema` pointer resolves to the project-root schema (VERSAILLES-187)
+
+- **Given** a freshly initialized workspace (`versailles init` seeded `.versailles/config.json`)
+- **When** the config's `$schema` pointer is resolved relative to `.versailles/config.json`
+- **Then** it resolves to the real schema at the project root (`<project>/config.schema.json`) — editor/tooling JSON-schema validation is live, never dead; the pointer never resolves one level above the project root (ADR-0018, build-spec §3.1; VERSAILLES-187)
+
 ### Config is machine-checkable against the ADR-0009 matrix
 
 - **Given** `config.json` with `testFramework: "jest"` (or any value outside `vitest | xunit | pytest`, or a `language` outside `typescript | csharp | python`)
@@ -110,6 +116,7 @@ The `.versailles/` workspace — `config.json`, `contracts.json` (with its top-l
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-09-04 | maintainer | Beta triage (VERSAILLES-187): the seeded `config.json` `$schema` pointer resolves to the project-root `config.schema.json` — editor validation is live, never dead |
 | 2026-08-11 | maintainer | Initial draft from build-spec §2, §3.1, §6, §8; ADR-0009/0010 |
 | 2026-08-13 | maintainer | Removed Linked Plans section — execution plans are tracked outside the public repo |
 | 2026-08-17 | maintainer | Acknowledged the manifests.json store entry shape — `sourcePath` (never empty for covered entries; legacy entries lacking it preserved as-is) and per-component `methods` metadata — and that the loader surfaces both on `ManifestsFile` entries for downstream consumers (generate handler → emitter modulePaths + call shape). Aligns with the manifest-extraction/deterministic-generation extension (fix/generator-emitter-runnability) |

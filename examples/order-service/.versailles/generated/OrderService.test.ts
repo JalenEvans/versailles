@@ -30,32 +30,20 @@ describe("addItem", () => {
 		expect((instance as any).balance).toEqual(51);
 	});
 
-	// traces: "OrderService.addItem.pre0"
+	// traces: "OrderService.addItem.post0"
 	it("OrderService.addItem.property-satisfies-0", () => {
 		const sku = fc.string();
 		const price = fc.integer();
-		const OrderService_addItem_pre0 = (sku: string) => sku !== "";
+		const OrderService_addItem_post0 = (balance: number, price: number, preState: { balance: number }) => balance === preState.balance + price;
 		const OrderService_addItem_pre1 = (price: number) => price > 0;
-		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
-			new OrderService().addItem(sku, price);
-			expect(OrderService_addItem_pre0(sku)).toBe(true);
-		});
-		fc.assert(prop, { seed: 1514751120, numRuns: 100 });
-	});
-
-	// traces: "OrderService.inv0"
-	it("OrderService.addItem.property-invariant-preserving-0", () => {
-		const sku = fc.string();
-		const price = fc.integer();
 		const OrderService_addItem_pre0 = (sku: string) => sku !== "";
-		const OrderService_addItem_pre1 = (price: number) => price > 0;
-		const OrderService_inv0 = (balance: number) => balance >= 0;
 		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
 			const instance = new OrderService();
+			const preState = { balance: (instance as any).balance };
 			instance.addItem(sku, price);
-			expect(OrderService_inv0((instance as any).balance)).toBe(true);
+			expect(OrderService_addItem_post0((instance as any).balance, price, preState)).toBe(true);
 		});
-		fc.assert(prop, { seed: 1325625372, numRuns: 100 });
+		fc.assert(prop, { seed: -1619736799, numRuns: 100 });
 	});
 
 });
