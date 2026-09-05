@@ -1088,15 +1088,96 @@ export function planPropertyBlocks(
 				// carry no `guards` (keeps the record/field-bound pins
 				// byte-identical).
 				const ownOracleParams = oracleParamsOf(code);
+				// B2 (valid-region soundness, VERSAILLES-191): a field-op-expr
+				// relation (e.g. `balance == old(balance) + price`) renders the
+				// emitter's FIELD-BOUND layout, which samples ONLY op-param
+				// arbitraries. The sampled values must stay inside the
+				// operation's VALID region or the real source throws and the
+				// generated property fails at runtime (the "Property failed
+				// after 2 tests … Counterexample: ["",0]" blocker). Every op
+				// param must therefore be covered — fully bounded (both bounds
+				// resolved → the bounds object constrains the arbitrary) or
+				// filterable by a renderable SINGLE-param guard oracle (an
+				// example-strategy precondition like `price > 0` / `sku != ""`
+				// that joined exampleGuardOracles, or a single-param
+				// property-strategy sibling oracle). A param that a precondition
+				// REFERENCES yet is covered by neither is leaky — the per-param
+				// filter cannot bound it — so the clause falls back to
+				// PROPERTY_UNPLANNABLE (direction (b)) with a clear warning.
+				// Params with NO referencing precondition are genuinely
+				// unconstrained: every sampled value is valid, so the block
+				// stays planned (the computable-postcondition region property).
+				const relation = isFieldOpExprRelation(ast);
+				if (
+					relation &&
+					(outcome === "satisfies" || outcome === "invariant-preserving")
+				) {
+					const singleParamGuards = [
+						...exampleGuardOracles,
+						...guardOracles.filter((o) => oracleParamsOf(o.code).length <= 1),
+					];
+					const preconditionRefs = new Set<string>();
+					for (const pre of operation.preconditions ?? []) {
+						const preAst = context.parsedContracts[pre.id];
+						if (preAst !== undefined) {
+							collectFieldRefs(preAst, preconditionRefs);
+						}
+					}
+					for (const spec of params) {
+						if (spec.bounds !== undefined) {
+							continue;
+						}
+						if (!preconditionRefs.has(spec.param)) {
+							continue;
+						}
+						const filterable = singleParamGuards.some((o) =>
+							oracleParamsOf(o.code).includes(spec.param),
+						);
+						if (!filterable) {
+							warnings.push({
+								code: "PROPERTY_UNPLANNABLE",
+								field: clauseId,
+								detail: `Cannot plan a property block for ${clauseId}: operation ${componentName}.${operationName} param "${spec.param}" is constrained by a precondition the FIELD-BOUND layout cannot apply as a per-param filter (no full bounds object and no renderable single-param guard oracle) — the sampled region would leave the valid region and the generated property would fail at runtime`,
+							});
+							return;
+						}
+					}
+				}
+				// §9.6 guard-set wiring (B2): the renderable single-param guard
+				// oracles a block's per-param `.filter` layout consumes. For a
+				// single-param own-clause descriptor the guard set is the
+				// example-strategy subset (exampleGuardOracles — the clauses
+				// with no descriptor of their own). A field-op-expr relation
+				// with an UNBOUNDED op param needs the FULL single-param guard
+				// set: the example-strategy oracles PLUS the single-param
+				// guard-candidate oracles (guardOracles) — the property-strategy
+				// clauses like `sku != ""` that the field-bound sibling
+				// BLOCKED from planning their own descriptor (multiParamFieldBound),
+				// so their oracle reaches the FIELD-BOUND layout only via the
+				// relation descriptor's guards. A field-op-expr relation whose
+				// params are ALL fully bounded carries no guards (the bounds
+				// object already constrains the arbitraries); bothSideFieldRef
+				// equality field-bound descriptors (Center B1) and mirror /
+				// record own-clause descriptors never filter with sibling
+				// guards (byte-identical pins).
+				const guardsToAttach =
+					ownOracleParams.length <= 1
+						? exampleGuardOracles
+						: relation && params.some((spec) => spec.bounds === undefined)
+							? [
+									...exampleGuardOracles,
+									...guardOracles.filter(
+										(o) => oracleParamsOf(o.code).length <= 1,
+									),
+								]
+							: [];
 				descriptors.push({
 					id: nextId(outcome),
 					component: componentName,
 					operation: operationName,
 					params,
 					clauses: [{ clauseId, code }],
-					...(exampleGuardOracles.length > 0 && ownOracleParams.length <= 1
-						? { guards: exampleGuardOracles }
-						: {}),
+					...(guardsToAttach.length > 0 ? { guards: guardsToAttach } : {}),
 					outcome,
 					traces: [clauseId],
 					// Seed wiring: the explicit override wins; otherwise the

@@ -307,16 +307,20 @@ export type PropertyDescriptor = {
 	/**
 	 * Sibling guard oracles (build-spec §9.6 "single-param oracles keep the
 	 * per-param arbitrary + .filter shape", the guard-set soundness fix): the
-	 * renderable SINGLE-PARAM example-strategy clauses of the same
-	 * (component, operation) — e.g. an inline numeric-bound precondition
-	 * `price > 0` whose own strategy stays "example" (no property block of
-	 * its own; the concrete boundary cases remain the spine). The emitter
-	 * renders each guard as a `.filter(<oracle>)` on the sibling block's
-	 * arbitrary so a sampled input never violates a sibling precondition —
-	 * never a bare unbounded `fc.integer()` for a lower-only bound. Present
-	 * ONLY on descriptors whose own clause oracle is single-param (the
-	 * per-param `.filter` layout); multi-param own-clause descriptors
-	 * (mirror / record / FIELD-BOUND) never filter with sibling guards.
+	 * renderable SINGLE-PARAM guard clauses of the same (component, operation)
+	 * that the emitter renders as `.filter(<oracle>)` on the block's arbitrary
+	 * so a sampled input never violates a sibling precondition — never a bare
+	 * unbounded `fc.integer()` for a lower-only bound. Two producers:
+	 * example-strategy clauses (`price > 0` — no property block of its own;
+	 * the concrete boundary cases remain the spine) and, for a field-op-expr
+	 * relation (VERSAILLES-191) with an UNBOUNDED op param, the single-param
+	 * guard-candidate oracles (`sku != ""` — property-strategy clauses the
+	 * field-bound sibling blocked from planning, so their oracle reaches the
+	 * FIELD-BOUND layout only through this descriptor). Present on
+	 * single-param own-clause descriptors (the per-param `.filter` layout) and
+	 * on unbounded-param field-op-expr relations (the FIELD-BOUND layout);
+	 * multi-param own-clause descriptors (mirror / record / bounded
+	 * field-op-expr relations) never filter with sibling guards.
 	 */
 	guards?: PropertyClause[];
 	outcome: PropertyOutcome;

@@ -46,6 +46,12 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 - **Then** the command fails with structured errors (never an unstructured throw), and generation does not run
 - **And** `check` / `generate` / `extract-manifests` route through the single shared workspace gate (`requireValidWorkspace`), so every invalid-context failure path exits `1` with the standardized empty output envelope `{}` — no command re-implements the invalid-context envelope (VERSAILLES-171)
 
+### An unexpected throw at the process boundary becomes the INTERNAL envelope
+
+- **Given** any invocation where `runCli` escapes with an unhandled throw (a bug path, not a designed failure)
+- **When** the `bin/versailles` top-level catch runs
+- **Then** it prints the standardized failure envelope `{ ok: false, errors: [{ code: "INTERNAL", detail }], warnings: [], exitCode: 1 }` and exits `1` — the process boundary never emits an unstructured crash, so CI still parses machine-readable JSON (VERSAILLES-188)
+
 ### Root-level version flags short-circuit before dispatch
 
 - **Given** `versailles -v` or `versailles --version` from any directory (with or without a `.versailles/` workspace)
@@ -115,6 +121,7 @@ Versailles turns Design-by-Contract specifications (invariants, preconditions, p
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-09-04 | maintainer | Process-boundary INTERNAL envelope (VERSAILLES-188): the `bin/versailles` top-level catch wraps any unexpected throw from `runCli` into the standardized failure envelope `{ ok: false, errors: [{ code: "INTERNAL", detail }], warnings: [], exitCode: 1 }` (exit 1) — the process boundary never emits an unstructured crash |
 | 2026-09-04 | maintainer | Beta triage (VERSAILLES-184): `init` scaffolds a fresh workspace but refuses to overwrite an existing one — no silent destruction of authored contracts.json/manifests.json; structured error, exit 1 |
 | 2026-08-11 | maintainer | Initial draft from build spec |
 | 2026-08-11 | maintainer | v1 scope pinned by ADR-0009: TS/C#/Python + vitest/xUnit/pytest, TS+vitest first |

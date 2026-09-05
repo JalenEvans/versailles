@@ -34,8 +34,10 @@ describe("addItem", () => {
 	it("OrderService.addItem.property-satisfies-0", () => {
 		const sku = fc.string();
 		const price = fc.integer();
-		const OrderService_addItem_post0 = (balance: number, price: number, preState) => balance === preState.balance + price;
-		const prop = fc.property(sku, price, (sku, price) => {
+		const OrderService_addItem_post0 = (balance: number, price: number, preState: { balance: number }) => balance === preState.balance + price;
+		const OrderService_addItem_pre1 = (price: number) => price > 0;
+		const OrderService_addItem_pre0 = (sku: string) => sku !== "";
+		const prop = fc.property(sku.filter(OrderService_addItem_pre0), price.filter(OrderService_addItem_pre1), (sku, price) => {
 			const instance = new OrderService();
 			const preState = { balance: (instance as any).balance };
 			instance.addItem(sku, price);

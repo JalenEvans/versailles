@@ -490,12 +490,43 @@ function oracleParamType(
 }
 
 /**
+ * The TS type for a codegen'd preState capture parameter (ADR-0021, B1): an
+ * object literal type with one key per old()-referenced manifest field, typed
+ * from the field model (`preState: { balance: number }`), composing for
+ * multi-field captures (`{ balance: number, count: number }`). Returns null
+ * when ANY captured field's typeRef has no renderable TS form (or the field
+ * model is absent) — the legacy byte-identical pin keeps the param untyped
+ * then, and the EMISSION_UNRENDERABLE warning for the field already fired in
+ * renderComponentFile (never a silent untyped field).
+ */
+function preStateParamType(
+	fields: string[],
+	component: string,
+	fieldTypes?: EmitOptions["fieldTypes"],
+): string | null {
+	const entries: string[] = [];
+	for (const field of fields) {
+		const fieldType = fieldTypes?.[component]?.[field];
+		const tsType = fieldType === undefined ? null : typeRefToTs(fieldType);
+		if (tsType === null) {
+			return null;
+		}
+		entries.push(`${field}: ${tsType}`);
+	}
+	return `{ ${entries.join(", ")} }`;
+}
+
+/**
  * Embeds a codegen'd clause predicate with ADR-0021 type annotations injected
  * into the lambda's parameter list: the byte-pinned `(<params>) => <expr>`
  * head is rebuilt with `param: type` on each parameter whose type is
  * renderable (op params unconditionally, field params from the field model).
- * When no parameter carries a type the rebuilt head is byte-identical to the
- * codegen'd source (`(a, b) => ...` → `(a, b) => ...`) — the legacy
+ * B1 (VERSAILLES-191): the codegen'd preState capture param — neither an op
+ * param nor a manifest field — is typed as the object literal of its
+ * old()-referenced fields (`preState: { balance: number }`), closing the
+ * TS7006 implicit-any hole the untyped preState param left in generated
+ * oracles. When no parameter carries a type the rebuilt head is byte-identical
+ * to the codegen'd source (`(a, b) => ...` → `(a, b) => ...`) — the legacy
  * guarantee. The body is never touched.
  */
 function renderOracleCode(
@@ -508,7 +539,17 @@ function renderOracleCode(
 	if (params.length === 0) {
 		return code;
 	}
+	const paramNames = new Set(descriptor.params.map((spec) => spec.param));
+	const preState = preStateCaptureOf(descriptor, paramNames);
 	const typed = params.map((param) => {
+		if (preState !== null && param === preState.param) {
+			const preStateType = preStateParamType(
+				preState.fields,
+				component,
+				fieldTypes,
+			);
+			return preStateType === null ? param : `${param}: ${preStateType}`;
+		}
 		const type = oracleParamType(param, descriptor, component, fieldTypes);
 		return type === null ? param : `${param}: ${type}`;
 	});
@@ -1170,19 +1211,57 @@ function renderPropertyBlock(
 			assertIdentifier(spec.param, "param name");
 			lines.push(`\t\tconst ${spec.param} = ${renderArbitrary(spec)};`);
 		}
+		// B2 (valid-region soundness, VERSAILLES-191): the field-bound layout
+		// samples ONLY the op-param arbitraries — a bare `fc.string()` /
+		// `fc.integer()` would sample values outside the operation's valid
+		// region (`sku === ""`, `price <= 0`) and the real source throws, so
+		// the generated property fails at runtime. Apply the renderable
+		// SINGLE-param guard oracles — the operation's example-strategy
+		// preconditions the planner attached as descriptor.guards (`sku != ""`,
+		// `price > 0`) — as per-param `.filter(...)` on the sampled
+		// arbitraries. Only SINGLE-param oracles can filter (fast-check's
+		// .filter() passes ONE value); the block's own field-referencing clause
+		// is always multi-param and is asserted, never filtered. A param with
+		// no single-param guard stays bare (bounded via its ArbitrarySpec
+		// bounds, or genuinely unconstrained — the planner's field-op-expr
+		// leak gate keeps constrained-but-unfilterable params out of this
+		// layout). The `.filter(...)` applies INLINE in the fc.property call
+		// (never at the arbitrary declaration — the filter oracle const must be
+		// initialized before the callback reference evaluates), matching the
+		// single-param layout's byte-pinned wiring.
+		const singleParamFilters = new Map<string, string>();
+		for (const param of params) {
+			const first = guardOracles.find(
+				(oracle) =>
+					oracle.oracleParams.length === 1 &&
+					oracle.oracleParams.includes(param),
+			);
+			if (first !== undefined) {
+				singleParamFilters.set(param, first.constName);
+			}
+		}
 		// The block EMBEDS exactly the guard oracles it uses — its own asserted
-		// clauses (the field-referencing oracle is asserted, never filtered) —
-		// in guard order, never a dead const.
-		const embedded = guardOracles.filter((oracle) =>
-			ownClauseIds.has(oracle.clauseId),
+		// clauses (the field-referencing oracle is asserted, never filtered)
+		// plus the per-param filter oracles — in guard order, never a dead
+		// const.
+		const filterConsts = new Set(singleParamFilters.values());
+		const embedded = guardOracles.filter(
+			(oracle) =>
+				filterConsts.has(oracle.constName) || ownClauseIds.has(oracle.clauseId),
 		);
 		for (const oracle of embedded) {
 			lines.push(
 				`\t\tconst ${oracle.constName} = ${renderOracleCode(oracle.code, descriptor, descriptor.component, fieldTypes)};`,
 			);
 		}
+		const arbitraryExprs = descriptor.params.map((spec) => {
+			const filter = singleParamFilters.get(spec.param);
+			return filter === undefined
+				? spec.param
+				: `${spec.param}.filter(${filter})`;
+		});
 		lines.push(
-			`\t\tconst prop = fc.property(${params.join(", ")}, (${params.join(", ")}) => {`,
+			`\t\tconst prop = fc.property(${arbitraryExprs.join(", ")}, (${params.join(", ")}) => {`,
 		);
 		// Bind the component instance inside the callback, before the call.
 		lines.push(`\t\t\tconst instance = new ${descriptor.component}();`);
