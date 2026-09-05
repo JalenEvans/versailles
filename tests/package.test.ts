@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // VERSAILLES-188: the marker the loader-hook fixture throws — asserted to
@@ -51,6 +51,9 @@ const THROW_RUNCLI_PRELOAD = join(
 
 type PackageJson = {
 	name?: string;
+	main?: string;
+	types?: string;
+	exports?: string | Record<string, unknown>;
 	scripts?: Record<string, string>;
 	license?: string;
 	repository?: { url?: string };
@@ -206,6 +209,121 @@ describe("package.json dependency hygiene (VERSAILLES-190)", () => {
 		const pkg = await readPackageJson();
 
 		expect(pkg.dependencies?.typescript).toBeUndefined();
+	});
+});
+
+// ── package entry point — CLI-only (VERSAILLES-189, ADR-0023) ──────────────
+// The published package advertised a library entry point: package.json:8-15
+// wired main/types/exports["."] to ./dist/src/index.js, but src/index.ts is a
+// one-line stub exporting only packageName — a silent dead end for programmatic
+// consumers doing `import { ... } from "versailles-dbc"`. ADR-0023 (accepted,
+// Option B): the package is CLI-only. The fields are REMOVED (primary), or kept
+// pointing only at a documented no-op that throws a helpful "run the
+// `versailles` binary" error — never at the stub library module — and `exports`
+// must not open deep import paths to planner/emitter internals. Integration is
+// via the `versailles` binary as a subprocess (ADR-0010), never in-process
+// imports. The bin/versailles shim E2E above pins the CLI path itself; these
+// tests pin the metadata honesty (ADR-0023 confirmation).
+
+/** Resolve the module path the package metadata advertises as its entry —
+ * `exports["."].import` first, then `main` — or undefined when no entry is
+ * advertised (the primary Option B shape: fields removed). */
+function advertisedEntryPath(pkg: PackageJson): string | undefined {
+	const exportsValue = pkg.exports;
+	if (typeof exportsValue === "object" && exportsValue !== null) {
+		const root = exportsValue["."];
+		if (typeof root === "string") return root;
+		if (typeof root === "object" && root !== null) {
+			const importTarget = root.import;
+			if (typeof importTarget === "string") return importTarget;
+		}
+	}
+	if (typeof pkg.main === "string") return pkg.main;
+	return undefined;
+}
+
+describe("package entry point — CLI-only surface (VERSAILLES-189, ADR-0023)", () => {
+	it("advertises no library entry — `main`/`types`/`exports` are absent (primary) or never point at the stub `dist/src/index.js`", async () => {
+		const pkg = await readPackageJson();
+
+		// Primary Option B: fields removed — absence is the cleanest CLI-only
+		// signal. Acceptable variant (ADR-0023): kept, but pointing only at a
+		// documented no-op. Both must NEVER advertise the compiled one-line stub
+		// library module (src/index.ts → dist/src/index.js) as importable.
+		for (const field of ["main", "types", "exports"] as const) {
+			const value = pkg[field];
+			if (value === undefined) continue;
+			expect(
+				JSON.stringify(value),
+				`"${field}" must not advertise the stub library module dist/src/index.js — the package is CLI-only (ADR-0023)`,
+			).not.toContain("dist/src/index");
+		}
+	});
+
+	it("`exports` exposes no deep import paths — no wildcard, no planner/emitter internals", async () => {
+		const pkg = await readPackageJson();
+
+		if (pkg.exports === undefined) return; // primary Option B — no exports map at all
+		const exportsValue = pkg.exports;
+		if (typeof exportsValue === "string") {
+			// String shorthand — a single root entry; nothing deep to open, but
+			// it must not reach internals either.
+			expect(exportsValue).not.toMatch(/dist\/packages|planner|emitter/);
+			return;
+		}
+		for (const key of Object.keys(exportsValue)) {
+			// Only the root "." is allowed; "./..." keys or "*" wildcards open
+			// planner/emitter internals to consumers (ADR-0010, ADR-0020).
+			expect(
+				key,
+				`exports key "${key}" must not be a deep import path — the package is CLI-only (ADR-0023)`,
+			).not.toMatch(/^\.\//);
+			expect(
+				key,
+				`exports key "${key}" must not be a wildcard — the package is CLI-only (ADR-0023)`,
+			).not.toMatch(/\*/);
+		}
+		expect(JSON.stringify(exportsValue)).not.toMatch(
+			/dist\/packages|planner|emitter/,
+		);
+	});
+
+	it("the package entry (if it resolves) exposes no importable library API — any named export is at most `packageName`", async () => {
+		const pkg = await readPackageJson();
+
+		const entry = advertisedEntryPath(pkg);
+		if (entry === undefined) return; // primary Option B — no entry to import
+		const entryPath = resolve(REPO_ROOT, entry);
+
+		let mod: Record<string, unknown>;
+		try {
+			mod = (await import(entryPath)) as Record<string, unknown>;
+		} catch {
+			// Acceptable no-op variant (ADR-0023): the entry throws a helpful
+			// "run the `versailles` binary" error on import — not an importable
+			// library surface, so the CLI-only pin is satisfied.
+			return;
+		}
+
+		// Never initWorkspace / planTestCases / emitSuite / coverageManifest —
+		// the v2+ library-API candidates (ADR-0020, docs/specs/versailles.md §
+		// Programmatic surface) must not leak through the published entry.
+		for (const name of Object.keys(mod)) {
+			expect(
+				name,
+				`named export "${name}" must not be exposed — the package is CLI-only (ADR-0023)`,
+			).toBe("packageName");
+		}
+		expect(mod.packageName).toBe("versailles-dbc");
+	});
+
+	it("README documents the package as CLI-only — integration via the `versailles` binary as a subprocess, never in-process imports", async () => {
+		const readme = await readFile(join(REPO_ROOT, "README.md"), "utf8");
+
+		// Tolerant of wording (ADR-0023 confirmation): an explicit CLI-only
+		// statement, a command-line-interface framing, or a subprocess
+		// integration statement all satisfy the pin.
+		expect(readme).toMatch(/(cli-only|command[- ]?line interface|subprocess)/i);
 	});
 });
 
